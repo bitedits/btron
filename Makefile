@@ -41,7 +41,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
         test-hull test-view test-secret test-render test-drone test-drone-all test-zexall msx-trace \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
-        ps2-cfg \
+        ps2-cfg ps2-dials \
         pi400 flash-pi400 fetch-pi400-fw
 
 QEMU_ARM     ?= qemu-system-arm
@@ -1028,7 +1028,7 @@ HIDTRACE       ?= 0
 # A value that is none of the three is a typo, and a typo here builds a working image whose
 # timing rows describe a different pipeline than the one the operator asked for, so it is an
 # error rather than a silent tinygl.
-PS2_GL          ?= tinygl
+PS2_GL          ?= eegs
 ifeq (,$(filter $(PS2_GL),tinygl virgl eegs))
 $(error PS2_GL=$(PS2_GL) is not one of tinygl, virgl, eegs)
 endif
@@ -1133,7 +1133,25 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
 # mtimes, so without it yesterday's [MSX] rows link into today's parked image -- and two
 # .bss readings of the same filename three megabytes apart, on one day, is the evidence
 # for that sentence in this very comment.
-PS2_MSX         ?= 0
+#
+# The dial now also answers to the GL backend, because one of this port's two heaps has to be
+# the bigger one.  `PS2_HEAP_SIZE` (src/cores/core_ps2.c) is `7500 * 1024` under `-DBTRON_PS2_MSX`
+# and `9 * 1024 * 1024` without it -- the MSX core's .bss (cartridge buffers, V9938 VRAM, S1985/
+# S1990, Geo3D) takes what the extra 1.5 MB of heap would have been.  The XMB's GL window asks for
+# ~8.7 MB of planes against that: 1500 kB surface + 750 kB depth plane (TinyGL's `ZB_open`) +
+# 576 kB icon atlas, on a desktop baseline already holding ~5.85 MB.  At 7500 kB the ask fails by
+# name on both halves -- `[TinyGL] ERROR: ZB_open failed (OOM?)` and `[GL] xmb: no memory for the
+# icon atlas` -- and the operator sees a framed window with nothing inside it.  That is the shipped
+# "empty inside" of `make run-ps2` under `PS2_GL=eegs`, and the LANE 19 census cleared the stream
+# of it: with the heap at 9 MB the same eegs page paints 383,951 of its own 384,000 client pixels.
+# So eegs parks MSX and takes the 9 MB heap.  `origin` is what makes this a DEFAULT and not an
+# override: `make ps2 PS2_MSX=1 PS2_GL=eegs` is still the falsifying control, and it still OOMs the
+# atlas and the depth plane by name; a `PS2_MSX=0` in the environment is honoured unchanged.
+ifeq ($(origin PS2_MSX),undefined)
+PS2_MSX         := $(if $(filter eegs,$(PS2_GL)),0,1)
+else
+PS2_MSX         ?= 1
+endif
 PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/apps/msx_app.c,)
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
@@ -1291,6 +1309,13 @@ $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENC
                                 -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u \
                                 -DBTRON_PS2_BENCH_GS=$(BENCH_GS)
 
+PS2_BGS_STAMP = .build/ps2-bgs.stamp
+PS2_BGS_KEY := $(BENCH_APP):$(BENCH_GS)
+PS2_BGS_PREV := $(shell cat $(PS2_BGS_STAMP) 2>/dev/null)
+ifneq ($(PS2_BGS_PREV),$(PS2_BGS_KEY))
+$(shell mkdir -p ./.build && echo '$(PS2_BGS_KEY)' >$(PS2_BGS_STAMP) && rm -f $(PS2_BENCH_OBJ))
+endif
+
 %.pbench.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
 
@@ -1388,8 +1413,15 @@ endif
 
 ps2-bench: $(PS2_BENCH_TARGET)
 
+# The bench TU is the LANE 19 census, and the census's cost is .rodata: every rung adds print rows, and
+# `_end` climbs with them.  ps2.ld's stack reserve is a shipped-image guarantee (256 KiB, 11x the
+# measured 22 KiB high-water of a desktop-plus-XMB session), and this image does not ship, so it takes
+# 64 KiB -- still ~3x the measurement.  Production links without this flag and keeps the full reserve.
+# If a bench run ever dies on stack, the census that prints `stack used=` is the one that will say so.
+# The `=` form, not the comma: GNU ld accepts `--defsym SYM=EXPR` and `--defsym=SYM=EXPR` and rejects
+# `--defsym,SYM=EXPR`, and ld.lld takes the `=` form too -- MIPS_LD is whichever of the two the host has.
 $(PS2_BENCH_TARGET): $(PS2_BENCH_OBJS) $(PS2_LD_SCRIPT)
-	$(MIPS_LD) -T $(PS2_LD_SCRIPT) $(PS2_BENCH_OBJS) -o $@
+	$(MIPS_LD) -T $(PS2_LD_SCRIPT) --defsym=__ps2_stack_reserve=0x10000 $(PS2_BENCH_OBJS) -o $@
 	@echo "[PS2-BENCH] Built: $@"
 	@file $@
 
@@ -1461,6 +1493,23 @@ run-ps: run-ps2
 # delete it.  The [USB2] keyboard binding and the [Hotkeys] entries trimmed for it
 # are what let a host keypress reach the emulated device at all, and the BIOS
 # images are linked rather than copied because they are Sony's, not ours.
+# The environment a measurement was made in, printed rather than guessed.  PS2_MSX is DERIVED from
+# PS2_GL now, so reading the dial out of this file quotes a default instead of the value in force,
+# and a run whose dials are not recorded cannot be re-run by somebody else.  scripts/ps2_eegs_repro.sh
+# calls this first and puts the output in its manifest beside the ELF's hash.
+ps2-dials:
+	@echo "PS2_GL=$(PS2_GL)"
+	@echo "PS2_MSX=$(PS2_MSX)"
+	@echo "PS2_FP=$(PS2_FP)"
+	@echo "PS2_FP_COUNT=$(PS2_FP_COUNT)"
+	@echo "BENCH_APP=$(BENCH_APP)"
+	@echo "BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)"
+	@echo "BENCH_GS=$(BENCH_GS)"
+	@echo "AUTO_GUI=$(AUTO_GUI)"
+	@echo "ISO=$(ISO)"
+	@echo "PS2_TARGET=$(PS2_TARGET)"
+	@echo "PS2_ISO=$(PS2_ISO)"
+
 ps2-cfg:
 	@if [ ! -f "$(PCSX2_DATA)/inis/PCSX2.ini" ]; then \
 	    echo "[ERROR] $(PCSX2_DATA)/inis/PCSX2.ini is missing"; exit 1; fi

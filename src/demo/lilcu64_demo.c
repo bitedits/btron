@@ -1594,22 +1594,14 @@ static void demo_destroy(WND *wnd) {
     }
 }
 
-/* ── 60 FPS Scheduler Task & Real-Time Audio Task ───────────────────── */
-
-static void demo_audio_task_fn(VW exinf) {
-    (void)exinf;
-    while (s_demo_wnd) {
-        lilcu64_synth_pump_virtio(0);
-        dly_tsk(10); /* 100Hz real-time VirtIO sound buffer refill */
-    }
-    s_audio_tskid = 0;
-}
+/* ── 60 FPS Scheduler Task & Real-Time Audio Pump ────────────────────── */
 
 static void demo_task_fn(VW exinf) {
     (void)exinf;
     while (s_demo_wnd) {
+        lilcu64_synth_pump_virtio(0);
         inval_wnd(s_demo_wnd);
-        dly_tsk(16); /* ~60 FPS APIC timer tick */
+        dly_tsk(16); /* ~60 FPS */
     }
     s_demo_tskid = 0;
 }
@@ -1662,25 +1654,12 @@ WND* open_lilcu64_demo_window(void) {
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    /* Register real-time audio pump task (high priority, 100Hz) */
-    T_CTSK ctsk_audio;
-    ctsk_audio.exinf = 0;
-    ctsk_audio.tskatr = TA_HLNG;
-    ctsk_audio.task = demo_audio_task_fn;
-    ctsk_audio.itskpri = 6;
-    ctsk_audio.stksz = 32768;
-    s_audio_tskid = cre_tsk(&ctsk_audio);
-    if (s_audio_tskid > 0) {
-        sta_tsk(s_audio_tskid, 0);
-        uart_puts_raw("[DEMO] Lil Cu 64 Audio Task: 100Hz real-time VirtIO pump started\n");
-    }
-
-    /* Register animation task (60 FPS) */
+    /* Register animation & audio pump task (60 FPS) */
     T_CTSK ctsk;
     ctsk.exinf = 0;
     ctsk.tskatr = TA_HLNG;
     ctsk.task = demo_task_fn;
-    ctsk.itskpri = 10;
+    ctsk.itskpri = 6;
     ctsk.stksz = 32768;
     s_demo_tskid = cre_tsk(&ctsk);
     if (s_demo_tskid > 0) {

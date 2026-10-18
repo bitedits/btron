@@ -65,6 +65,7 @@ WND* open_chat_main_window(void *client) { (void)client; return NULL; }
 WND* open_display_settings_window(void) { return NULL; }
 WND* open_quake_window(int x, int y, int width, int height)
 { (void)x; (void)y; (void)width; (void)height; return NULL; }
+WND* open_msx_window(void) { return NULL; }
 WND* open_chokanji_cabinet_window(void) { return NULL; }
 WND* open_chokanji_doc_window(void) { return NULL; }
 WND* open_chokanji_microscript_window(void) { return NULL; }

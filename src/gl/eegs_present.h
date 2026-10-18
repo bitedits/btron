@@ -53,6 +53,13 @@ typedef struct {
     uint32_t prims;          /* primitives recorded this frame */
     uint32_t dropped;        /* groups the staging buffer could not hold: must read 0 */
     uint32_t unsplittable;   /* the recorder refused a split: must read 0 */
+    /* LANE 19 rung 12v: the recorder writes PRIM as an AD group in front of every vertex group, because
+     * rung 12u measured that a GIF tag's PRIM field with PRE set does not program the register on this
+     * GS.  One write per vertex group, so `prim_writes` IS the frame's count of chains that went out and
+     * `groups - prim_writes` is the groups that carry state rather than geometry -- the texture switches
+     * `texsw=` names.  A frame whose `pwr=` is zero draws nothing, and one whose `pwr=` exceeds `groups=`
+     * would be a counter lying about a packet. */
+    uint32_t prim_writes;
     uint32_t tex_switches;   /* mid-stream texture register groups */
     uint32_t tex_missing;    /* a textured primitive with no plane: must read 0 */
     /* LANE 12e's survivor: every PRIM re-declaration closes a group, so this is the rate at which
@@ -60,6 +67,24 @@ typedef struct {
      * four `chain_*` this row grew for the strip continuation are gone with the rung; its measured
      * verdict, and the `verts`/`prims` ratio that shows a re-lived one, are in doc/txt/PS2.txt. */
     uint32_t prim_moves;     /* PRIM words actually re-sent, each of which closes a group */
+    /* LANE 19 rung 11: the vertex-colour census.  `colour_changes` against `colour_verts` is the
+     * answer to "did the frame's colours reach the stream", and `colour_first`/`colour_last` name
+     * the two ends of it.  A flat page with a high ratio is the GS not interpolating; a flat page
+     * with a zero ratio is the application's per-vertex colour never having got here. */
+    uint32_t colour_changes;
+    uint32_t colour_verts;
+    uint32_t colour_first;
+    uint32_t colour_last;
+    /* LANE 19 rung 11's other half: the shading modes the frame's PRIM declarations asked for. */
+    uint32_t prim_iip;
+    uint32_t prim_tme;
+    uint32_t prim_decl;
+    /* LANE 19 rung 12b: the wide triangles, selected by area so the background layer is the one
+     * being described.  `wide_flat == wide_tri` says no triangle big enough to be the gradient
+     * carried three colours, which puts the flatness on the EE side; three different `big_c*` with
+     * `big_smooth=1` puts it on the GS.  See backend_eegs.h for the whole pair. */
+    uint32_t wide_tri, wide_flat;
+    uint32_t big_area, big_c0, big_c1, big_c2, big_smooth;
     /* LANE 12f rung (ii): the two exits a retained mesh has at `eegs_grid_strip()`.  `grid_batch` is
      * a mesh recorded as one strip, `grid_slow` a mesh the batch refused -- an uncapturable context
      * or a mapped point outside the GS's vertex range -- so the application drew it through the

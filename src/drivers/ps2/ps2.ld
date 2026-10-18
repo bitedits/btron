@@ -79,6 +79,28 @@ SECTIONS
     ASSERT(_end <= 0x01FF0000,
            "PS2 image reaches the stack or the 32 MiB RDRAM end: statics above it are silently lost")
 
+    /* The law the one above does not cover: `_end <= 0x01FF0000` still passes an image that leaves
+     * 4 kB of stack, and that image does not fail to link, it corrupts its own heap tail the first
+     * time the XMB recurses.  The pool (core_ps2.c's PS2_HEAP_SIZE) is the bulk of `_end` and is
+     * sized in kB, so the day someone raises it is exactly the day this matters.  256 kB is 11x the
+     * measured stack high-water of a full desktop-plus-XMB session (22 kB, printed by the heap
+     * holder census as `stack used=`), and it is a reserve, not a measurement -- widening the pool
+     * past it is a decision the build now has to be told about.
+     *
+     * The reserve is a symbol, not a literal, because it is a shipped-image guarantee rather than a
+     * fact about the hardware, and the bench image is not a shipped image.  What lives between `_end`
+     * and $sp is only stack, and the thing that spends it is the same desktop/XMB recursion in both
+     * builds -- what differs is the cost of the instrument: a bench TU pays for its print rows in
+     * .rodata, and LANE 19's census has grown rows faster than 256 kB of headroom can absorb.  A
+     * measurement image whose .rodata cannot link is worth nothing, so it takes a smaller reserve:
+     * 64 kB is still ~3x the 22 kB measured high-water, and if the bench ever overruns it the run
+     * dies in front of the census that prints `stack used=`, which is the honest place to find out.
+     * Production keeps 256 kB untouched -- it links with the default PROVIDE'd value below.  The
+     * knob is `--defsym=__ps2_stack_reserve=<bytes>` on the link line; see $(PS2_BENCH_TARGET). */
+    PROVIDE(__ps2_stack_reserve = 0x40000);
+    ASSERT(_end <= 0x01FF0000 - __ps2_stack_reserve,
+           "PS2 image leaves under its __ps2_stack_reserve below boot_ps2.s's stack top: the stack will run into the heap")
+
     /DISCARD/ : {
         *(.comment)
         *(.note*)

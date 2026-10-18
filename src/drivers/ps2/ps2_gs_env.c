@@ -36,10 +36,13 @@ static uint64_t *emit_env_regs(const gs_draw_env *e, uint32_t context, uint32_t 
     uint32_t gp_tex0     = (context == 0u) ? GS_GP_TEX0_1     : GS_GP_TEX0_2;
     uint32_t gp_tex1     = (context == 0u) ? GS_GP_TEX1_1     : GS_GP_TEX1_2;
 
-    /* The page origin: XYOFFSET */
+    /* The page origin: XYOFFSET.  The GS hardware computes screen coordinate
+     * W = P - OFX.  Because vertices P are biased by +GS_XYOFFSET_PAGE (0x8000),
+     * setting OFX = GS_XYOFFSET_PAGE - (win_x << 4) yields:
+     * W = (x_px << 4 + 0x8000) - (0x8000 - win_x << 4) = (x_px + win_x) << 4. */
     c = gs_pack_pair(c,
-                     gs_pack_xyoffset(GS_XYOFFSET_PAGE + (e->win_x << 4),
-                                      GS_XYOFFSET_PAGE + (e->win_y << 4)),
+                     gs_pack_xyoffset(GS_XYOFFSET_PAGE - (e->win_x << 4),
+                                      GS_XYOFFSET_PAGE - (e->win_y << 4)),
                      gp_xyoffset);
 
     /* Clip in screen pixels: SCISSOR */

@@ -1826,14 +1826,10 @@ static void xb_draw_bg(float alpha)
     glDisable(GL_BLEND);
 
     glBegin(GL_QUADS);
-    glColor4f(g[0][0] * a, g[0][1] * a, g[0][2] * a, 1.0f); glVertex2f(0.0f, (float)s_h);
-    glColor4f(g[1][0] * a, g[1][1] * a, g[1][2] * a, 1.0f); glVertex2f((float)s_w, (float)s_h);
-    /* The projection is glOrtho(0, w, h, 0) (see xb_paint), so y grows downward and
-     * (w, 0) is the canvas's top-right -- where the table's fourth colour belongs.
-     * These two vertices used to carry g[2] and g[3] the other way round, which
-     * mirrored the top edge of every theme while leaving both bottom corners right. */
-    glColor4f(g[3][0] * a, g[3][1] * a, g[3][2] * a, 1.0f); glVertex2f((float)s_w, 0.0f);
     glColor4f(g[2][0] * a, g[2][1] * a, g[2][2] * a, 1.0f); glVertex2f(0.0f, 0.0f);
+    glColor4f(g[3][0] * a, g[3][1] * a, g[3][2] * a, 1.0f); glVertex2f((float)s_w, 0.0f);
+    glColor4f(g[1][0] * a, g[1][1] * a, g[1][2] * a, 1.0f); glVertex2f((float)s_w, (float)s_h);
+    glColor4f(g[0][0] * a, g[0][1] * a, g[0][2] * a, 1.0f); glVertex2f(0.0f, (float)s_h);
     glEnd();
 
     glEnable(GL_BLEND);
@@ -3062,6 +3058,8 @@ static void xb_paint(WND *wnd, GDEV *dev)
         xb_layout(dev->width, dev->height);
         xb_layout_nodes();
     }
+    s_w = dev->width;
+    s_h = dev->height;
 
     get_tim(&now);
     dt = (float)(unsigned)(now - s_last_time);
@@ -3540,8 +3538,8 @@ WND* open_xmb_window(void)
     }
     xb_phase("window", 0);
 
-    s_w = w;
-    s_h = h;
+    s_w = s_wnd->dev ? s_wnd->dev->width : w;
+    s_h = s_wnd->dev ? s_wnd->dev->height : h;
 
     s_wnd->paint         = xb_paint;
     s_wnd->event_handler = xb_event;

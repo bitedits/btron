@@ -63,6 +63,10 @@
  * composite, send it after this region's canvas upload.  Relative path because that is how this
  * file reaches its sources -- src/drivers/ps2/ above is the same convention. */
 #include "../gl/eegs_present.h"
+/* The recorder's front end, included for LANE 19 rung 12a alone: the census draws its shading control
+ * through `eegs_triangle()`, i.e. through the same group builder the XMB's stream is made of, and not
+ * through the SPRITE poster that every earlier control used. */
+#include "../gl/backend_eegs.h"
 /* The build's own answer to "which rasteriser?", for the `[CFG]` row: this file installs no GL
  * context and must not pretend to know which one is live, so it prints the name of the backend
  * the Makefile's `PS2_GL=` dial selected, from the unit that holds that rule. */
@@ -106,16 +110,30 @@ extern void  draw_baremetal_mouse_cursor(GDEV *screen, H mx, H my, H w, H h);
  *
  * Declared again here because the large-allocation rows below are the pool's own
  * diagnostics; the console driver itself is defined with the rest of this file. */
-static void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
-/* 12 MB, because the desktop's own baseline is 5.8 MB and one full-screen GL window
- * costs its surface, the rasterizer's depth plane and the icon atlas twice over
- * (surface + depth + atlas + upload copy) -- 8 MB held the baseline and the surface
- * and nothing else.  The ceiling is the image budget: this array is .bss, and the
- * ASSERT in ps2.ld keeps _end below the stack at 0x01FF0000.  It was 12 MB with 2 MB to
- * spare; the MSX core (4 MiB-class cartridge buffer, 256 KiB V9938 VRAM, S1990, Geo3D)
- * has since taken that, so the pool is 11 MB. */
-#define PS2_HEAP_SIZE (9 * 1024 * 1024)
+/* The pool's ceiling is not the RAM end, it is the stack's floor: boot_ps2.s sets $sp to
+ * 0x01FF0000 and this array is .bss, so every kB the pool takes is a kB the deepest call chain
+ * loses -- and ps2.ld's ASSERT (`_end <= 0x01FF0000`) only catches the case that runs off the end,
+ * not the one that quietly overwrites the heap's own tail.  So the number below is arithmetic
+ * against a measurement, not a guess:
+ *
+ *   RDRAM under the stack, ship image:  0x01FF0000 - _end(9 MB pool) = 2,478 kB
+ *   stack high-water, measured 2026-10-17 by the probe below, through a full XMB session: 22 kB
+ *
+ * 11 MB therefore leaves 430 kB of stack -- 19x what the session used.  The demand side is the
+ * same census's own argument: at 9 MB the pool held 8,800 kB of named owners (window GDEVs 4,201,
+ * the Terminal's surface 2,631, ZB_open 750, the XMB's GL surface 576, the Editor 513) and could
+ * not serve the icon atlas's 1,024 kB ask, so the XMB opened with no texture plane.
+ *
+ * The MSX build keeps a smaller pool because B-MSX's own statics (4 MiB-class cartridge buffer,
+ * 256 KiB V9938 VRAM, S1990, Geo3D) are competing for the same 32 MB. */
+#if defined(BTRON_PS2_MSX) && (BTRON_PS2_MSX)
+/* 7500 KB leaves ~1.65 MB free hole at boot for GL window surfaces (XMB/MSX/Quake). */
+#define PS2_HEAP_SIZE (7500 * 1024)
+#else
+#define PS2_HEAP_SIZE (11 * 1024 * 1024)
+#endif
 static uint8_t s_ps2_heap[PS2_HEAP_SIZE] __attribute__((aligned(64)));
 
 #define PS2_HEAP_ALIGN  16u
@@ -125,7 +143,12 @@ typedef struct ps2_blk {
     struct ps2_blk *next;      /* address order, so neighbours can coalesce */
     size_t          size;      /* payload bytes */
     unsigned        used;
-    unsigned        reserve;   /* pads the header to PS2_HEAP_HDR */
+    /* The allocation site, not padding: an operator's console can say `used=9210 kB in
+     * 9216 kB, largest free hole 2 kB` -- pool EXHAUSTED, not fragmented -- and still name
+     * nobody, because the +rows are gated on PS2_HEAP_LOGLIM and a 16 kB ask that leaks 32 kB
+     * a pass never prints.  The header is 16 bytes either way, so this costs no pool byte and
+     * no instruction on the success path; it buys the holder census below. */
+    unsigned        ra;
 } ps2_blk;
 
 /* Every payload starts at (block + PS2_HEAP_HDR), so the header has to be exactly
@@ -215,8 +238,125 @@ static void ps2_heap_dump(void)
 }
 #endif
 
-void* Imalloc(size_t size)
+/* Stack high-water, because the pool's ceiling is the stack's floor.
+ *
+ * ps2.ld's ASSERT keeps `_end` below boot_ps2.s's $sp (0x01FF0000), and this pool is the bulk of
+ * `_end`, so every kB the pool gains is a kB the deepest call chain loses.  "It linked" proves
+ * nothing about that: an image can leave 400 kB of stack and still die in the XMB's own recursion.
+ * So arm() paints the memory below the first C frame with a word nothing else writes, and depth()
+ * reports how much of it came back dirty.  Then the pool question is arithmetic, not a guess. */
+#define PS2_STACK_PROBE_BYTES (512u * 1024u)
+#define PS2_STACK_PROBE_MARK  0xA55AA55Au
+static uint32_t *s_stack_probe;       /* lowest painted word; NULL until arm() runs */
+
+static void ps2_stack_probe_arm(void)
 {
+    uintptr_t frame = (uintptr_t)__builtin_frame_address(0) & ~(uintptr_t)(PS2_HEAP_ALIGN - 1u);
+    uintptr_t lo;
+    uint32_t *w;
+
+    if (frame < PS2_STACK_PROBE_BYTES + 0x10000u) return;   /* nowhere sane to paint: give up quietly */
+    lo = frame - PS2_STACK_PROBE_BYTES;
+    s_stack_probe = (uint32_t *)(void *)lo;
+    for (w = s_stack_probe; (uintptr_t)w < frame; w++) *w = PS2_STACK_PROBE_MARK;
+}
+
+/* kB of the probed region a call has written since arm(); 0 when never armed or never touched.
+ * Saturating at PS2_STACK_PROBE_BYTES is the row that says "widen the probe", not "the stack fits"
+ * -- so the caller prints the probe size next to it. */
+static unsigned ps2_stack_probe_depth(void)
+{
+    uint32_t * const end = s_stack_probe ? s_stack_probe + (PS2_STACK_PROBE_BYTES / 4u) : NULL;
+    uint32_t *w;
+
+    if (!s_stack_probe) return 0u;
+    for (w = s_stack_probe; w < end; w++) {
+        if (*w != PS2_STACK_PROBE_MARK)
+            return (unsigned)((PS2_STACK_PROBE_BYTES - (uintptr_t)((char *)w - (char *)s_stack_probe)) / 1024u);
+    }
+    return 0u;
+}
+
+/* Who holds the pool, bucketed by the site that asked for it.  On 2026-10-17 the operator's own
+ * `make run-ps2 PS2_GL=eegs PS2_FP=hw PS2_MSX=0` console reads `used=9210 kB in 9216 kB, largest
+ * free hole 2 kB` and then a 16 kB ask failing twice per present pass, every ~55 ms: the pool is
+ * EXHAUSTED, not fragmented, and the +rows cannot name it, because PS2_HEAP_LOGLIM is 96 kB so a
+ * 16 kB leak stays silent until the pool is gone.  One row per holder answers, and the address is
+ * resolved offline (`scripts/ps2_heap_who.sh`) -- no symbol table has to live on the box. */
+#define PS2_HEAP_HOLDER_SLOTS 24
+static unsigned s_heap_ooms;          /* failed asks since boot */
+static unsigned s_heap_oom_site;      /* the last one's caller */
+static size_t   s_heap_oom_size;
+static size_t   s_heap_census_mark;   /* used at the last census: what the re-arm compares against */
+
+static void ps2_heap_holders(const char *why)
+{
+    unsigned ras[PS2_HEAP_HOLDER_SLOTS];
+    size_t   tot[PS2_HEAP_HOLDER_SLOTS];
+    size_t   big[PS2_HEAP_HOLDER_SLOTS];
+    unsigned cnt[PS2_HEAP_HOLDER_SLOTS];
+    int n = 0;
+    /* The overflow is its OWN row.  The first version folded the tail into slot 0 and cleared that
+     * slot's address, which printed `0x0 holds 4082 kB in 14 block(s)`: one number that is
+     * anonymous, unresolvable, and smaller than the truth it swallowed. */
+    size_t rest_tot = 0, rest_big = 0;
+    unsigned rest_cnt = 0;
+
+    s_heap_census_mark = s_heap_used;
+
+    for (const ps2_blk *b = s_heap_list; b; b = b->next) {
+        int i, hit = -1;
+        if (!b->used) continue;
+        for (i = 0; i < n; i++) if (ras[i] == b->ra) { hit = i; break; }
+        if (hit < 0 && n < PS2_HEAP_HOLDER_SLOTS) {
+            hit = n++;
+            ras[hit] = b->ra; tot[hit] = 0; cnt[hit] = 0; big[hit] = 0;
+        }
+        if (hit < 0) {
+            rest_tot += b->size; rest_cnt++;
+            if (b->size > rest_big) rest_big = b->size;
+            continue;
+        }
+        tot[hit] += b->size; cnt[hit]++;
+        if (b->size > big[hit]) big[hit] = b->size;
+    }
+
+    ps2_kprintf("[HEAP] holder census %s: %d site(s), used=%u kB of %u kB, failed asks=%u, "
+                "stack used=%u kB of %u kB probed\n", why, n,
+                (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                s_heap_ooms, ps2_stack_probe_depth(), (unsigned int)(PS2_STACK_PROBE_BYTES / 1024u));
+    if (s_heap_ooms) {
+        ps2_kprintf("[HEAP]   last failed ask: %u kB from 0x%x\n",
+                    (unsigned int)(s_heap_oom_size / 1024u), s_heap_oom_site);
+    }
+    /* Biggest first, by selection over a couple of dozen slots -- a census a human reads.  The
+     * biggest single block is on the row because that is the one a contiguous GL plane needs. */
+    for (int pass = 0; pass < n; pass++) {
+        int best = -1;
+        for (int i = 0; i < n; i++) {
+            if (tot[i] == 0u) continue;
+            if (best < 0 || tot[i] > tot[best]) best = i;
+        }
+        if (best < 0) break;
+        ps2_kprintf("[HEAP]   0x%x holds %u kB in %u block(s), biggest %u kB\n",
+                    ras[best], (unsigned int)(tot[best] / 1024u), cnt[best],
+                    (unsigned int)(big[best] / 1024u));
+        tot[best] = 0u;
+    }
+    if (rest_cnt) {
+        ps2_kprintf("[HEAP]   +%u block(s) of %u kB (biggest %u kB) at sites past the %d slots"
+                    " -- raise PS2_HEAP_HOLDER_SLOTS to name them\n",
+                    rest_cnt, (unsigned int)(rest_tot / 1024u), (unsigned int)(rest_big / 1024u),
+                    PS2_HEAP_HOLDER_SLOTS);
+    }
+}
+
+static int s_heap_census_done;
+
+static void* ps2_heap_take(size_t size, const void *ra)
+{
+    const unsigned site = (unsigned)(uintptr_t)ra;
+
     if (size == 0) return NULL;
     size = (size + PS2_HEAP_ALIGN - 1u) & ~(size_t)(PS2_HEAP_ALIGN - 1u);
     if (!s_heap_list) ps2_heap_init();
@@ -233,8 +373,15 @@ void* Imalloc(size_t size)
             b->size = size;
         }
         b->used = 1;
+        b->ra = site;
         s_heap_used += b->size;
         if (s_heap_used > s_heap_peak) s_heap_peak = s_heap_used;
+        /* Re-arm once a tenth of the pool has come back since the last census.  The first version
+         * re-armed below half the pool, which this build can never reach: its baseline alone is
+         * 5.85 MB of a 9 MB pool, so the guard was on, permanently, and only the first fill of the
+         * session was ever named. */
+        if (s_heap_census_mark && s_heap_used + PS2_HEAP_SIZE / 10u <= s_heap_census_mark)
+            s_heap_census_done = 0;
 
         if (b->size >= PS2_HEAP_LOGLIM) {
             ps2_kprintf("[HEAP] +%u kB -> 0x%x used=%u kB peak=%u kB largest_free=%u kB\n",
@@ -245,17 +392,40 @@ void* Imalloc(size_t size)
         return (void *)(b + 1);
     }
 
-    ps2_kprintf("[HEAP] out of memory asking %u kB: used=%u kB in %u kB, largest free hole %u kB\n",
-                (unsigned int)(size / 1024u), (unsigned int)(s_heap_used / 1024u),
-                (unsigned int)(PS2_HEAP_SIZE / 1024u),
-                (unsigned int)(ps2_heap_largest_free() / 1024u));
+    {
+        const size_t hole = ps2_heap_largest_free();
+
+        s_heap_ooms++;
+        s_heap_oom_site = site;
+        s_heap_oom_size = size;
+        ps2_kprintf("[HEAP] out of memory asking %u kB from 0x%x: used=%u kB in %u kB, largest free hole %u kB\n",
+                    (unsigned int)(size / 1024u), site,
+                    (unsigned int)(s_heap_used / 1024u),
+                    (unsigned int)(PS2_HEAP_SIZE / 1024u),
+                    (unsigned int)(hole / 1024u));
+        /* Two ways to be unable to serve an ask, and only one of them is "the pool is full": a
+         * pool at half capacity with its largest hole under 64 kB cannot hand a GL surface its
+         * plane either.  Both get the census, once. */
+        if (!s_heap_census_done &&
+            (s_heap_used >= (PS2_HEAP_SIZE / 4u) * 3u || hole < 64u * 1024u)) {
+            s_heap_census_done = 1;
+            ps2_heap_holders("at the first unservable ask");
+        }
+    }
     return NULL;
+}
+
+void* Imalloc(size_t size)
+{
+    return ps2_heap_take(size, __builtin_return_address(0));
 }
 
 void* Icalloc(size_t nmemb, size_t size)
 {
     size_t total = nmemb * size;
-    void *p = Imalloc(total);
+    /* The wrapper's own return address, so the stamped site is the caller of Icalloc and not
+       this function -- the same reason malloc()/calloc() below do not call Imalloc(). */
+    void *p = ps2_heap_take(total, __builtin_return_address(0));
     if (p) tkl_memset(p, 0, total);
     return p;
 }
@@ -290,8 +460,17 @@ void Ifree(void *ptr)
     ps2_kprintf("[HEAP] free(0x%x) is not a pool block\n", (unsigned int)(uintptr_t)ptr);
 }
 
-void* malloc(size_t sz) { return Imalloc(sz); }
-void* calloc(size_t n, size_t sz) { return Icalloc(n, sz); }
+/* Each wrapper stamps ITS OWN return address rather than calling Imalloc(): a holder census that
+ * named Imalloc/calloc/ps2_heap_take would name the allocator instead of the owner, which is the
+ * whole point of the census. */
+void* malloc(size_t sz) { return ps2_heap_take(sz, __builtin_return_address(0)); }
+void* calloc(size_t n, size_t sz)
+{
+    size_t total = n * sz;
+    void *p = ps2_heap_take(total, __builtin_return_address(0));
+    if (p) tkl_memset(p, 0, total);
+    return p;
+}
 void  free(void *p) { Ifree(p); }
 
 /* ── Framebuffer & Color Conversion ─────────────────────────────── */
@@ -301,7 +480,7 @@ static COLOR s_desktop_backbuffer[PS2_SCREEN_WIDTH * PS2_SCREEN_HEIGHT] __attrib
 
 /* Defined below with the console driver, and the source profiles announce
  * themselves before anything reaches it. */
-static void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void ps2_kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* Global Mouse Coordinates */
 static int s_mouse_x = 400;
@@ -338,6 +517,31 @@ static int      s_paint_pre[PS2_PAINT_TRACE_MAX];
 static int      s_paint_post[PS2_PAINT_TRACE_MAX];
 static uint32_t s_paint_calls;
 static BOOL ps2_cursor_sig_at(const uint32_t *p, int x, int y);
+
+/* LANE 19 rung 6c -- the cover uploads, kept as a ring because rung 6b named an eraser and could
+ * not name its author.  Rung 6b reads: ink arrives (client ink 383,951 of 384,000 px), holds for
+ * one census (erased=0), then leaves -- erased=96,220 over 283 row(s), client y 52..334,
+ * newly laid=0.  "Arrives then leaves, nothing laid in its place" excludes animation, and the two
+ * uploaders that could do it are separated by this ring rather than argued about:
+ *
+ *   the pass's own canvas upload, which is whole-width and would therefore have emptied EVERY
+ *     client row, and the stream is sent after it by the ordering rule of src/gl/eegs_present.h;
+ *   `ps2_upload_cover_in_layer()`, which deliberately re-lays the CANVAS inside the layer's rect
+ *     after the stream -- for whatever the composite drew above the layer -- and whose row
+ *     `cover=4` counts the list, not the pieces that survived the intersection with the client.
+ *
+ * Only the second can leave a hole with an edge at row 334.  But that is an inference, and the
+ * shipped fix has to be a refusal predicate, so this ring makes it a measurement: each rect that
+ * actually went out, with the pass stamp it went out in.  The census takes the difference between
+ * its two stamps and that is the erase candidate set, which it compares row for row against the
+ * rows rung 6b says lost ink.  A row that lost ink and was never covered falsifies the reading. */
+#define PS2_COVER_TRACE_N 48      /* two censuses are ~4 passes apart and each pass can put a
+                                   * handful of cover rects inside the client, so the ring has to
+                                   * be wider than a pass -- and the census says when it wrapped. */
+static int      s_cover_rect[PS2_COVER_TRACE_N][4];
+static uint32_t s_cover_pass[PS2_COVER_TRACE_N];
+static uint32_t s_cover_writes;       /* every rect that went out; the ring wraps, this does not */
+static uint32_t s_cover_pass_no;      /* one increment per ps2_paint_region() call */
 #endif
 
 /* The guest's own px-per-count gain, 8.8 fixed point where 256 is verbatim.  Each
@@ -1142,13 +1346,54 @@ static void ps2_cycle_print(int asked_ms)
      * ribbon's 32 a frame is the row's standing proof that the SCISSOR is exercised and not merely
      * trusted -- nonzero `over=` with the sheet's right edge intact is the fast path working, and
      * nonzero `over=` with 8 px of sheet painted over the window's border is the same number saying
-     * the register does not mean what its documentation says it does. */
+     * the register does not mean what its documentation says it does.
+     *
+     * `colchg=/verts=` is LANE 19 rung 11, and it exists because rung 10's page-as-picture found a
+     * client that is ONE colour on the GS page -- 270,436 px of the gradient's top-left corner, with
+     * flat blocks where the icons should be -- and `in_win=` cannot see that, because it counts
+     * pixels and not colours.  The two readings have opposite remedies, so the row names which one
+     * this frame is: a `colchg` of the same order as `verts` says the per-vertex colours reached the
+     * stream and the GS is not interpolating them (IIP in PRIM, and the state around it), while
+     * `colchg=0` with `c0` equal to `cN` says the application's colours never got here at all.
+     * `c0=`/`cN=` are the first and last colour words of the frame, in the vertex layout -- r in
+     * bits 7:0 -- not the framebuffer's, so read them against `gs_vertex()` and not against the
+     * [GSDUMP] legend.
+     *
+     * `iip=/decl=` is the same rung's second half and the direct answer: of the PRIM words the frame
+     * declared, how many set the GS's Gouraud bit.  Since rung 12v the recorder hands every vertex chain a
+     * write of its own PRIM register in front of it, so these declarations are what the rasteriser was
+     * asked for at the source and `pwr=` is what reached it.  `iip=0/25` beside a `colchg` of a thousand
+     * says the flat page is this port asking for flat shading, and the GS environment is not the suspect.
+     * `tme=` is the same reading for texture mapping, which rung 10 also found absent: the icons arrived as
+     * flat blocks of one grey.
+     *
+     * `colchg=` is a FRAME total, and that is the hole rung 12b fills.  The XMB background is 15
+     * vertices of a 4,138-vertex frame, so `colchg=1852/4138` says nothing about it: the ratio is the
+     * same whether the gradient's triangles each carry three corner colours or each carry one.  The
+     * `wide=`/`big=` segment selects by AREA instead, which picks the background out for free because
+     * it is the only layer whose triangles are big.  `wide=n/m` is m triangles of at least 32,768
+     * doubled px and n of them arriving with all three colours equal; `big=` is the doubled area of
+     * the widest one and `c=` the three colours it was handed, with `sm=` the IIP it asked for.  Read
+     * it this way: three different words with `sm=1` and a flat page on the [GSDUMP] is the GS not
+     * interpolating, and the suspect is the packet or the environment; one word in all three places
+     * is the EE, and the clipper's colour plumbing is.  Which of the two this frame is belongs to the
+     * run that reads this row, not to the paragraph that grew it.
+     *
+     * `pwr=` is rung 12v's own column and the one that certifies the fix is on the bus: the recorder writes
+     * PRIM as an AD group in front of every vertex chain, because rung 12u measured that a tag's PRIM field
+     * with PRE set never programs that register on this GS.  One write per chain, so `pwr=` is the frame's
+     * count of chains and `groups - pwr` is the groups that move state instead of geometry -- the texture
+     * switches `texsw=` names.  `pwr=0` beside `verts>0` would be a stream of chains that went out with no
+     * primitive named in front of any of them, which is the shape that drew the XMB as rectangles. */
     if (s_gs_groups) {
-        ps2_kprintf("[GSTS] groups=%u qw=%u verts=%u prims=%u gs=%u us | "
+        ps2_kprintf("[GSTS] groups=%u pwr=%u qw=%u verts=%u prims=%u gs=%u us | "
                     "pchg=%u batch=%u slow=%u why=%u over=%u | "
-                    "drop=%u unsplit=%u texsw=%u texmiss=%u | cover=%u coverdrop=%u | "
+                    "drop=%u unsplit=%u texsw=%u texmiss=%u | colchg=%u/%u iip=%u/%u tme=%u "
+                    "c0=%08x cN=%08x | wide=%u/%u big=%u c=%08x/%08x/%08x sm=%u | "
+                    "cover=%u coverdrop=%u | "
                     "clip=%ux%u b0=%d,%d,%d,%d plate=%s\n",
-                    (unsigned int)s_gs_groups, (unsigned int)s_gs_qw,
+                    (unsigned int)s_gs_groups, (unsigned int)s_gs_st.prim_writes,
+                    (unsigned int)s_gs_qw,
                     (unsigned int)s_gs_st.verts, (unsigned int)s_gs_st.prims,
                     (unsigned int)s_gs_us,
                     (unsigned int)s_gs_st.prim_moves,
@@ -1158,6 +1403,14 @@ static void ps2_cycle_print(int asked_ms)
                     (unsigned int)s_gs_st.dropped,
                     (unsigned int)s_gs_st.unsplittable, (unsigned int)s_gs_st.tex_switches,
                     (unsigned int)s_gs_st.tex_missing,
+                    (unsigned int)s_gs_st.colour_changes, (unsigned int)s_gs_st.colour_verts,
+                    (unsigned int)s_gs_st.prim_iip, (unsigned int)s_gs_st.prim_decl,
+                    (unsigned int)s_gs_st.prim_tme,
+                    (unsigned int)s_gs_st.colour_first, (unsigned int)s_gs_st.colour_last,
+                    (unsigned int)s_gs_st.wide_flat, (unsigned int)s_gs_st.wide_tri,
+                    (unsigned int)s_gs_st.big_area,
+                    (unsigned int)s_gs_st.big_c0, (unsigned int)s_gs_st.big_c1,
+                    (unsigned int)s_gs_st.big_c2, (unsigned int)s_gs_st.big_smooth,
                     (unsigned int)s_gs_cover, (unsigned int)s_gs_cover_drop,
                     (unsigned int)s_gs_st.clip_w, (unsigned int)s_gs_st.clip_h,
                     (int)s_gs_st.b0_l, (int)s_gs_st.b0_t,
@@ -1179,7 +1432,9 @@ static void ps2_cycle_print(int asked_ms)
      * always hash identical, so `same=` can only be wrong by a collision while `diff=` is exact.
      *
      * `xyz=`/`rgb=`/`st=`/`shape=` are the same positional compare split by GS register, over the
-     * frame's `v=` vertex groups (`g=` minus `v=` is the texture switches), and they are the columns
+     * frame's `v=` vertex groups (since rung 12v, `g=` minus `v=` is the AD groups: the frame's texture
+     * switches plus one write of PRIM in front of every chain, and `pwr=` on the [GSTS] row is that second
+     * term), and they are the columns
      * that say WHAT moved rather than only that something did: a group counted in `xyz=` had every
      * one of its drawing kicks byte-identical to the same index last frame, so its geometry is the
      * same mesh re-shaded, and a group counted in none of them is a vertex transform being re-solved.
@@ -1295,7 +1550,19 @@ static void ps2_upload_cover_in_layer(const wnd_gl_cover *cover, const RECT *lay
         const H x1 = r->right  < layer->right  ? r->right  : layer->right;
         const H y1 = r->bottom < layer->bottom ? r->bottom : layer->bottom;
 
-        if (x1 > x0 && y1 > y0) ps2_gs_upload(x0, y0, x1 - x0, y1 - y0);
+        if (x1 > x0 && y1 > y0) {
+#if BTRON_PS2_BENCH
+            /* Recorded BEFORE the send and with the intersection's own edges, so what the ring
+             * holds is exactly the rect this pass put on the bus -- not the cover list, which is
+             * what `cover=` counts and which may hold four rects of which one survives the clip. */
+            const uint32_t c = s_cover_writes++ % PS2_COVER_TRACE_N;
+
+            s_cover_rect[c][0] = (int)x0;  s_cover_rect[c][1] = (int)y0;
+            s_cover_rect[c][2] = (int)x1;  s_cover_rect[c][3] = (int)y1;
+            s_cover_pass[c] = s_cover_pass_no;
+#endif
+            ps2_gs_upload(x0, y0, x1 - x0, y1 - y0);
+        }
     }
 }
 
@@ -1329,6 +1596,7 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
     s_paint_pre[s_paint_i] = s_paint_post[s_paint_i] = -1;
     s_paint_pix[s_paint_i] = 0u;
     s_paint_calls++;
+    s_cover_pass_no++;
 #endif
 
     /* The GS layer's frame bracket.  The composite below runs the layer window's paint
@@ -1569,7 +1837,7 @@ static void ps2_emit_num(uint32_t val, unsigned base, unsigned width,
     while (n > 0) ps2_console_putc(buf[--n]);
 }
 
-static void ps2_kprintf(const char *fmt, ...)
+void ps2_kprintf(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -4510,6 +4778,57 @@ static void ps2_gstex_probe(void)
     }
 }
 
+/* `gsstat` -- the GS half of the question `heapstat` answers about the pool, and the reason they
+ * are two verbs is that they answer different halves of the same empty window.  `heapstat` says
+ * whether the machine had the RAM for the icon atlas; this says whether the atlas that did get
+ * RAM ever reached the Synthesizer, and -- by arming the cycle printer below -- whether any
+ * primitive has since been drawn with no plane to sample.
+ *
+ * This exists because on 2026-10-17 the census and the operator disagreed about the same image:
+ * the census counted ink inside the XMB's client rect and the operator saw dots.  Both readings
+ * were of that rectangle, and only one of them was of the picture.  `texmiss=` is the column that
+ * separates them -- a textured primitive whose plane has no VRAM address is demoted and drawn
+ * FLAT, which on a monitor is a fan of colour blocks where the icons should be -- and until now
+ * it was armed only by the bench (`s_cycle.left` is set in no ship path), so the ship console
+ * could print `swap=0 us` forever without ever saying whether the ink it sent was the right ink.
+ *
+ * `registered=` is the plane table read back, `pending=` counts planes whose Host->Local IMAGE the
+ * bus has not taken, and `vram_left=` is the allocator's own budget in bytes -- the two shipped
+ * sheets (the 512x512 icon atlas and the font sheet) are predicted to leave 1,081,344.
+ *
+ * Six passes, not a row per frame: the instrument is armed by asking, so a normal session's
+ * console stays the product's.
+ *
+ * Not static, because the desktop's Terminal reaches it too (src/apps/gterm.c, PS2-only branch):
+ * arming needs task-driven passes, and a task-driven pass is an app frame, so the verb has to be
+ * reachable while the XMB is animating -- which is inside the GUI session, not at Stage 1. */
+void ps2_shell_gsstat(void)
+{
+    uint32_t i;
+
+    ps2_kprintf("[GS] planes: registered=%u pending=%u vram_left=%u\n",
+                (unsigned int)gs_tex_count(), (unsigned int)gs_tex_pending(),
+                (unsigned int)gs_tex_vram_left());
+    for (i = 0; i < gs_tex_count(); i++) {
+        const gs_tex_t *t = gs_tex_at(i);
+
+        ps2_kprintf("[GS] plane %u: %ux%u bytes at %u, TBA %u, %u qwc%s\n",
+                    (unsigned int)i, (unsigned int)t->px_w, (unsigned int)t->px_h,
+                    (unsigned int)t->byte, (unsigned int)t->tba, (unsigned int)t->qwc,
+                    t->pending ? ", PENDING (the bus has not taken its DMA)" : "");
+    }
+    if (gs_tex_count() == 0u) {
+        ps2_kprintf("[GS] no plane is registered, so every textured primitive is being drawn "
+                    "flat -- this is \"the window shows dots, not icons\".  Run `heapstat`: the "
+                    "ask that failed is the 1024 kB icon atlas in gl_image_alloc().\n");
+    }
+    s_cycle.left = 6u;
+    ps2_kprintf("[GS] armed: the next 6 task-driven passes print [XMBT] cycle + [GSTS].  "
+                "Keep the XMB animating, then read texmiss=/drop=/plate= on the [GSTS] row -- "
+                "any of the three non-zero is a piece of the picture the app drew and the "
+                "screen does not have.\n");
+}
+
 static char cmd_buf[64];
 static int cmd_pos = 0;
 static int esc_state = 0;
@@ -4530,6 +4849,14 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  tip [mode]       - Set or cycle TIP/IME (ascii, hira, kata, tibetan)\n");
         ps2_kprintf("  tasks            - List active RTOS tasks\n");
         ps2_kprintf("  mem              - Show memory breakdown\n");
+        ps2_kprintf("  heapstat         - Who holds the kernel heap, by allocating site, + stack\n"
+                    "                     high-water.  Resolve a printed 0xADDR on the host:\n"
+                    "                     scripts/ps2_heap_who.sh 0xADDR   (or pass it the log)\n");
+        ps2_kprintf("  gsstat           - Which texture pages the GS actually holds (registered/pending/\n"
+                    "                     vram_left), then arm 6 [GSTS] frame rows: texmiss= names a\n"
+                    "                     textured primitive drawn FLAT for want of a page -- the dots\n"
+                    "                     a window shows instead of its icons.  Type it in the Terminal\n"
+                    "                     with the app running, not here.\n");
         ps2_kprintf("  status           - Show mouse position, TIP mode, and system status\n");
         ps2_kprintf("  mouse <x> <y>    - Move cursor to absolute position (0..800, 0..600)\n");
         ps2_kprintf("  move <dx> <dy>   - Move cursor relative by (dx, dy)\n");
@@ -4617,6 +4944,9 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  4. Sound        - Audio Player\n");
         ps2_kprintf("  5. Chat         - Interactive Dialogue\n");
         ps2_kprintf("  6. Settings     - Control Panel System Settings\n");
+        ps2_kprintf("  7. XMB          - Cross Media Bar (PS3 Media Menu)\n");
+        ps2_kprintf("  8. MSX Games    - B-MSX Cartridge Player System\n");
+        ps2_kprintf("  9. Quake        - Quake 3D FPS Game\n");
     } else if (tkl_strncmp(cmd, "open ", 5) == 0) {
         const char *app = cmd + 5;
         if (tkl_strcmp(app, "cabinet") == 0 || tkl_strcmp(app, "vobj") == 0) {
@@ -4637,6 +4967,15 @@ static void ps2_shell_exec(const char *cmd)
         } else if (tkl_strcmp(app, "settings") == 0 || tkl_strcmp(app, "panel") == 0) {
             open_control_panel_window();
             ps2_kprintf("[PS2-UI] Opened Control Panel Settings.\n");
+        } else if (tkl_strcmp(app, "xmb") == 0) {
+            open_xmb_window();
+            ps2_kprintf("[PS2-UI] Opened Cross Media Bar (XMB).\n");
+        } else if (tkl_strcmp(app, "msx") == 0 || tkl_strcmp(app, "game") == 0) {
+            open_msx_window();
+            ps2_kprintf("[PS2-UI] Opened B-MSX Game System.\n");
+        } else if (tkl_strcmp(app, "quake") == 0) {
+            open_quake_window(120, 60, 480, 360);
+            ps2_kprintf("[PS2-UI] Opened Quake 3D.\n");
         } else {
             ps2_kprintf("Unknown application: '%s'\n", app);
         }
@@ -4661,6 +5000,11 @@ static void ps2_shell_exec(const char *cmd)
                     (unsigned int)PS2_HEAP_SIZE, (unsigned int)(PS2_HEAP_SIZE / (1024u * 1024u)),
                     (unsigned int)s_heap_used, (unsigned int)ps2_heap_largest_free());
         ps2_kprintf("VRAM eDRAM  :  4194304 bytes (4 MB)\n");
+    } else if (tkl_strcmp(cmd, "heapstat") == 0) {
+        /* The same census the allocator prints by itself when an ask dies, on demand: who holds the
+         * pool, by the address that asked, plus the stack high-water that bounds how big the pool
+         * may be.  `scripts/ps2_heap_who.sh` turns the addresses into names on the host. */
+        ps2_heap_holders("asked for by heapstat");
     } else if (tkl_strcmp(cmd, "status") == 0) {
         ps2_kprintf("Mouse Cursor: (%d, %d)\n", s_mouse_x, s_mouse_y);
         ps2_kprintf("TIP Mode    : %s\n", tip_get_mode_str());
@@ -4814,6 +5158,8 @@ static void ps2_shell_exec(const char *cmd)
                     "[CAL] pointer ended after equal and opposite counts; DIAG asks both axes\n"
                     "[CAL] the same question.\n",
                     (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_max_step);
+    } else if (tkl_strcmp(cmd, "gsstat") == 0) {
+        ps2_shell_gsstat();
     } else if (tkl_strcmp(cmd, "gsquad") == 0) {
         if (s_gui_active) {
             ps2_kprintf("[GSQUAD] note: the desktop composites over the canvas every frame, so from\n"
@@ -7341,19 +7687,20 @@ static void ps2_bench_app(uint32_t frames)
      * state either side of open_xmb_window(), largest hole included -- a GL surface
      * needs one contiguous block, so "bytes free" alone can be an innocent answer. */
     const char *pool_bad = ps2_heap_check();
-    ps2_kprintf("[BENCH] heap before xmb: used=%u of %u kB, largest hole %u kB, pool %s\n",
+    ps2_kprintf("[BENCH] heap before xmb: used=%u of %u kB, largest hole %u kB, stack=%u kB, pool %s\n",
                 (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
-                (unsigned int)(ps2_heap_largest_free() / 1024u),
+                (unsigned int)(ps2_heap_largest_free() / 1024u), ps2_stack_probe_depth(),
                 pool_bad ? pool_bad : "sound");
     if (pool_bad) ps2_heap_dump();
     w = open_xmb_window();
     s_bench_app_active = 0;
     s_bench_app_left = 0u;
     pool_bad = ps2_heap_check();
-    ps2_kprintf("[BENCH] heap after  xmb: used=%u of %u kB, largest hole %u kB (peak %u kB), pool %s\n",
+    ps2_kprintf("[BENCH] heap after  xmb: used=%u of %u kB, largest hole %u kB (peak %u kB), stack=%u kB, pool %s\n",
                 (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
                 (unsigned int)(ps2_heap_largest_free() / 1024u),
                 (unsigned int)(s_heap_peak / 1024u),
+                ps2_stack_probe_depth(),
                 pool_bad ? pool_bad : "sound");
     if (pool_bad) ps2_heap_dump();
 
@@ -7437,6 +7784,7 @@ static void ps2_bench_launch_xmb_by_key(GDEV *screen)
      * and injects the Escape that ends the body. */
     s_bench_app_t0 = btron_render_perf_us();
     s_bench_app_made = 0u;
+    s_bench_app_over = 0u;
     s_bench_app_active = 1;
     s_cycle.left = 3u;
     s_bench_app_left = 3u;
@@ -7648,10 +7996,33 @@ static WND *ps2_bench_wnd_named(const char *needle)
  * `BENCH_APP=1 BENCH_GS=2 scripts/ps2_bench.sh`.
  */
 #define GSLIVE_TOP      8u      /* the hottest inks kept; a colour that cannot get a slot is `rare` */
-#define GSLIVE_X0       32      /* the control's own box: 64 x 16 = 1,024 px, below every window the */
-#define GSLIVE_Y0       560     /* XMB route opens and above the deskbar's own row                 */
+#define PS2_HIST_RECTS  6       /* cover rects this census keeps for its own `eraser:` rows */
+/* LANE 19 rung 12s moved the whole instrument -- the control and the six boxes -- from rows 560..575 to
+ * rows 32..47.  The reason is the finding, stated here once so no later rung re-picks the old strip:
+ * `desktop_render()` fills the BOTTOM 40 px of the page (rows h-40..h = 560..599) with an 8-swatch Colour
+ * Test Bar, one swatch every w/8 = 100 px, and two of those swatches are the palette's own red and blue --
+ * dp.h `COLOR_RED` 0xFFFF0000 and the bar's `ARGB(0xFF,0x00,0x00,0xFF)` blue.  `fill_rec()` stores every
+ * colour through `BTRON_PIXEL_FB()`, which swaps R and B for this target, so those two words land in the
+ * canvas BIT-EQUAL to this census's `GSQUAD_RED` and `GSQUAD_BLUE`: swatch 5 (x500..599) reads as red and
+ * swatch 6 (x600..699) as blue, whole-height, straight-edged at the SWATCH borders.  The band therefore sat
+ * on top of desktop chrome for every rung from 12a to 12r, and the corner-word key counted that chrome as
+ * ink.  The arithmetic says so on its own, before any new read: D's window (x536..623) holds 64 red columns
+ * and 24 blue ones = 1024 + 384 = the 1408 px every rung since 12j called its block; E's (x632..719) holds
+ * 68 blue columns = 1088 = exactly what 12r found pre-draw; and C's 320 is the bar intruding on its last 20
+ * columns (x500..519), which 12j's bbox already showed as `R 400-519` while C's own cube cannot reach x500.
+ * Rows 32..47 are NOT a chrome-free strip -- there is no 16-row one anywhere on this page, because the XMB's
+ * own tab rect covers rows 20..47 (client.top 52 = bounds.top + WND_TITLE_HEIGHT 28 + border 4, so
+ * bounds.top 20).  Rows 32..47 are that title bar.  What makes them usable is the other half of the law: the
+ * corner-word key is what turns chrome into ink, and a title bar is drawn in `COLOR_GOLD`/`LTGRAY` with black
+ * text -- no word of it bit-equal to `GSQUAD_RED`/`GREEN`/`BLUE` -- so its pixels fall to the canvas compare
+ * and count as `same`, not as painted.  It is also not a registered cover rect, so unlike the panel (0..28)
+ * and the bar (560..599) nothing re-lays it over this census's ink between its sends and its read.  Rung 12s
+ * reads the strip BEFORE the first send and prints the page against the canvas, so both halves of that claim
+ * are measured rather than argued from wnd.c. */
+#define GSLIVE_X0       32      /* the control's own box: 64 x 16 = 1,024 px, in the rung-12s strip */
+#define GSLIVE_Y0       32      /* the XMB's title bar: chrome whose words are not corner words, and  */
 #define GSLIVE_X1       96
-#define GSLIVE_Y1       576
+#define GSLIVE_Y1       48      /* no cover rect -- so no present re-lays it over this census's ink */
 #define GSLIVE_PX       ((uint32_t)(GSLIVE_X1 - GSLIVE_X0) * (uint32_t)(GSLIVE_Y1 - GSLIVE_Y0))
 #define GSLIVE_INK      BTRON_PIXEL_FB(0xFFE0E0E0u)  /* ps2_kprintf's pair, in the order the canvas */
 #define GSLIVE_BG       BTRON_PIXEL_FB(0xFF121B29u)  /* holds it: the macro ps2_gs_text_putc() calls
@@ -7659,6 +8030,1311 @@ static WND *ps2_bench_wnd_named(const char *needle)
                                                       * against a page read back.  Hand-swapping the
                                                       * bytes here instead would split the console
                                                       * class on a colour the console never writes. */
+
+/* LANE 19 rung 12a -- the shading pair's geometry.  Rung 12a chose rows 560..575 because they were the
+ * rung-6 magenta box's rows and `ctrl=1024` looked like a certification of the strip; it was not one, and
+ * rung 12s named what actually lives there (the Colour Test Bar above).  The rows now come from GSLIVE_SH_Y0
+ * and the pre-draw read of 12s is the certification 12a wanted: it tallies every box window BEFORE the first
+ * send, so a window that already holds a corner word says so and the rung that reads it is skipped, not
+ * believed.  The x ranges keep clear of the magenta box (32..95) and of each other, and both boxes are
+ * 128 x 16 so the triangle inside each one covers half of it -- which is why the rows print the box's px
+ * count beside the colour tallies. */
+#define GSLIVE_SH_Y0       32
+#define GSLIVE_SH_Y1       48
+/* Rung 12s keeps reading the strip 12a..12r used, over the same six x ranges, in the same pre-draw pass --
+ * not as a band but as a control on the finding itself.  If the block is the Colour Test Bar then the page
+ * holds the corner words BECAUSE the canvas holds them, at the same positions, and `match` equals `tot`;
+ * a corner word the page holds where the canvas holds something else is a writer this file does not own and
+ * would still be unnamed after this rung.  Reading it costs one more 16-row VRAM read and settles the claim
+ * with a measurement instead of with an offline reading of desktop.c's source. */
+#define GSLIVE_OLD_BAND_Y0 560u   /* rows 560..575: the Colour Test Bar's top half, 12s's control band */
+#define GSLIVE_SH_A_X0     112   /* IIP=1: the three corner colours ask the GS to interpolate them */
+#define GSLIVE_SH_A_X1     240
+#define GSLIVE_SH_B_X0     256   /* IIP=0: the same three colours with flat shading, the control */
+#define GSLIVE_SH_B_X1     384
+#define GSLIVE_SH_QWC_MAX  16u   /* one tag pair plus three vertices at two quadwords = 7 per group */
+
+/* LANE 19 rung 12c/12d/12e -- the hand-built shapes, in the boxes right of rung 12a's pair and in the
+ * same certified rows.  A, B, C, D and E keep the x ranges they were measured with on 2026-10-18, so a
+ * later run's rows read directly against that run's; C, D and E are now POSITIVE CONTROLS (all three
+ * measured as interpolating, to the pixel, on three censuses of one run -- see the 12c/12d comment
+ * below for the shapes and the numbers).  F is rung 12e's one new question, in the 64 px the band has
+ * left: 64x16 holds a 512-px triangle and the gradient test is a QUARTER of a box's painted px, so a
+ * narrow box still has hundreds of interior px -- enough that "flat" and "gradient" cannot be confused
+ * for a size artefact. */
+#define GSLIVE_SH_N        6u
+#define GSLIVE_SH_C_X0     400   /* ps2sdk's own Gouraud cube: AD(PRIM,RGBAQ) then a {RGBAQ,XYZ2} chain */
+#define GSLIVE_SH_C_X1     520
+#define GSLIVE_SH_D_X0     536   /* C's chain, PRIM from the tag instead of from the AD write */
+#define GSLIVE_SH_D_X1     624
+#define GSLIVE_SH_D_ASK_W  24    /* rung 12n narrowed D to this; 12s retired the narrowing (see below) */
+/* Rung 12o moved D's ask 16 rows BELOW the band, into rows 576..591, to see whether the band's block
+ * followed the ask.  It did not, and rung 12s names why: rows 560..599 are the Colour Test Bar, so BOTH of
+ * 12o's readings -- "the block stood" and "384 red px filled the moved rect" -- were the bar's own swatch 5
+ * (red, x500..599, rows 560..599), not this census's ink and not a foreign GS writer.  The dial's question
+ * is therefore answered and its rows are gone: D is asked its whole window in the band again, which makes
+ * `out=` identically zero, and 12o's and 12n's rows self-gate to SKIP. */
+#define GSLIVE_SH_E_X0     632   /* C's chain plus an ST slot between the colour and the kick */
+#define GSLIVE_SH_E_X1     720
+#define GSLIVE_SH_F_X0     728   /* E's three-register chain with the recorder's OWN tag: PRE=1, no AD */
+#define GSLIVE_SH_F_X1     792
+
+/* LANE 19 rung 12j -- the SPILL window: the rows around the band that no box is read out of.
+ *
+ * 12i answered "the variable is the frame's ORDER", but the numbers underneath that answer never added up
+ * as a shading answer.  Box D, the frame's first triangle, came back `painted=1408` -- its WHOLE rect --
+ * split red=1024 blue=384, and 1024 px in an 88x16 box is a 64-wide column at full height, which is not a
+ * shape a triangle makes.  Box B came back `painted=1920` of a 2,048-px rect in TWO colours (red 975,
+ * blue 945), which is two triangles' coverage in one box where one packet went out.  A box that holds a
+ * rectangle and two flat colours is not a box whose gradient failed; it is a box holding geometry that
+ * came from somewhere else, and the 12i grid would then be reading WHERE the transfers land rather than
+ * HOW they shade.
+ *
+ * So the same read now records WHERE each corner colour is, per box (a bbox and a count say whether the
+ * colour fills its box or a stripe of it), and it records the corner colours OUTSIDE every box, in the
+ * rows above and below the band -- the gaps between the boxes (96..111, 241..255, 385..399, 521..535,
+ * 625..631, 721..727) and the band's neighbours, which nothing else in this census draws.  A triangle
+ * assembled from stale vertex history leaves its colour there, and a triangle that merely failed to
+ * interpolate leaves nothing: `spill=0` is therefore the row that makes 12i's answer mean shading, and a
+ * non-zero spill is the row that makes it mean geometry.
+ *
+ * The window is keyed on the three corner WORDS, exactly, and on the pixel differing from the canvas.  The
+ * claim this rung was built on -- that a UI pixel cannot enter the tally because "the desktop's own colours
+ * are not bit-equal to GSQUAD_RED/GREEN/BLUE" -- is FALSE, and rung 12s proved it: dp.h spells COLOR_RED as
+ * 0xFFFF0000 and COLOR_BLUE as 0xFF0000FF, which are GSQUAD_BLUE and GSQUAD_RED in the other reading of the
+ * same word, and `desktop_render()` fills the bottom 40 rows of the page with a bar of eight 100-px
+ * swatches that uses both.  That is why the spill window now sits in the strip above the client rather than
+ * across the bar, and why every pre-draw count of 12s reports what the CANVAS holds at the same positions:
+ * a corner word the canvas also holds is chrome, and chrome must never be printable as ink. */
+/* The spill window is 16 rows above the band and 8 below it.  Its top reaches into the panel's own rows
+ * 16..28, which the present re-lays as chrome -- chrome the desktop draws in gold, grey and navy, none of
+ * which is a corner word, so it can only ever land in the `equal-canvas` column, never in R/G/B. */
+#define GSLIVE_SP_Y0       16
+#define GSLIVE_SP_Y1       56
+#define GSLIVE_BB_NONE     0xFFFFFFFFu
+
+/* LANE 19 rung 12k -- a PICTURE of the band, because rung 12j's aggregates were being argued about.
+ *
+ * 12j settled that the census's corner colours are not where its triangles are: box D holds two
+ * full-height colour COLUMNS (red x536-599, blue x600-623, together its whole 88x16 rect), box B holds a
+ * blue rect of exactly 63x15 laid over a red region of 51% coverage, and 240 red px fill the 16x15 GAP
+ * between boxes B and C, which no box in this census draws.  A bounding box and a count cannot say what
+ * shape makes a column, and three readings of those numbers were on the table in one conversation.  So
+ * the band is now printed as a picture: one line per row, one character per four pixels of x, for every
+ * box, with each cell holding the SET of classes that landed in it.
+ *
+ * The classes are the three categories rung 12a's grading already uses -- a corner colour, the
+ * interpolated field (`other`) and the canvas value the pixel was read out of -- and a cell holds the
+ * SET of classes that landed in it, not its majority.  Uppercase is a cell holding only corner colours,
+ * lowercase the same set once it shares the cell with field ink, because a cell that saw red AND the
+ * field is an edge of a ramp while a cell that saw only red is a flat span, and telling those two apart
+ * is the question this rung exists to answer. */
+#define GSLIVE_PIC_SHIFT   2u                        /* 4 px per column */
+#define GSLIVE_PIC_COLS    (128u >> GSLIVE_PIC_SHIFT) /* the widest box is 128 px (A and B) */
+#define GSLIVE_PIC_ROWS    (GSLIVE_SH_Y1 - GSLIVE_SH_Y0)
+#define GSLIVE_PIC_R       1u
+#define GSLIVE_PIC_G       2u
+#define GSLIVE_PIC_B       4u
+#define GSLIVE_PIC_FIELD   8u   /* painted, and neither a corner colour nor the canvas value */
+#define GSLIVE_PIC_CANVAS 16u   /* the pixel still holds the canvas it was read against */
+
+/* corner-colour + field bits -> character.  Index is the low four class bits, so every combination names
+ * itself: 0-7 are whole corner colours (Y=R+G, M=R+B, C=G+B, W=all three) and 8-15 the same sets once
+ * sharing a cell with field ink (`f` is field alone).  The canvas bit is deliberately NOT in this table:
+ * it is consulted only when a cell saw nothing but the canvas, so an untouched cell reads `.` and a
+ * column past this box's width reads a space, while a cell that mixes ink and canvas reads as its ink --
+ * 12j's per-box `canvas=` count is what says how much of a box was never touched. */
+static const char s_pic_chr[16] = {
+    /* 0x0 no class seen (only reachable as `.` or a space, via the canvas bit below) */
+    /* 0x1..0x7 whole corner colours, alone and in pairs */
+    ' ', 'R', 'G', 'Y', 'B', 'M', 'C', 'W',
+    /* 0x8 field alone; 0x9..0xf a corner colour sharing its 4-px cell with field ink:
+     * r=R+f g=G+f y=R+G+f b=B+f m=R+B+f c=G+B+f w=all three+f */
+    'f', 'r', 'g', 'y', 'b', 'm', 'c', 'w'
+};
+
+/* One band picture, in the order the boxes are drawn.  6 x 16 x 32 bytes = 3 kB of image; rung 10's two
+ * tile grids already cost 30 kB, and the alternative -- a 4-px-per-column mask of the whole 800-px page --
+ * is 16 kB the pool does not have. */
+static uint8_t s_band_pic[GSLIVE_SH_N][GSLIVE_PIC_ROWS][GSLIVE_PIC_COLS];
+
+/* Fold one pixel into a {minx, maxx, miny, maxy} box held in page coordinates, an inclusive max, and
+ * GSLIVE_BB_NONE until the box has seen a pixel -- the empty case has to be distinguishable from the box
+ * at (0,0), which is where the console's own corner colour lives. */
+static void gslive_bbox(uint32_t bb[4], uint32_t x, uint32_t y)
+{
+    if (bb[0] == GSLIVE_BB_NONE || x < bb[0]) bb[0] = x;
+    if (bb[1] == GSLIVE_BB_NONE || x > bb[1]) bb[1] = x;
+    if (bb[2] == GSLIVE_BB_NONE || y < bb[2]) bb[2] = y;
+    if (bb[3] == GSLIVE_BB_NONE || y > bb[3]) bb[3] = y;
+}
+
+/* Does this overlay's rect -- after the present's own clip to the layer's client, which is what the
+ * ring recorded -- name the cover rect the census is holding?  The comparison is the intersection
+ * and not the raw rect because ps2_upload_cover_in_layer() clips before it sends. */
+static int ps2_bench_cover_is(const RECT *r, const int *clip_rect, int cx0, int cy0, int cx1, int cy1)
+{
+    const int x0 = r->left > cx0 ? r->left : cx0;
+    const int y0 = r->top  > cy0 ? r->top  : cy0;
+    const int x1 = r->right < cx1 ? r->right : cx1;
+    const int y1 = r->bottom < cy1 ? r->bottom : cy1;
+
+    return x1 > x0 && y1 > y0 &&
+           x0 == clip_rect[0] && y0 == clip_rect[1] &&
+           x1 == clip_rect[2] && y1 == clip_rect[3];
+}
+
+/* LANE 19 rung 10 -- the page as a PICTURE, in the log.
+ *
+ * Why a picture and not another count: rung 6 can print `in_win=383,933 of 384,000 px differ from
+ * the canvas`, and on 2026-10-17 the operator looked at that same window and saw dots on gray.  Both
+ * statements were about the same rectangle and only one of them was about the picture.  What the
+ * census has never printed is WHICH colour is WHERE -- and its own histogram came close (`ink:
+ * 0xfe9d4c01 n=356,087 box=16,52..782,550`) without being readable as an image: 356,087 px of ONE
+ * colour inside the client rect is 93% of the window flat, and that IS the empty window, told as a
+ * number nobody looked at.
+ *
+ * So this keeps the whole page -- the 800x600 rung 3 already reads back over Local->Host -- and
+ * reduces it to a grid of 16x16 tiles, each holding its majority colour, printed twice: P for the GS
+ * page as read, C for the EE canvas the compositor painted.  50 columns by 38 rows, one character per
+ * tile, the characters indexing a legend of the colours themselves.  `scripts/ps2_page_pic.py` turns
+ * those blocks back into two PNGs, which is where the page can be compared with the operator's
+ * photograph instead of argued with.
+ *
+ * The reduction is stated, not hidden: the majority is Boyer-Moore's candidate -- exact for a tile the
+ * picture fills with one colour, an approximation for a tile that straddles an edge -- a colour the
+ * 32-slot legend cannot hold prints as `.` and is counted in `other=`, and a tile whose pixels all
+ * came back SENT prints as a space.  A busy screen therefore says it was flattened rather than being
+ * silently flattened.  Costs: 30 kB of BSS for the two grids, one compare per pixel over the 480,000
+ * the read already walks, and about 2 kB of log per picture. */
+#define GSPIK_TILE  16u
+#define GSPIK_COLS  ((uint32_t)PS2_SCREEN_WIDTH / GSPIK_TILE)   /* 50 across an 800 px page */
+#define GSPIK_ROWS  (((uint32_t)PS2_SCREEN_HEIGHT + GSPIK_TILE - 1u) / GSPIK_TILE)  /* 38 for 600 */
+#define GSPIK_PAL   32u
+#define GSPIK_CHARS "0123456789abcdefghijklmnopqrstuv"          /* the 32 legend characters */
+
+typedef struct {
+    uint32_t v[GSPIK_ROWS][GSPIK_COLS];   /* the tile's majority candidate, as the page holds it */
+    uint32_t n[GSPIK_ROWS][GSPIK_COLS];   /* its weight; 0 until the tile's first pixel arrives */
+} gspeak_t;
+
+static gspeak_t s_spk_page, s_spk_canvas;
+static uint32_t s_spk_pal[GSPIK_PAL], s_spk_pal_n;
+static uint32_t s_spk_other_p, s_spk_other_c;   /* tiles whose colour found no legend slot */
+static uint32_t s_spk_blank_p, s_spk_blank_c;   /* tiles with nothing read: SENT pixels */
+static uint32_t s_spk_sent;                     /* px the read did not deliver, whole page */
+static uint32_t s_spk_printed;                  /* pictures per run: two, then no more */
+
+static void gspeak_add(gspeak_t *g, uint32_t x, uint32_t y, uint32_t v)
+{
+    const uint32_t r = y / GSPIK_TILE;
+    const uint32_t c = x / GSPIK_TILE;
+
+    if (r >= GSPIK_ROWS || c >= GSPIK_COLS) return;
+    if (g->n[r][c] == 0u || g->v[r][c] == v) {
+        g->v[r][c] = v;
+        g->n[r][c]++;
+    } else {
+        g->n[r][c]--;
+    }
+}
+
+static void gspeak_reset(void)
+{
+    uint32_t r, c;
+
+    for (r = 0u; r < GSPIK_ROWS; r++)
+        for (c = 0u; c < GSPIK_COLS; c++) {
+            s_spk_page.n[r][c] = 0u;
+            s_spk_canvas.n[r][c] = 0u;
+        }
+    s_spk_pal_n = 0u;
+    s_spk_other_p = s_spk_other_c = 0u;
+    s_spk_blank_p = s_spk_blank_c = 0u;
+    s_spk_sent = 0u;
+}
+
+/* The legend's index for a colour, taking a slot if this is the first tile that carries it.  -1 means
+ * the legend is full: the tile prints as `.` and the caller's `other=` says how many did, so a page
+ * richer than 32 tile colours is reported as flattened rather than being quietly one. */
+static int gspeak_pal(uint32_t v)
+{
+    uint32_t i;
+
+    for (i = 0u; i < s_spk_pal_n; i++)
+        if (s_spk_pal[i] == v) return (int)i;
+    if (s_spk_pal_n < GSPIK_PAL) {
+        s_spk_pal[s_spk_pal_n] = v;
+        return (int)s_spk_pal_n++;
+    }
+    return -1;
+}
+
+/* One grid, as rows of legend characters.  The legend must already be closed -- gspeak_dump() walks
+ * both grids first -- so nothing here can add a colour and leave an earlier row's character meaning
+ * something else. */
+static void gspeak_print(const char *tag, const gspeak_t *g, uint32_t blanks)
+{
+    char row[GSPIK_COLS + 2];
+    uint32_t r, c;
+
+    ps2_kprintf("[GSDUMP] %s: %u tile(s) had no pixel read back (printed ' ')\n",
+                tag, (unsigned int)blanks);
+    for (r = 0u; r < GSPIK_ROWS; r++) {
+        for (c = 0u; c < GSPIK_COLS; c++) {
+            int idx;
+
+            if (g->n[r][c] == 0u) { row[c] = ' '; continue; }
+            idx = gspeak_pal(g->v[r][c]);
+            row[c] = idx < 0 ? '.' : GSPIK_CHARS[idx];
+        }
+        row[GSPIK_COLS] = '\0';
+        ps2_kprintf("[GSDUMP] %s %u %s\n", tag, (unsigned int)r, row);
+    }
+}
+
+static void gspeak_dump(void)
+{
+    uint32_t r, c, i;
+
+    ps2_kprintf("[GSDUMP] the page as a picture: %ux%u px per tile, %ux%u grid.  "
+                "P = the GS page as read back, C = the EE canvas the compositor painted.  "
+                "One character per tile = its majority colour; scripts/ps2_page_pic.py renders the "
+                "P and C blocks as PNGs and as text.  "
+                "WORDS ARE 0xAABBGGRR, NOT 0xAARRGGBB: the GS stores a CT32 pixel with r in the low "
+                "byte and the canvas holds the same order (BTRON_PIXEL_FB, include/btron/types.h), "
+                "so decoding these as ARGB exchanges red and blue and turns the XMB's deep blue into "
+                "a brown field -- the wrong-diagnosis trap this row now names out loud.\n",
+                (unsigned int)GSPIK_TILE, (unsigned int)GSPIK_TILE,
+                (unsigned int)GSPIK_COLS, (unsigned int)GSPIK_ROWS);
+    ps2_kprintf("[GSDUMP] coverage: %u px of the page came back SENT (the read did not deliver them)\n",
+                (unsigned int)s_spk_sent);
+
+    /* Pass one closes the legend over both grids, P first, and tallies what it could not hold. */
+    for (r = 0u; r < GSPIK_ROWS; r++) {
+        for (c = 0u; c < GSPIK_COLS; c++) {
+            if (s_spk_page.n[r][c] != 0u) {
+                if (gspeak_pal(s_spk_page.v[r][c]) < 0) s_spk_other_p++;
+            } else s_spk_blank_p++;
+            if (s_spk_canvas.n[r][c] != 0u) {
+                if (gspeak_pal(s_spk_canvas.v[r][c]) < 0) s_spk_other_c++;
+            } else s_spk_blank_c++;
+        }
+    }
+    for (i = 0u; i < s_spk_pal_n; i += 8u) {
+        uint32_t j;
+
+        ps2_kprintf("[GSDUMP] pal %c=%08x", GSPIK_CHARS[(int)i], (unsigned int)s_spk_pal[i]);
+        for (j = i + 1u; j < s_spk_pal_n && j < i + 8u; j++)
+            ps2_kprintf(" %c=%08x", GSPIK_CHARS[(int)j], (unsigned int)s_spk_pal[j]);
+        ps2_kprintf("\n");
+    }
+    ps2_kprintf("[GSDUMP] other: P=%u C=%u tile(s) printed `.` (the legend holds %u colour(s))\n",
+                (unsigned int)s_spk_other_p, (unsigned int)s_spk_other_c,
+                (unsigned int)s_spk_pal_n);
+
+    /* Pass two prints, and the characters it writes index the legend the lines above just named. */
+    gspeak_print("P", &s_spk_page, s_spk_blank_p);
+    gspeak_print("C", &s_spk_canvas, s_spk_blank_c);
+}
+
+/* LANE 19 rung 12a -- does THIS GS interpolate the three colours THIS STREAM hands it?
+ *
+ * Everything below the question has been answered by measurement.  The recorded group's shape draws:
+ * rung 5's dense two-quadword REGLIST filled its box to the pixel, and rung 6's census counts
+ * hundreds of thousands of client pixels that differ from their canvas.  The colours are not all the
+ * same at the top of the pipeline either: `colchg=` counts changes in the vertex stream.  What the
+ * operator sees is one flat plate where the XMB's four-corner gradient should be, and the flat word
+ * that census named (0xfe9d4c01) is exactly the FIRST vertex of `xb_draw_bg()`'s quad scaled by its
+ * alpha -- which is what a GS with IIP off, or with only one RGBAQ in its registers, paints.  The one
+ * register between those two facts is the interpolation flag, and no rung so far has varied it
+ * deliberately: rung 11 found `iip=24/25` at the PRIM declarations, which says the word was ASKED
+ * for, not that the rasteriser honoured it or that the three colours arrived distinct.
+ *
+ * So this draws the pair directly through `eegs_triangle()` -- the same recorder, the same group, the
+ * same PRE, the same stride as the XMB's own stream -- and not through the SPRITE poster every earlier
+ * control used, because a SPRITE has no second vertex to interpolate with.  Box A is one triangle with
+ * red at its bottom-left, green at its bottom-right and blue at its apex, asked with IIP=1.  Box B is
+ * the same three vertices asked with IIP=0, and it is the control: it is expected to come back ONE
+ * colour, and which of the three it comes back as names the vertex whose RGBAQ the GS kept.
+ *
+ *   A holds all three corners plus a field of words that are neither ....... the GS interpolates
+ *                                                                            per-vertex RGBAQ
+ *                                                                            through this exact
+ *                                                                            group shape
+ *   A is one corner colour, and B is the same one ........................... the flag is not what
+ *                                                                            makes the page flat:
+ *                                                                            the colours the three
+ *                                                                            vertices carry are not
+ *                                                                            three distinct words in
+ *                                                                            the rasteriser, which is
+ *                                                                            a packet question, or
+ *                                                                            the XMB never asked --
+ *                                                                            read `wide=`/`big=`'s
+ *                                                                            three `c=` words next
+ *   A is one colour and B is another ......................................... the flag is honoured,
+ *                                                                            and the XMB's own
+ *                                                                            triangles are not asking
+ *                                                                            for it -- `sm=` in the
+ *                                                                            [GSTS] row is then the
+ *                                                                            answer, and it is an EE
+ *                                                                            bug
+ *   neither box holds a pixel that is not its canvas .......................... the recorded TRIANGLE
+ *                                                                            lays nothing at all, in
+ *                                                                            any shading mode, which
+ *                                                                            retires every shading
+ *                                                                            hypothesis at once
+ *
+ * It prints nothing between its own draw and the read, for the reason the buffer allocation above
+ * gives: a console row repaints the band the control sits in.  A refused group is therefore counted
+ * into `s_sh_refused` and reported after the read, not printed where it happened.
+ *
+ * MEASURED, 2026-10-18 run (`ctrl=1024/1024`, so the read was certified when this printed):
+ *
+ *   A iip=1 tot=2048 painted=960 red=960 green=0 blue=0 other=0 canvas=1088
+ *   B iip=0 tot=2048 painted=945 red=0 green=0 blue=945 other=0 canvas=1103   2 groups, 0 refused
+ *
+ * So neither reading in the table above is the one that happened, and the pair says something none
+ * of them predicted: the flag IS honoured (A and B come back different words, which retires "the
+ * tag's PRIM is ignored" outright), the three RGBAQ words DO reach the register (box B paints the
+ * KICK vertex's blue, which is only possible if the register held blue at the third XYZ2), the
+ * geometry rasterises (960 px of a 2,048 px box is the triangle, to the pixel) -- and yet the shaded
+ * box is ONE colour, bit-exactly v0's, with no intermediate word anywhere.  A and B together say the
+ * GS reads the whole triangle's colour from one register and picks WHICH register by IIP: the first
+ * vertex's when shading is asked for, the last one's when it is not.  That is a flat triangle twice
+ * over, and it reproduces the XMB's plate exactly, because the plate's v0 is the word the census
+ * found painted over 356,087 px.
+ *
+ * What this rung cannot decide is whether some OTHER packet shape makes this GS interpolate.  That was
+ * rung 12c, and it ANSWERED: the shape ps2sdk's own Gouraud cube sends (`draw3d.c:11-53` +
+ * `teapot.c:193-202`: an AD pair carrying PRIM and RGBAQ, then a `FLG=REGLIST`, `PRE=0`, NREG=2 chain
+ * of {RGBAQ, XYZ2} pairs -- no ST, no NOP, no PRIM in the tag) lays a gradient on this GS, box C of
+ * the run above.  So the recorder changes its group and the plate follows -- no EE-side pre-shading,
+ * which was the alternative this rung left open.  What is still undecided is WHICH of C's three
+ * differences from A is the one that matters, and that is rung 12d, because the recorder has to change
+ * one thing it can say WHY about, not a shape it merely happens to resemble. */
+static uint32_t s_sh_groups;
+static uint32_t s_sh_refused;
+
+/* ── LANE 19 rung 12g: the words that actually went out ───────────────────────────────────────────
+ *
+ * rung 12f made a claim the 12c..12e table says it has to honour: the recorder's untextured group IS
+ * the hand-built chain -- `PRE=1`, PRIM in the tag, NREG=2, {RGBAQ, XYZ2}, three RGBAQ/XYZ2 pairs,
+ * Q = 1.0f, the same three corners, the same synchronous sender, the same applied draw environment.  The
+ * machine says otherwise: the re-run on the landed change (2026-10-18, `ctrl=1024/1024`, 4 censuses, all
+ * four identical) still reads `A ... red=960 other=0 -> one FLAT colour R` while the hand-built box `D
+ * ... other=609 -> INTERPOLATES`.  One of the premises under that claim is therefore false, and none of
+ * them is decidable from the source any more -- the host suite already asserts the tag, the REGS literal,
+ * the half order and the size law word for word.  So this captures the two packets AS THE SINK SAW THEM
+ * and prints them, which is the only instrument that can tell "the recorder did not change" from "the
+ * recorder changed and the difference lies elsewhere".
+ *
+ * RUNG 12g ANSWERED (2026-10-18, `build/repro/20261017T234101Z`, both runs identical): the two packets
+ * carry the SAME header words -- tag 0x2405c00000008003, NLOOP=3, EOP=1, PRE=1, FLG=1(REGLIST), NREG=2,
+ * PRIM=0x0b, REGS=0x51 -- eight words apiece, and the only words that differ are the three vertex XYZ2s,
+ * which is the geometry: box A is at x 112..240 and box D at 536..624.  So the ENCODING is excluded as
+ * the variable, and what is left is WHERE the triangle lands and WHO put it there.  Rung 12h therefore
+ * crosses them -- the recorder's group is now also sent at D's coordinates and the hand chain at A's --
+ * and this capture moves with it: both packets are now taken at BOX A'S coordinates, so the diff below
+ * has no excuse left and a clean answer is literally the same bytes.
+ *
+ * The capture is eight 64-bit WORDS, which is the whole of either packet at this size -- a GIF quadword
+ * is two of them, so word 0 is the tag's low half (where NLOOP, EOP, PRE, PRIM, FLG and NREG all live),
+ * word 1 is the REGS list, and words 2..7 are the three RGBAQ/XYZ2 pairs.  Two spare slots cost nothing
+ * and make a longer packet visible as a longer packet rather than as a truncation. */
+#define GSLIVE_CAP_WORDS 8u
+/* Rung 12i's send dump: 12h's cell G was the recorder's THIRD group of one session -- three transfers
+ * sharing a buffer, cut at every PRIM change -- so the census had never seen what the recorder hands the
+ * GIF for a triangle of its own, and had never SEPARATED the sender from the frame's order.  Every group
+ * of this run's three one-triangle sessions is kept, in the order they leave, so a row can say "this
+ * session sent one group and it was this packet" instead of leaving the count inferred.  Box A's group is
+ * the one rung 12g compares the hand chain with, and because A now goes LAST its slot is not send 0, so
+ * `s_cap_rec_at` names where it landed.
+ *
+ * Rung 12v moved that count: the recorder now hands its sink TWO groups per triangle -- the AD write that
+ * programs PRIM, which is what 12u measured as the only thing that does program it, and then the vertex
+ * chain.  Six of them now leave a three-session grid, so the array is six deep and every reader that wants
+ * a box's CHAIN -- 12g's tag xor, 12o's vertex decode, 12u's replay -- gets the index of its first
+ * REGLIST group, not of its first send.  `s_sh_sess_first[]` therefore changed meaning to that index, and
+ * `s_sh_sess_owner[]` was added because the dumps need to attribute the preamble too. */
+#define GSLIVE_CAP_SENDS 6u
+static uint64_t s_cap_send[GSLIVE_CAP_SENDS][GSLIVE_CAP_WORDS];
+static uint32_t s_cap_send_words[GSLIVE_CAP_SENDS];
+static uint32_t s_cap_sends;
+static uint32_t s_cap_rec_at;
+#define s_cap_rec       (s_cap_send[s_cap_rec_at])
+#define s_cap_rec_words (s_cap_send_words[s_cap_rec_at])
+static uint64_t s_cap_hand[GSLIVE_CAP_WORDS];    /* box A's triangle built by the OTHER sender */
+static uint32_t s_cap_hand_words;
+static uint32_t s_sh_sess_first[GSLIVE_SH_N];    /* index in s_cap_send[] of this box's session's first VERTEX group */
+static uint32_t s_sh_sess_groups[GSLIVE_SH_N];   /* groups this box's session handed its sink (chain + its PRIM write) */
+static uint8_t  s_sh_sess_owner[GSLIVE_CAP_SENDS]; /* 1 + the box a captured send came from, 0 = no session of the census */
+
+/* GIFTAG fields, read out of a captured word the way the GIF reads them.  The unit deliberately
+ * duplicates `verify/tests/gs_group_view.h`: this row is a claim about what the machine was handed, and
+ * reading it with a copy of the decoder rather than with the test's view is what keeps the test suite
+ * and the census from agreeing with each other and not with the GS. */
+static uint32_t gslive_nloop_of(const uint64_t *g) { return (uint32_t)(g[0] & 0x7FFFu); }
+static uint32_t gslive_eop_of(const uint64_t *g) { return (uint32_t)((g[0] >> 15) & 1u); }
+static uint32_t gslive_pre_of(const uint64_t *g) { return (uint32_t)((g[0] >> 46) & 1u); }
+static uint32_t gslive_prim_of(const uint64_t *g) { return (uint32_t)((g[0] >> 47) & 0x7FFu); }
+static uint32_t gslive_flg_of(const uint64_t *g) { return (uint32_t)((g[0] >> 58) & 3u); }
+static uint32_t gslive_nreg_of(const uint64_t *g) { return (uint32_t)(g[0] >> 60); }
+/* Rung 12o's packet decode: the exact inverse of `gs_vertex_coord16()` in src/drivers/ps2/ps2_gs_pack.c,
+ * which writes a vertex axis as `((px * 16) + GS_XYOFFSET_PAGE) & 0xFFFF` into a 16-bit 12.4 field (X bits
+ * 0-15, Y bits 16-31 of an XYZ2 quadword).  Subtracting the page back off therefore recovers the pixel the
+ * encoder was handed -- valid for any px below GS_POSTER_MAX_PX (2047), where (px+2048)*16 still fits the
+ * field, which every coordinate in this census is.  The census env sets win_x = win_y = 0, so XYOFFSET
+ * itself is the plain page offset and no window term enters either side of that law.  In a two-register
+ * {RGBAQ,XYZ2} group the XYZ2 words are the capture's indices 3, 5 and 7, one vertex per quadword. */
+static int32_t gslive_xyz_axis(const uint64_t w, int is_y)
+{
+    const uint32_t f = (is_y) ? (uint32_t)((w >> 16) & 0xFFFFu) : (uint32_t)(w & 0xFFFFu);
+
+    return (int32_t)(f >> 4) - 2048;
+}
+
+static uint32_t s_sh_box;                 /* which box the session now open draws; the sink tags its sends */
+
+/* ── LANE 19 rung 12l: the one bit that says whose PRIM the transfer is drawn under ─────────────
+ *
+ * 12k's pictures split the six boxes by SHAPE, not by colour: box D and box B were laid as RECTS
+ * (D = red x536-599 beside blue x600-623, every one of its 16 rows identical; B = red x256-319 beside
+ * blue x320-382, 15 rows), while A and F were laid as correct apex-up triangles whose whole interior is
+ * interpolated field, and C and E as a solid box with that same triangle carved into it.  The shape
+ * tracks one thing only -- position: transfers 1 and 2 are rects, 3 and 4 box-plus-triangle, 5 and 6
+ * triangle.  12g had already certified D's and A's bytes as identical, so the packet cannot explain it
+ * and the latch can: `third_party/ps2sdk/common/include/gif_tags.h` names bit 46 exactly this way --
+ * `GIF_PRE_DISABLE 0x00` = "Enable PRIM field output", `GIF_PRE_ENABLE 0x01` = "Disable PRIM field
+ * output", with `GIF_SET_TAG` putting PRE at bit 46 and PRIM at 47..57.  So a PRE=1 tag does NOT write
+ * the GS's PRIM register; it draws under whatever the last PRE=0 tag or PRIM write left there.  Every
+ * group in this census leaves the recorder PRE=1, and the one PRE=0 thing before box D is the census's
+ * own magenta SPRITE poster -- which is also why rung 12c's AD(PRIM,...) shape (C) was the one that
+ * shaded: it asks for its own primitive.
+ *
+ * The rung is therefore one bit on one box.  Box D, the frame's first triangle transfer, goes out with
+ * PRE cleared, so its own PRIM=0x0b is honoured and its 8 words stay byte-for-byte what 12g certified.
+ * Box B is deliberately NOT touched: it is PRE=1 and now follows a tag that wrote TRI+IIP into the
+ * register, so it is the propagation cell -- if the latch is the whole story B changes too, and if only
+ * D changes then B's flatness is its own answer.  A keeps PRE=1 and keeps 12g's byte identity intact.
+ *
+ * Grading needs a SHAPE law and not the colour law, because a fixed box B is a FLAT TRIANGLE -- one
+ * colour, and still not a field -- so `INTERPOLATES` cannot see that it got better.  The top row of a
+ * box settles it: an apex-up triangle covers one or two pixels of the row its apex sits on, and a rect
+ * covers the whole width, and that stays true whatever the shading flag does.  So each box's painted px
+ * in the band's first row and its last row are tallied and printed, and the verdict reads the rect
+ * count. */
+static uint32_t s_pre0_box = GSLIVE_SH_N;   /* the box whose tag has PRE cleared; SH_N = no patch */
+/* Rung 12m's second dial, and it exists because 12l's negative is CONDITIONAL.  Clearing PRE only
+ * changes what a group draws if the PRIM register it would otherwise inherit DIFFERS from the TRI+IIP
+ * the tag carries -- and this census never measured that register, so "PRE is not the variable" is only
+ * proven against a latch that may already have held the right value.  12m removes the condition instead
+ * of measuring the register: box D's tag now also has its PRIM FIELD (bits 47-57) zeroed, which is
+ * POINT, flat, untextured, context 1, no FIX.  A tag that asks for points and still lays a solid 88x16
+ * block says the field is not what rasterises this group; a tag that asks for points and lays points
+ * says it is, and 12l's block was therefore laid by TRI+IIP, which moves the diagnosis to the vertices
+ * and the clipping rather than to the primitive type.  One box, and the same 8 words otherwise. */
+static uint32_t s_prim_pt_box = GSLIVE_SH_N; /* the box whose tag PRIM field is zeroed; SH_N = no patch */
+/* Rung 12n's variable is the GEOMETRY, and it exists because of what 12l and 12m MEASURED together.  Both
+ * fields that a GIF tag uses to say what to draw have now been changed on purpose on box D -- PRE (12l)
+ * and the whole PRIM field (12m) -- and both times the captured tag proved the patch left the EE, and both
+ * times box D laid the same 88x16 block, `top=88/88 painted=1408 RECT nofield`, byte-for-byte unchanged.
+ * A measurement that refuses to move when two of its inputs are edited is not a measurement of those
+ * inputs, so what has to be doubted is the thing every rung since 12i has assumed without testing: that the
+ * block in D's window is D's GROUP's ink.  It may belong to another writer -- the poster, the environment
+ * stream, the desktop's own upload -- and if so all of 12i's ORDER/PLACE/SESSION grid and both of 12l/12m's
+ * negatives were read off someone else's pixels.
+ * The one dial that settles it is the geometry: ask D's triangle 24 px wide at the LEFT of the 88-px window
+ * the census reads, change nothing else, and count painted px in that window at an x that was never asked
+ * for.  Ink that follows the ask is this group's; a block that holds while the ask moves is not.  So the
+ * session records what each box was ASKED beside the window it is READ at, and the two being different is
+ * this rung's experiment rather than a coordinate typo.  `0` means never asked -- the hand controls C, E
+ * and F are drawn by the shape matrix and have no ask of their own, and the prints fall back to the window
+ * for them so a missing ask cannot read as a mismatch. */
+static int32_t s_sh_ask_x0[GSLIVE_SH_N], s_sh_ask_x1[GSLIVE_SH_N];
+/* Rung 12o adds the other axis to that record, because 12n's answer -- the block held while the ask moved
+ * in x -- has exactly two explanations and they are told apart by y.  Either this group's ink does not
+ * follow its own vertices at all, or it follows them in one axis and not the other, which is what a
+ * per-axis override (a CLAMP, a double-added XYOFFSET, a writer that keeps the y it is given and re-derives
+ * x) looks like from a read-back.  So the session records the RECT it was asked for, and 12o asks D a rect
+ * entirely below the band: if the block in the band goes away, the y dial bit; if ink also appears in the
+ * asked rect, this group did draw.  The two are separate readings, and only the pair of them can say
+ * whether the band's block is this group's ink at a wrong x or somebody else's ink entirely. */
+static int32_t s_sh_ask_y0[GSLIVE_SH_N], s_sh_ask_y1[GSLIVE_SH_N];
+/* Rung 12p's dial is the GIF seam itself, and it exists because 12o gave two answers at once and named
+ * nothing.  Moving box D's ask 16 rows down made 384 red px fill the asked 24x16 bbox AND changed the
+ * control box B from 12n's `top=128/128 px=1920 RECT` to `top=63/128 px=1073 PARTIAL` -- in all eight
+ * censuses of both pinned runs, deterministically.  Neither reading can be attributed from that run: the
+ * ink at the moved ask might be this transfer's rasterisation or a foreign writer that happens to paint
+ * those rows, and B might be coupled to D's bytes or might be answering the instrument.
+ * So this dial edits the one thing 12n and 12o left alone: whether the bytes go out at all.  D's session
+ * runs, its group is captured and decoded exactly as 12o certified it, and then the sink returns WITHOUT
+ * calling `ps2_gs_gif_send()`.  Every other box is asked, encoded and sent as in 12o, and the transfers the
+ * GIF receives are the same ones in the same order.  Two questions with independent answers follow: ink at
+ * the moved ask that survives the bytes being withheld is NOT this group's, and a B that returns to 12n's
+ * number the moment D's bytes stop arriving is coupled to D's delivery -- which is the mechanism 12l's
+ * PRE=1 latch pointed at, and the reason every per-box count here is really a whole-frame count.
+ * `GSLIVE_SH_N` (the default, mask 0) hands everything to the GIF, so the ship route is untouched by this
+ * file.
+ * Rung 12p's answer turned the dial's meaning inside out, so 12q widens it into a mask.  Holding ONLY box
+ * D's bytes left D's band block (1408 px) and D's moved ask (384 px) both standing at their 12o numbers,
+ * while the one box whose group DID still go out -- B -- emptied completely (`painted=0`, its foreign blue
+ * 945 included).  That says the per-box counts are not per-box: withholding one transfer's bytes rewrote a
+ * neighbour's picture.  Two explanations survive and they need the opposite experiment.  Either the ink the
+ * census counts is almost entirely the app's own XMB stream and no census triangle has ever rasterised --
+ * in which case holding every recorder session changes nothing except the timing -- or the band is the
+ * census's own ink and each box's count answers the whole frame.  So the dial is a MASK now: 12q holds all
+ * three recorder sessions (A, B and D), sends nothing from this file's geometry, and keeps the hand-built
+ * shape boxes C/E/F plus the moved ask as witnesses.  If a recorder box's counted ink stands while its own
+ * bytes never reached the GIF, that ink was never the census's to lay. */
+static uint32_t s_hold_gif_mask;               /* bit per box whose bytes the sink keeps to itself */
+static uint32_t s_sh_held;                     /* groups captured and withheld, by box or in total */
+/* Rung 12t's dial, the opposite of 12p/12q's: instead of withholding one box's bytes from a census that
+ * still sends six things, it lets ONE session reach the GS and withholds everything else -- the magenta
+ * control, the other two recorder sessions, and the hand chain C/E/F.  The question it answers is the one
+ * 12s left open on a band certified clean: the recorder's group at box D lays 660 FLAT red px as a 44-wide
+ * by 15-tall block, while the packet 12i captured as differing from it in exactly three position words and
+ * no colour word lays 891 px of a correct apex-up gradient triangle at box A -- and 12j's spill says D's
+ * block is really one continuous flat red rect over x384..579, wider than D's own 536..623 ask, reaching
+ * through box C's whole window and both 16-px gutters beside it.  Two claims fit that, with opposite cures:
+ * the packet alone rasterises flat and mis-shaped, in which case the recorder's own encoding or the GS state
+ * it lands in is the bug; or a NEIGHBOUR's transfer drew the block and D only owns the part its window
+ * happens to cover, in which case the packet is fine and the frame that carries it is not.  A census that
+ * sends seven things cannot tell them apart, because every count in it is a sum of seven.  GSLIVE_SH_N means
+ * the dial is off and the census runs 12i's whole grid. */
+static uint32_t s_census_only = GSLIVE_SH_N;   /* < GSLIVE_SH_N: only that box's session is sent */
+static uint32_t s_t_lone_n;                    /* the LONE census's band ink, kept for the grid to compare */
+static uint32_t s_t_lone_field;
+static uint32_t s_t_lone_bbox[4] = { GSLIVE_BB_NONE, GSLIVE_BB_NONE,
+                                     GSLIVE_BB_NONE, GSLIVE_BB_NONE };
+static uint32_t s_t_lone_done;                 /* 1 = a LONE census has been measured in this process */
+/* Rung 12u's accumulators: the same lone packet replayed four times, each on a band the upload put back to
+ * its canvas, each read before anything prints.  See `ps2_gslive_u_probe()` for what the four modes are and
+ * what answer each one buys. */
+static uint32_t s_u_ok;                          /* 1 = all four variants went out and came back readable */
+static uint32_t s_u_read_ok[4];                  /* per variant: this variant's band read filled its words */
+static uint32_t s_u_send[4];                     /* quadwords this variant handed the GIF, dial included */
+static uint32_t s_u_n[4];                        /* band px that differ from the canvas */
+static uint32_t s_u_corner[4];                   /* ... of those, the three corner words */
+static uint32_t s_u_field[4];                    /* ... and the words that are none of them: interpolated px */
+static uint32_t s_u_top[4];                      /* painted px in band row 0 INSIDE D's window: the shape key */
+static uint32_t s_u_bbox[4][4];                  /* the whole band's ink extent per variant */
+/* Rung 12q answered, and its answer re-opens the assumption every rung since 12a has been built on.  With
+ * A, B and D all withheld (`to the bus=0`), A and B emptied exactly as their own deliveries predict (891 ->
+ * 0 and 1073 -> 0), so those two boxes really are the census's ink -- while D's band block (1408 px) and
+ * D's moved rect (384 red) stood at their 12o numbers with NO census byte ever reaching the GS for them.
+ * One box is therefore the instrument's and one is somebody else's, and the only way to tell which is
+ * which is to look at the page BEFORE this census puts anything on it.  That is what 12a's own note claims
+ * -- "rows 560..575 hold nothing but its own control" -- but the census never tested it: `ctrl=1024` says
+ * the magenta box came back whole, which says nothing about the other five windows or about the rows below
+ * the band.  These hold the pre-draw tally, read once per census before the control is sent.
+ *
+ * One accumulator type, filled by the read loop's OWN class order -- the three corner words tested before
+ * the canvas compare, the canvas compare before the field -- so a number from here and the number in the
+ * `shade` row beside it are the same measurement taken at two times and nothing else differs.  `painted` is
+ * derived as `tot - same`, exactly as every rung since 12a derives it.  `top` is 12l's shape law on row 0,
+ * so a pre-existing block can be called a rect or an apex without waiting for 12k's picture.  `sent` counts
+ * words the read never filled: a window with a non-zero `sent` has no answer, which must not be printable
+ * as a blank one.  `s_pre_pass` numbers the censuses of THIS process, because the census re-runs on every
+ * app open and only the first of them looks at a page this file has never drawn on -- at pass 2 a held block
+ * could be this file's own earlier triangle, and the two readings would mean opposite things.
+ *
+ * Rung 12s adds the last four fields, because 12r's first look was real and its conclusion was still wrong.
+ * `painted` cannot see whether the canvas holds the SAME corner word at the SAME position: a corner word is
+ * counted before the canvas compare, so desktop chrome drawn in the palette's red or blue is indistinguishable
+ * from this census's ink in that column.  `cv_r/cv_g/cv_b` therefore count the CANVAS words in the same window
+ * and `match` counts the positions whose two words are equal -- the pixel-by-pixel agreement that says
+ * "the page is the canvas here".  A window with corner words in the page and none in the canvas is a real
+ * foreign GS writer; one where both hold them and `match == tot` is chrome, and chrome is what 12a..12r were
+ * measuring.  `match` is a separate count on purpose, not `same`: `same` is what `painted` subtracts and the
+ * two must stay comparable with the post-draw column. */
+typedef struct {
+    uint32_t tot, same, other, top, sent;
+    uint32_t r, g, b;
+    uint32_t cv_r, cv_g, cv_b, match;
+} gslive_pre_t;
+
+static uint32_t s_pre_pass;                      /* 1 = the first census this process has ever run */
+static int s_pre_ok;                             /* the pre-draw read of the band came back GS_READ_BUS_OK */
+static int s_pre_old_ok;                         /* the same, for the read of the strip 12a..12r used */
+static gslive_pre_t s_pre[GSLIVE_SH_N];          /* the six box windows, before any census send */
+static gslive_pre_t s_pre_old[GSLIVE_SH_N];      /* the same six x ranges at rows 560..575, 12s's control */
+/* 12r's own control, and the row that decides whether the rung may be believed at all.  The measured
+ * pre-draw read (build/repro/20261018T064640Z, census #1 of the process, `read=OK, words never filled: 0`)
+ * came back with D's window ALREADY holding red 1024 + blue 384 as a whole-width RECT, D's moved ask already
+ * holding 384 red, and C/E already 320/1088 -- while A, B and F came back clean.  That is either the finding
+ * 12q forced (the two D windows are another writer's) or a read that is not looking at the page it claims
+ * to.  Nothing in the rung so far separates those, so this control asks the read about a window whose ONLY
+ * writer is this census and whose draw is known to come after the read: the magenta box.  It answered on the
+ * first try (`magenta=0 painted=0` at build/repro/20261018T065254Z): the read IS a first look, and the block
+ * is not this census's.  12s then named its author offline from that same run -- the ink stops at x599 and
+ * x699, the Colour Test Bar's swatch edges, not at 623 and 719, the census's own box edges.  The control
+ * stays, because it is the only thing that tells a first look from a late one. */
+static uint32_t s_pre_ctrl_mag, s_pre_ctrl_paint;
+
+static void ps2_gslive_sh_sink(void *user, const uint64_t *qw, uint32_t qwc)
+{
+    /* The recorder's own buffer is a `uint64_t` array, which the ABI guarantees eight bytes of, and
+     * channel 2 reads sixteen.  Every real sender therefore stages a copy first -- `eegs_present.c`
+     * does it into an aligned static -- so this sink does the same rather than DMA-ing words that were
+     * never aligned to send. */
+    static uint64_t s_pkt[2u * GSLIVE_SH_QWC_MAX] __attribute__((aligned(16)));
+    uint32_t i;
+
+    (void)user;
+    if (qwc == 0u || qwc > GSLIVE_SH_QWC_MAX) {
+        s_sh_refused++;
+        return;
+    }
+    for (i = 0u; i < 2u * qwc; i++) s_pkt[i] = qw[i];
+    /* Rung 12l's one bit, applied BEFORE the capture so every dump in this census describes the bytes
+     * the machine was actually handed rather than the bytes the recorder meant to send. */
+    if (s_sh_box < GSLIVE_SH_N && s_sh_box == s_pre0_box)
+        s_pkt[0] &= ~((uint64_t)1u << 46);
+    /* Rung 12m's field, on the same box and for the same reason: with PRE already 0 the tag's own PRIM
+     * is the thing that ought to rule, so zeroing its 11 bits (op 0 = POINT, IIP 0, TME 0, USEST 0,
+     * CONTEXT 0, FIX 0) is an ask the machine cannot be accused of never receiving.  Everything else in
+     * the packet -- NLOOP, EOP, FLG, NREG, the REGS list, all six vertex words -- is left exactly as the
+     * recorder built it, and 12g's byte identity of box A's two senders is untouched because A is not
+     * patched. */
+    if (s_sh_box < GSLIVE_SH_N && s_sh_box == s_prim_pt_box)
+        s_pkt[0] &= ~(0x7FFull << 47);
+    if (s_cap_sends < GSLIVE_CAP_SENDS) {
+        /* Keep EVERY group, in the order it left, rather than the first one.  Rung 12i's question is
+         * which group belongs to which session and what went out beside it, and a capture that kept
+         * only send 0 could not answer either.  Copy before the send, because the recorder reuses its
+         * buffer for the next group the moment this one is handed over. */
+        for (i = 0u; i < 2u * qwc && i < GSLIVE_CAP_WORDS; i++)
+            s_cap_send[s_cap_sends][i] = s_pkt[i];
+        s_cap_send_words[s_cap_sends] = 2u * qwc;
+        if (s_sh_box < GSLIVE_SH_N) s_sh_sess_owner[s_cap_sends] = (uint8_t)(s_sh_box + 1u);
+        /* Rung 12v: a session now has two groups, and every reader of `s_sh_sess_first[]` wants the
+         * chain -- 12g and 12l/12m read its tag, 12o decodes its vertex words, 12u replays it -- so the
+         * index names the session's first REGLIST group.  A PACKED group is the AD write of PRIM and
+         * never the thing being read; `s_cap_rec_at` is set from the same event, which is what keeps
+         * 12g's identity a comparison of two chains rather than of a chain against a preamble. */
+        if (s_sh_box < GSLIVE_SH_N && gslive_flg_of(s_pkt) == GS_FLG_REGLIST &&
+            s_sh_sess_first[s_sh_box] >= GSLIVE_CAP_SENDS) {
+            s_sh_sess_first[s_sh_box] = s_cap_sends;
+            if (s_sh_box == 0u) s_cap_rec_at = s_cap_sends;
+        }
+    }
+    if (s_sh_box < GSLIVE_SH_N) s_sh_sess_groups[s_sh_box]++;
+    s_cap_sends++;
+    /* Rung 12p, widened to a mask by 12q: the bytes stop here for every armed box.  Everything above -- the
+     * staged copy, the tag dials, the capture and the per-session bookkeeping -- ran as it always did, so
+     * the census still holds the packets it can decode and still knows which group each was; what the GS
+     * never gets is the transfer itself.  `s_sh_groups` counts the groups that reached the bus, and
+     * `s_sh_held` the ones this dial kept, so a row can say "one went out, two did not" instead of hiding
+     * the difference. */
+    if (s_sh_box < GSLIVE_SH_N && (s_hold_gif_mask & (1u << s_sh_box)) != 0u) {
+        s_sh_held++;
+        return;
+    }
+    ps2_gs_gif_send(s_pkt, qwc);
+    s_sh_groups++;
+}
+
+/* One triangle, three known colours, at the page position the census will read back.  The vertex
+ * order is the XMB's own -- v0 first, the kick on v2 -- because "which vertex wins when the flag is
+ * off" is only answerable if the order matches the stream being diagnosed. */
+static void ps2_gslive_sh_tri(int32_t x0, int32_t y1, int32_t x1, int32_t apex_x,
+                              int32_t y0, uint32_t smooth)
+{
+    eegs_vertex_t v[3];
+    eegs_tri_state_t st;
+
+    v[0].x_px = x0;      v[0].y_px = y1;   v[0].rgba = GSQUAD_RED;
+    v[1].x_px = x1 - 1;  v[1].y_px = y1;   v[1].rgba = GSQUAD_GREEN;
+    v[2].x_px = apex_x;  v[2].y_px = y0;   v[2].rgba = GSQUAD_BLUE;
+    v[0].z = v[1].z = v[2].z = 0u;
+    v[0].s = v[1].s = v[2].s = 0.0f;
+    v[0].t = v[1].t = v[2].t = 0.0f;
+
+    st.smooth = smooth ? 1u : 0u;
+    st.textured = 0u;
+    st.blended = 0u;
+    st.depth_test = 0u;
+    eegs_triangle(v, st);
+}
+
+/* Rung 12i: the recorder draws ONE triangle per session, and the census puts those sessions at
+ * opposite ends of the frame.
+ *
+ * 12h's grid printed SENDER, but the same run says something else just as cleanly: the recorder's three
+ * groups were triangle transfers 1, 2 and 3 and the hand chain's four were 4, 5, 6 and 7, so "the first
+ * three triangles of this frame are flat and the next four lay a field" fits every one of the eight
+ * counts as well as "the recorder is flat and the hand chain shades".  Nothing in that run separates
+ * them, and the two answers have opposite cures -- a sender answer means the recorder's own send is the
+ * bug, an order answer means the packet is fine and the frame that carries it is not.
+ *
+ * This rung separates them by moving each sender across the split while holding one box fixed.  Box A's
+ * triangle is now asked LAST, after three hand triangles, which is the position and the box where rung
+ * 12h measured the hand chain interpolate (other=890) and the box where the recorder's ask at the front
+ * of the frame is measured FLAT four times over -- so A-early against A-late is one encoding, one box,
+ * one variable: where in the frame it went out.  Box D's group moves to the FRONT, as the frame's first
+ * triangle transfer, where 12h's cell G had it third.  And box A gets one writer again: the hand chain
+ * that overdrew it in 12h is built below and never sent, so `painted=` on A's row is the recorder's
+ * triangle alone rather than whichever of two senders covered more of the rect.
+ *
+ * One triangle per session, not three per session: `gs_rec_prim()` closes the open group whenever the
+ * PRIM word changes, so A (IIP=1), B (IIP=0) and D (IIP=1) were three groups of one session and every
+ * group after the first left on a cut rather than on `gs_rec_end()`.  A session per box makes each group
+ * the first and only thing its session ever handed the GIF, and makes every one of them leave the same
+ * way. */
+static void ps2_gslive_shading_session(uint32_t box, int32_t x0, int32_t x1,
+                                       int32_t y0, int32_t y1, uint32_t smooth)
+{
+    /* Rung 12t: in a LONE census every other box is withheld BEFORE its ask is even recorded, so a skipped
+     * box stays `never asked` in 12n's bookkeeping and its `out=` column keeps its zero meaning. */
+    if (s_census_only < GSLIVE_SH_N && box != s_census_only) return;
+
+    s_sh_box = box;
+    /* Rung 12n: record the span this box was ASKED for, as distinct from the span the census READS, so a
+     * narrowed ask is legible to the read loop instead of being inferred from the picture.  One triangle
+     * per session (12i's rule), so one record per box per census; `ps2_gslive_shading_reset()` puts every
+     * box back to 0 = never asked, which is what makes the hand controls fall back to their window.
+     * Rung 12o extends the record to the other axis, because 12n's answer needs the y dial read too. */
+    if (box < GSLIVE_SH_N) {
+        s_sh_ask_x0[box] = x0;
+        s_sh_ask_x1[box] = x1;
+        s_sh_ask_y0[box] = y0;
+        s_sh_ask_y1[box] = y1;
+    }
+    /* Rung 12g's identity is box A's chain against the hand chain built at A's coordinates, and A's
+     * session is now the frame's LAST, so its slot in the capture array is wherever the count stands
+     * when it opens -- not send 0.  Since rung 12v that slot is named in the sink, at the moment A's
+     * REGLIST group is copied, because a session's first send is now its PRIM write and the two are
+     * different packets with different words. */
+    eegs_frame_begin(ps2_gslive_sh_sink, 0);
+    ps2_gslive_sh_tri(x0, y1 - 1, x1, (x0 + x1) / 2, y0, smooth);
+    eegs_frame_end();
+}
+
+static void ps2_gslive_shading_reset(void)
+{
+    uint32_t b;
+
+    s_sh_groups = 0u;
+    s_sh_refused = 0u;
+    s_sh_held = 0u;
+    s_sh_box = GSLIVE_SH_N;
+    s_pre0_box = GSLIVE_SH_N;
+    s_prim_pt_box = GSLIVE_SH_N;
+    s_hold_gif_mask = 0u;         /* disarmed: the sink hands every group to the GIF */
+    for (b = 0u; b < GSLIVE_SH_N; b++) {
+        /* 0 = no session has asked anything at this box yet (rung 12n's bookkeeping). */
+        s_sh_ask_x0[b] = 0;
+        s_sh_ask_x1[b] = 0;
+        s_sh_ask_y0[b] = 0;
+        s_sh_ask_y1[b] = 0;
+    }
+    s_cap_sends = 0u;
+    /* Rung 12v: the sink names A's chain slot when A's session opens, so the reset value has to be a slot
+     * that is valid to read but empty to describe -- the last one.  A LONE census never opens A, and there
+     * 12g reads words=0 and prints its own `SKIP -- a packet was not captured`, rather than reading box
+     * D's preamble and calling it box A's triangle. */
+    s_cap_rec_at = GSLIVE_CAP_SENDS - 1u;
+    s_cap_hand_words = 0u;
+    for (b = 0u; b < GSLIVE_CAP_SENDS; b++) {
+        s_cap_send_words[b] = 0u;
+        s_sh_sess_owner[b] = 0u;
+    }
+    for (b = 0u; b < GSLIVE_SH_N; b++) {
+        s_sh_sess_first[b] = GSLIVE_CAP_SENDS;   /* no vertex chain of this box's session captured yet */
+        s_sh_sess_groups[b] = 0u;
+    }
+}
+
+/* ── LANE 19 rung 12c/12d: the shape that shades, and which bit of it does it ────────────────
+ *
+ * rung 12a's answer was that the recorder's group is not the suspect: through it, an IIP=1 ask paints
+ * its FIRST vertex's colour over the whole triangle and an IIP=0 ask paints its LAST one's, which
+ * says the tag's PRIM is read, the per-vertex RGBAQ words arrive, the geometry rasterises -- and the
+ * interpolation never happens.  What that left undecided is whether the encoding is a variable at
+ * all, and rung 12c settled it by sending the same three coloured vertices in the shapes other
+ * people's GS code uses and reading back which one laid a field of intermediate words.  MEASURED,
+ * 2026-10-18, `ctrl=1024/1024`, 3 shapes sent, 0 refused:
+ *
+ *   C  ps2sdk's own Gouraud cube: `draw_prim_start()`/`draw_prim_end()` in draw3d.c build an AD pair
+ *      carrying PRIM then RGBAQ (NLOOP=2, PACKED, PRE=0, EOP=0) and then a `FLG=REGLIST`, `PRE=0`,
+ *      NREG=2 chain whose REGS list is {RGBAQ, XYZ2} -- teapot.c:193-202 and cube.c:185-194 fill that
+ *      chain with `prim.shading = PRIM_SHADE_GOURAUD`.  No NOP, no ST, no PRIM in the tag, and the
+ *      colour written immediately before the kick it belongs to.  THIS IS THE ONE THAT SHADED: 840 of
+ *      its 1,121 painted px are words that are none of its three corners, so an encoding that
+ *      interpolates on this GS exists and a recorder change can be the fix.
+ *   D  the recorder's THEN dense four-register chain -- rung 12f retired it -- with PRIM INSIDE the loop
+ *      instead of in the tag:
+ *      REGLIST, PRE=0, NREG=4, REGS={PRIM, RGBAQ, ST, XYZ2}.  Flat -- red=1024 AND blue=896 in one
+ *      box, which is what a per-loop PRIM looks like: each of the first two vertices kicks a triangle
+ *      of its own and the third XYZ2 closes a degenerate one.  Answered: PRE=0 does not rescue a
+ *      four-register list, so PRE is off the list of variables.
+ *   E  shape C's chain with FLG=PACKED and the PRIM in the tag: PRE=1, NLOOP=3, NREG=2.  Flat at
+ *      blue=448 -- it paints, which retires rung 5's "multi-register PACKED draws nothing" as a
+ *      finding about this port's NREG=4 group rather than about PACKED -- but it does not shade, so
+ *      PACKED is off the list too.
+ *
+ * C vs A is therefore three differences written as one shape: the chain's REGS contents
+ * ({RGBAQ,XYZ2} against {NOP,RGBAQ,ST,XYZ2}), PRE, and how PRIM is delivered.  D and E remove PRE and
+ * FLG from that list and leave the two things a recorder change has to be able to name, which is what
+ * rung 12d measured -- four boxes, C, D and E kept as the rows that prove a gradient is still
+ * readable.  MEASURED, 2026-10-18 second run, `ctrl=1024/1024`, 2 + 4 groups sent, 0 refused, and the
+ * same words on all three censuses of that run:
+ *
+ *   D-slot  C's chain with NO AD group: `FLG=REGLIST`, `PRE=1`, PRIM in the tag, the same NREG=2
+ *           {RGBAQ, XYZ2} list.  SHADED: other=609 of painted=1,408.  So the AD write is NOT required
+ *           and the recorder can keep the tag it already emits -- the fix is the REGS list alone.
+ *   E-slot  C's AD group and a NREG=3 {RGBAQ, ST, XYZ2} chain -- `DRAW_STQ_REGLIST`, draw3d.h:33-37,
+ *           ps2sdk's own textured Gouraud list -- plus the trailing pad texture.c:259-263 writes for
+ *           it.  SHADED: other=609 of painted=1,145.  An ST slot between the colour and the kick does
+ *           not cost the interpolation, so one chain can carry both the XMB's textured icons and its
+ *           gradient plate.
+ *   F-slot  E-slot with FOG in the middle slot instead of ST, the parity control E needed: a
+ *           three-register loop is one and a half quadwords, so E changed both the register in the
+ *           loop's second slot AND the loop's parity, and a flat box there would have said only "one
+ *           of those two".  F shaded (other=441), and since E shaded too, the control was never going
+ *           to be needed -- which is what lets F's slot be reused for the question the recorder asks
+ *           NEXT, below.
+ *
+ * One thing this table measured and cannot yet explain, recorded because it changes how the rows are
+ * to be read: C, D and E paint MORE than the triangle they ask for.  D's box holds 1,408 px and all of
+ * them differ from the canvas, and E 1,145 of 1,408, where each box's own triangle is 704; C overruns
+ * by 161.  A and B, drawn through the recorder, cover 960 and 945 of 2,048 -- the triangle, to the
+ * pixel.  So the hand-built packets land geometry none of them asked for, and this census has no
+ * instrument that says which pixels of a box are its triangle.  It does not touch the shading answer --
+ * `other` counts 600-odd words that are neither corner in four boxes and EXACTLY ZERO in the two that
+ * use the recorder's list, and no residue mechanism explains a difference that clean -- but it does
+ * mean the gate on the recorder change is box A, whose geometry is measured clean, and not the box
+ * coverage of C, D or E.
+ *
+ *   F-slot, rung 12e  E's three-register chain with the RECORDER'S OWN tag: `PRE=1`, PRIM in the tag,
+ *           no AD group, NREG=3 {RGBAQ, ST, XYZ2} and the same pad.  D proved PRE=1 carries a
+ *           two-register chain and E proved a three-register chain carries ST, but each of them holds
+ *           the other one's variable: D is 2 regs + PRE=1, E is 3 regs + PRE=0-with-AD.  A recorder
+ *           that shrinks its TEXTURED list to three registers has to do both at once, and that
+ *           combination is the one box on this table that has never been drawn.  If F shades, the
+ *           textured group sheds its NOP too and a vertex is one and a half quadwords; if it is flat,
+ *           the textured path keeps a two-or-four-register list and the untextured one alone changes.
+ *
+ * rung 12e ANSWERED, 2026-10-18: F shaded (`other=441`), so both lists shed their NOP and the recorder
+ * changed -- rung 12f, `src/drivers/ps2/ps2_gs_rec.c` + `.h`, certified host-side by `test-ps2-gs-rec`
+ * 233 checks, `test-eegs-raster` 253 and `test-eegs-present` 136, all with a falsifying control run for
+ * each new claim.  An untextured group is now `PRE=1`, PRIM in the tag, NREG=2, REGS={RGBAQ, XYZ2}; a
+ * textured one is the same tag with NREG=3, {RGBAQ, ST, XYZ2} and the odd-chain pad.
+ *
+ * Which is what made THIS table's first row a question, and rung 12h is the run that answered it.  Box A
+ * goes through the production recorder, and after 12f its packet is the hand chain's packet word for
+ * word: same tag (`NLOOP=3`, `EOP=1`, `PRE=1`, PRIM 0x0B, `FLG=REGLIST`, `NREG=2`), same REGS literal
+ * 0x51, same three RGBAQ/XYZ2 halves in the same order, same three corners -- and rung 12g printed that
+ * identity as MEASURED, at one box, `differ=0x00`, all eight words (2026-10-17T23:56:05Z, `ctrl=1024`,
+ * 4 censuses, both runs identical).  Rung 12h then crossed the sender with the place and the grid came
+ * out clean: recorder@A FLAT (painted=960), hand@A INTERPOLATES (other=890), hand@D INTERPOLATES
+ * (other=609), recorder@D FLAT (painted=1408, other=0).  It printed SENDER, and the encoding is closed.
+ *
+ * What 12h did NOT close is the thing its own frame order confounds with the sender.  Read the eight
+ * transfers in the order they went out: the recorder's A, B and D were triangle transfers 1, 2 and 3 --
+ * each group leaving on the next one's PRIM change, or on `gs_rec_end()` -- and the hand chain's C, A, E,
+ * F were 4, 5, 6 and 7.  Every flat box is in the first three and every gradient in the last four, so
+ * "the front of this frame cannot shade" explains the table exactly as well as "the recorder cannot
+ * shade", and the two answers have opposite cures: a sender answer indicts the recorder's own send, an
+ * order answer leaves the packet and the code alone and indicts the frame that carries it.
+ *
+ * Rung 12i separates them by moving one sender across the split while holding one box still.  Box A is
+ * now asked at BOTH ends -- its group LAST, after three hand triangles, and box D's FIRST, before any --
+ * and each goes out alone in a session of its own, so nothing follows it, nothing precedes it inside its
+ * session, and every group leaves on a `gs_rec_end()` rather than on a cut.  A's early answer is 12h's
+ * measured constant (FLAT, four censuses, painted=960) and A's late answer is this run's; the two share a
+ * box, a packet and an ask, and differ in one thing only, which is where in the frame they went out.
+ *
+ * Every box asks IIP=1, TME=0, ABE=0, CTXT=0, FIX=0 -- except B, which asks IIP=0, and is still expected
+ * to come back one flat corner colour (measured blue, v2, the kick vertex) because a read that cannot
+ * tell a gradient from a corner cannot grade any of the cells either.  Like rung 12a, these draw inside
+ * the magenta box's certified band and print nothing until the page has been read. */
+static uint32_t s_shape_sent;
+static uint32_t s_shape_refused;
+
+static void ps2_gslive_corners(const int32_t v[6], uint64_t rgba[3], uint64_t xyz[3])
+{
+    static const uint32_t c[3] = { GSQUAD_RED, GSQUAD_GREEN, GSQUAD_BLUE };
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        /* The same four bytes `emit_vertex()` hands `gs_rec_color()`: the corner colours are written
+         * as the page holds them, so a pixel that comes back equal to GSQUAD_RED is red by the read's
+         * own unit and not by a swap this function would have had to make twice. */
+        rgba[i] = gs_pack_rgbaq(c[i] & 0xFFu, (c[i] >> 8) & 0xFFu,
+                                (c[i] >> 16) & 0xFFu, (c[i] >> 24) & 0xFFu, GS_Q_ONE);
+        xyz[i] = gs_pack_xyz2(gs_vertex_coord16(v[2 * i]),
+                              gs_vertex_coord16(v[2 * i + 1]), 0u);
+    }
+}
+
+static uint32_t ps2_gslive_shape_packet(int shape, const int32_t v[6], uint64_t *qw)
+{
+    const uint64_t prim = gs_pack_prim(GS_OP_TRI, 1u, 0u, 0u, 0u, 0u);
+    const uint64_t st = gs_pack_st(0.0f, 0.0f);
+    const uint32_t chain2[2] = { GS_NIB_RGBAQ, GS_NIB_XYZ2 };
+    const uint32_t chain3[3] = { GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2 };
+    const uint32_t pre = (uint32_t)((shape == 1 || shape == 3) ? 1u : 0u);
+    uint64_t rgba[3], xyz[3];
+    uint32_t n = 0u;
+    int i;
+
+    ps2_gslive_corners(v, rgba, xyz);
+
+    /* C's AD group, which shape 2 repeats and shapes 1 and 3 withhold: draw3d.c:11-31 writes PRIM and
+     * the first RGBAQ as AD pairs under one PACKED tag whose EOP is CLEAR, because the chain that
+     * follows is the part that ends the transfer. */
+    if (shape == 0 || shape == 2) {
+        const uint32_t ad[1] = { GS_NIB_AD };
+
+        qw[n++] = gs_pack_giftag(2u, 0u, 0u, 0u, GS_FLG_PACKED, 1u);
+        qw[n++] = gs_pack_regs(ad, 1u);
+        qw[n++] = prim;                qw[n++] = GS_GP_PRIM;
+        qw[n++] = rgba[0];             qw[n++] = GS_GP_RGBAQ;
+    }
+
+    /* One difference between 0 and 1, and between 2 and 3: where PRIM comes from.  With `pre` set the
+     * tag's own 11-bit PRIM field programs the register at packet start, which is how this port's
+     * recorder delivers it, so those two chains ride the recorder's tag. */
+    if (shape == 0 || shape == 1) {
+        qw[n++] = gs_pack_giftag(3u, 1u, pre, pre ? prim : 0u, GS_FLG_REGLIST, 2u);
+        qw[n++] = gs_pack_regs(chain2, 2u);
+        for (i = 0; i < 3; i++) { qw[n++] = rgba[i]; qw[n++] = xyz[i]; }
+    } else {
+        /* Three registers to a loop, which is one and a half quadwords, so the nine data words stop
+         * half way through a quadword and the GIF's transfer unit does not.  texture.c:259-263 appends
+         * `if ((u32)dw % 16) *dw++ = 0;` for exactly that -- the pad lands in a fourth slot that no
+         * nibble of a three-nibble REGS list names, so nothing reads it -- and draw2d.c:409 uses the
+         * same idiom for the same reason. */
+        qw[n++] = gs_pack_giftag(3u, 1u, pre, pre ? prim : 0u, GS_FLG_REGLIST, 3u);
+        qw[n++] = gs_pack_regs(chain3, 3u);
+        for (i = 0; i < 3; i++) { qw[n++] = rgba[i]; qw[n++] = st; qw[n++] = xyz[i]; }
+        qw[n++] = 0u;
+    }
+    return n / 2u;
+}
+
+static void ps2_gslive_shape_tri(int shape, int x0, int x1)
+{
+    static uint64_t s_qw[2u * GSLIVE_SH_QWC_MAX] __attribute__((aligned(16)));
+    int32_t v[6];
+
+    if (s_census_only < GSLIVE_SH_N) return;   /* rung 12t: a LONE census sends one group, this is not it */
+
+    v[0] = x0;             v[1] = GSLIVE_SH_Y1 - 1;
+    v[2] = x1 - 1;         v[3] = GSLIVE_SH_Y1 - 1;
+    v[4] = (x0 + x1) / 2;  v[5] = GSLIVE_SH_Y0;
+
+    {
+        const uint32_t q = ps2_gslive_shape_packet(shape, v, s_qw);
+
+        if (q == 0u || q > GSLIVE_SH_QWC_MAX) {
+            s_shape_refused++;
+            return;
+        }
+        ps2_gs_gif_send(s_qw, q);
+        s_shape_sent++;
+    }
+}
+
+static void ps2_gslive_shape_matrix(void)
+{
+    s_shape_sent = 0u;
+    s_shape_refused = 0u;
+
+    /* The three controls, at the coordinates that measured them: shape 0 is box C (ps2sdk's AD pair plus
+     * a PRE=0 two-register chain), shape 2 is box E (the same with an ST slot), shape 3 is box F (the
+     * recorder's own tag with the three-register chain).  These are the frame's triangle transfers 3, 4
+     * and 5 -- in front of them go the recorder's D and B sessions, behind them the recorder's A session,
+     * and box A's hand chain is built by `ps2_gslive_shape_hold()` instead of drawn, because rung 12h's
+     * overdraw of A (other=890) made a two-writer rect of the one box whose early/late pair decides this
+     * rung. */
+    ps2_gslive_shape_tri(0, GSLIVE_SH_C_X0, GSLIVE_SH_C_X1);
+    ps2_gslive_shape_tri(2, GSLIVE_SH_E_X0, GSLIVE_SH_E_X1);
+    ps2_gslive_shape_tri(3, GSLIVE_SH_F_X0, GSLIVE_SH_F_X1);
+}
+
+/* Rung 12i: build box A's triangle the way the hand builder builds it, and DO NOT SEND IT.
+ *
+ * Rung 12g's claim is an identity between two packets -- the recorder's group for box A and this chain --
+ * and the census has to keep printing both of them to hold that claim open on every run.  12h proved the
+ * identity by drawing the hand chain over box A as well, which put two writers in one rect: its read
+ * describes whichever one covered more pixels, and the recorder's answer there is not separable from it.
+ * 12i needs box A as a single-writer rect -- A early against A late is the rung's whole measurement -- so
+ * the hand chain stops being drawn and starts being captured.  Its eight words go to `s_cap_hand` exactly
+ * as 12h sent them, and the row that compares them with the recorder's captured A group is unchanged: a
+ * gradient at A now belongs to one sender and so does a flat colour. */
+static void ps2_gslive_shape_hold(int shape, int x0, int x1)
+{
+    static uint64_t s_qw[2u * GSLIVE_SH_QWC_MAX] __attribute__((aligned(16)));
+    int32_t v[6];
+    uint32_t c, q;
+
+    v[0] = x0;             v[1] = GSLIVE_SH_Y1 - 1;
+    v[2] = x1 - 1;         v[3] = GSLIVE_SH_Y1 - 1;
+    v[4] = (x0 + x1) / 2;  v[5] = GSLIVE_SH_Y0;
+
+    q = ps2_gslive_shape_packet(shape, v, s_qw);
+    if (q == 0u || q > GSLIVE_SH_QWC_MAX) {
+        s_shape_refused++;
+        return;
+    }
+    for (c = 0u; c < 2u * q && c < GSLIVE_CAP_WORDS; c++) s_cap_hand[c] = s_qw[c];
+    s_cap_hand_words = 2u * q;
+}
+
+/* ── LANE 19 rung 12u: what programs a lone triangle's TYPE and its IIP? ──────────────────
+ *
+ * 12t answered 12s's open question, and answered it against this lane's own verdict label.  Box D's recorder
+ * group, sent with NOTHING else in the census on a band the upload had just put back to its canvas, lays
+ * ONE pixel -- at (580,32), which is the packet's own apex vertex v2.  The same eight words in 12i's grid lay
+ * 660 flat red px, and the grid's band as a whole lays 6803 px over x117..788.  So the block is not the
+ * packet's answer: a lone group does not even make a triangle.  That is what `PRE=1` means -- GIF_PRE_ENABLE
+ * disables the tag's PRIM field output -- so the group's vertices are kicked under whatever OP and IIP the
+ * PRIM register already held, and in a lone census nobody wrote it.
+ *
+ * The four variants below make that register write the ONLY variable, with no neighbour anywhere:
+ *
+ *   V0  the captured bytes, undialled: PRE=1, the tag's field reading TRI+IIP.  This is 12t's census redone
+ *       inside the same strip reset, so the rung's own baseline is measured rather than inherited.
+ *   V1  the same bytes with bit 46 CLEARED, so the tag's own 11-bit field is written at packet start.  If a
+ *       triangle appears, the field rules when it is allowed to, and the cure is the recorder's PRE bit.
+ *       12l dialed exactly this and got "no change" -- on the Colour Test Bar, which 12s has since proved
+ *       was chrome, so that negative is void and gets re-measured here on a certified band.
+ *   V2  a ps2sdk-shaped AD(PRIM) write of the SAME ask (TRI, IIP set) ending its own transfer, then the
+ *       captured group as it came: the shape box C has always drawn with and 12c watched shade.
+ *   V3  V2's preamble with IIP CLEAR and nothing else changed: the falsifying control on V2.  If the field
+ *       in V2 is real, V3 lays the same triangle without it.
+ *
+ * V1 versus V2 says whether the tag field or an AD write programs OP; V2 versus V3 says whether IIP in that
+ * word is what turns interpolation on.  Each variant gets its own upload, its own send, its own band read
+ * and no print between the two, which is the census's standing law. */
+static void ps2_gslive_u_band(uint32_t *buf, const uint32_t *canvas, uint32_t width, uint32_t slot)
+{
+    uint32_t x, r;
+
+    s_u_n[slot] = 0u;
+    s_u_corner[slot] = 0u;
+    s_u_field[slot] = 0u;
+    s_u_top[slot] = 0u;
+    for (x = 0u; x < 4u; x++) s_u_bbox[slot][x] = GSLIVE_BB_NONE;
+
+    for (r = 0u; r < (uint32_t)GSLIVE_PIC_ROWS; r++) {
+        const uint32_t *row = buf + (size_t)r * width;
+        const uint32_t *crow = canvas + (uint32_t)(GSLIVE_SH_Y0 + r) * width;
+
+        for (x = 0u; x < width; x++) {
+            /* 12s's class order, kept: a sentinel means the read did not land, and the canvas compare comes
+             * BEFORE the corner-word test so desktop chrome in the palette's red is never counted as ink. */
+            if (row[x] == GSREAD_SENT || row[x] == crow[x]) continue;
+            s_u_n[slot]++;
+            gslive_bbox(s_u_bbox[slot], x, (uint32_t)GSLIVE_SH_Y0 + r);
+            if (row[x] == GSQUAD_RED || row[x] == GSQUAD_GREEN || row[x] == GSQUAD_BLUE) s_u_corner[slot]++;
+            else s_u_field[slot]++;
+            if (r == 0u && x >= (uint32_t)GSLIVE_SH_D_X0 && x < (uint32_t)GSLIVE_SH_D_X1) s_u_top[slot]++;
+        }
+    }
+}
+
+/* Hand D's captured group to the GIF with this variant's dial on it, and return the quadwords sent for it
+ * (the AD preamble is counted in `s_u_send` because it is part of what this variant put on the bus).
+ *
+ * Rung 12v moved the census this replay reads from: the recorder now writes PRIM in front of every chain,
+ * so by the time the probe runs the register holds the triangle the frame drew, and a bare replay would
+ * draw a triangle on the strength of that write rather than on the strength of nothing.  V0 therefore gets
+ * its own neutralising write -- PRIM=POINT, an OP that cannot make a triangle from three kicks -- so that
+ * "what does the chain do with no ask of its own" stays a question with an answer.  V1 needs no preamble:
+ * clearing PRE lets its own tag write PRIM, which is the dial. */
+static uint32_t ps2_gslive_u_variant(uint32_t mode, const uint64_t *g, uint32_t words)
+{
+    static uint64_t s_qw[2u * GSLIVE_SH_QWC_MAX] __attribute__((aligned(16)));
+    static uint64_t s_ad[4] __attribute__((aligned(16)));
+    const uint32_t ad[1] = { GS_NIB_AD };
+    uint32_t i;
+
+    if (mode == 0u || mode >= 2u) {
+        /* NLOOP=1, EOP=1, PACKED, PRE=0, one AD slot: the value lands in PRIM and the transfer ends.  Same
+         * four words ps2_gslive_shape_packet() builds for box C, with EOP raised because nothing follows. */
+        s_ad[0] = gs_pack_giftag(1u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
+        s_ad[1] = gs_pack_regs(ad, 1u);
+        s_ad[2] = (mode == 0u) ? gs_pack_prim(GS_OP_POINT, 0u, 0u, 0u, 0u, 0u)
+                               : gs_pack_prim(GS_OP_TRI, (mode == 2u) ? 1u : 0u, 0u, 0u, 0u, 0u);
+        s_ad[3] = GS_GP_PRIM;
+        ps2_gs_gif_send(s_ad, 2u);
+    }
+    for (i = 0u; i < words; i++) s_qw[i] = g[i];
+    if (mode == 1u) s_qw[0] &= ~((uint64_t)1u << 46);   /* PRE=0: let the tag's own field rule */
+    ps2_gs_gif_send(s_qw, words / 2u);
+    return (mode == 1u) ? (words / 2u) : (words / 2u) + 2u;
+}
+
+static void ps2_gslive_u_probe(uint32_t *buf, const uint32_t *canvas, uint32_t width)
+{
+    uint32_t slot, words, v, i;
+
+    s_u_ok = 0u;
+    /* Only the LONE census is replayable: in 12i's grid `s_cap_send` holds six recorder groups -- two per
+     * session since 12v -- and the chain at D's session index would be drawn beside five others, which is
+     * the state this rung exists to exclude. */
+    if (s_census_only != 3u) return;
+    if (s_sh_sess_first[3u] >= GSLIVE_CAP_SENDS) return;
+    slot = s_sh_sess_first[3u];
+    words = s_cap_send_words[slot];
+    /* Rung 12v: the index above is a vertex chain, not the session's first send, and this is the replay
+     * that has to say what a chain does on its own -- V0 is "these eight words and nothing in front of
+     * them".  A group with no vertices in it would make that sentence false, so the gate now asks the
+     * chain's own two questions: its tag says REGLIST, and it is long enough to hold three vertices.
+     * Four halves is what box D's AD write of PRIM measures, and replaying that would report "no ink"
+     * for all four variants and read as a verdict about the GS. */
+    if (words < 8u || words > GSLIVE_CAP_WORDS || (words & 1u) != 0u) return;
+    if (gslive_flg_of(s_cap_send[slot]) != GS_FLG_REGLIST) return;
+
+    for (v = 0u; v < 4u; v++) {
+        /* The order is part of the instrument: V0 goes out FIRST so no later variant's own PRIM write can be
+         * what it draws under, and V1/V2/V3 each program PRIM before their kick, so nothing they lay is
+         * inherited.  A probe that ran V3 then V0 would report "the group lays a triangle alone" for V0 on
+         * the strength of V3's write. */
+        s_u_read_ok[v] = 0u;
+        ps2_gs_upload(0, GSLIVE_SH_Y0, PS2_SCREEN_WIDTH, GSLIVE_PIC_ROWS);
+        (void)ps2_gif_drain();
+        s_u_send[v] = ps2_gslive_u_variant(v, s_cap_send[slot], words);
+        (void)ps2_gif_drain();
+        for (i = 0u; i < width * (uint32_t)GSLIVE_PIC_ROWS; i++) buf[i] = GSREAD_SENT;
+        (void)ps2_gs_vram_read(0, GSLIVE_SH_Y0, (int)width, GSLIVE_PIC_ROWS, buf);
+        if (ps2_gs_vram_read_err() != GS_READ_BUS_OK) return;
+        s_u_read_ok[v] = 1u;
+        ps2_gslive_u_band(buf, canvas, width, v);
+    }
+    /* Leave the strip as this census found it, so the next census's own 12s pre-draw control still means
+     * "nothing of mine is on this band" rather than being made true by a leftover triangle. */
+    ps2_gs_upload(0, GSLIVE_SH_Y0, PS2_SCREEN_WIDTH, GSLIVE_PIC_ROWS);
+    s_u_ok = 1u;
+}
+
+/* The six boxes, in the order they go out on the bus (A last), and what each one holds since rung 12i.
+ * The label is what the row prints, and since 12i it has to name THREE things -- the encoding, the place
+ * and the position in the frame -- because 12h proved that a row naming only two of them can be read two
+ * ways: its grid said SENDER and said "the first three transfers of the frame" with the same eight
+ * counts.  C, E and F keep the CONTROL tag: they are the shapes that measured as interpolating, and if
+ * one of them comes back flat the READ has stopped working and the whole table is void.  A and D are this
+ * rung's cells, both the recorder's, both alone in a session of their own: A is asked LAST, behind three
+ * hand triangles, at the box where 12h measured the recorder flat at the front of the frame, so A's pair
+ * is the frame's order with the box, the packet and the sender held still; D is asked FIRST, as the
+ * frame's first triangle transfer, where 12h's cell G had the same group third in one session.  B is
+ * unchanged from 12a and still names which vertex wins with IIP off.
+ *
+ * Since rung 12l that sentence needed one more fact, and 12l then measured it: 12k's pictures graded D and
+ * B as RECTS and A, C, E, F as triangles, in the order D, B, C, E, F, A went out, and the hypothesis that
+ * fit was that D's and B's PRE=1 tags left them drawing under the PRIM the last PRE=0 tag wrote -- in this
+ * census, the magenta SPRITE poster.  12l cleared PRE on D's tag and on no other, and the machine said no:
+ * D's tag left as PRE=0 PRIM=0x0b (the A-to-D tag xor is bit 46 alone), and D laid the same 88x16 block,
+ * 1408 painted px, no field.  So PRE is not the variable -- CONDITIONALLY, which is the finding that
+ * matters for the next rung: clearing PRE only bites if the inherited PRIM register differs from the
+ * TRI+IIP the tag carries, and nothing here ever read that register.  12m therefore keeps PRE=0 on D and
+ * zeroes D's tag PRIM FIELD as well, so the one authoritative ask in the frame is POINT; box B stays
+ * unpatched, and what B does is no longer the question -- B is the control that says the census has not
+ * moved.
+ *
+ * 12m answered that one too, and the two negatives together are the finding: the tag's PRE bit did not move
+ * D's ink, and the tag's PRIM field did not move D's ink either, both times with the captured tag proving
+ * the patch left the EE.  Two of the three things a tag can say about a transfer have now been edited on
+ * purpose with the same 88x16 block, 1408 px, as the answer -- so the assumption carrying all of it, that
+ * the block is box D's GROUP's ink, is the one thing left untested.  Rung 12n tests it by the one input no
+ * rung has moved since 12h: the geometry.  D is asked 24 px wide at the left edge of its own window and
+ * read across the whole 88 px, so the ask and the window differ by coordinate, and painted px can be
+ * counted outside what was asked for.  Both tag dials go off for it, which is what makes D's row comparable
+ * to 12k's unpatched baseline (top=88/88 painted=1408) rather than to a patched one.
+ *
+ * 12n answered, and it answered in the same 8 censuses as 12m: asked 24 px, D still laid
+ * `top=88/88 px=1408 out=1024 RECT` -- the identical red x536-599 plus blue x600-623 block, and 1024 of its
+ * painted px at an x never asked for.  The ask is therefore not the variable either: PRE did not move D's
+ * ink, the PRIM field did not, and neither did the geometry.  Three inputs a group can hand the GIF have now
+ * been edited on purpose with one unchanging answer, so rung 12o stops dialling the band and asks where
+ * THIS group's ink goes at all: D's ask moves OUT of the band into the empty rows below it, inside the
+ * spill window, and the census reads both places -- the band, to see whether the block survives the group
+ * leaving it, and the moved rect, to see whether anything lands where the packet asked.
+ *
+ * 12o answered, in all eight censuses of both pinned runs and identically in every one: the packet is the
+ * ask (`v0=(536,591) v1=(559,591) v2=(548,576) -> PACKET == ASK`), 384 red px fill the asked 24x16 bbox at
+ * x536-559 y576-591 (the whole rect, not the 192 px a triangle would cover, and not one green px anywhere),
+ * and the band's block is unchanged at 1408 px with out=1408, so 12n's THE BLOCK HELD was right and that ink
+ * is a foreign writer's.  It also moved the control: box B went 12n's `top=128/128 px=1920 RECT` to
+ * `top=63/128 px=1073 PARTIAL`, which is why 12o's own verdict is CONTROL MOVED and nothing above can be
+ * attributed until that movement has a cause.  Rung 12p supplies the one input none of 12n/12o moved --
+ * whether the bytes go out at all -- by withholding D's captured group at the GIF seam and reading the
+ * same two answers off the same page.
+ *
+ * 12p answered NEITHER, and answered with a third fact: with D's bytes withheld, D's band block stood at
+ * 1408 px and D's moved rect stood at 384 red px (so neither picture is this transfer's in any causal
+ * sense), while box B -- whose own group DID go out -- read `painted=0` and lost its foreign blue rect with
+ * it.  One withheld transfer emptied a neighbour, so no per-box number on this page can be read as that
+ * box's raster.  Rung 12q therefore holds the dial as a MASK over all three recorder sessions (A, B and D)
+ * and asks whether ANY of the census's counted ink depends on the census's own bytes: if every recorder
+ * window stands at its 12o number with nothing sent, rung 12 has been reading the app's stream since the
+ * beginning, and the instrument -- not the GS -- is what needs fixing next. */
+static const uint32_t s_sh_x0[GSLIVE_SH_N] = { GSLIVE_SH_A_X0, GSLIVE_SH_B_X0, GSLIVE_SH_C_X0,
+                                               GSLIVE_SH_D_X0, GSLIVE_SH_E_X0, GSLIVE_SH_F_X0 };
+static const uint32_t s_sh_x1[GSLIVE_SH_N] = { GSLIVE_SH_A_X1, GSLIVE_SH_B_X1, GSLIVE_SH_C_X1,
+                                               GSLIVE_SH_D_X1, GSLIVE_SH_E_X1, GSLIVE_SH_F_X1 };
+static const char *const s_sh_label[GSLIVE_SH_N] = {
+    "A recorder NREG2 chain, LAST, SENT (12r)",
+    "B recorder PRE1 NREG2 IIP0, SENT (12r)",
+    "C CONTROL 12c winner: AD(PRIM,RGBAQ) + PRE0 NREG2 {RGBAQ,XYZ2}",
+    "D recorder NREG2 chain, FIRST, whole window (12s)",
+    "E CONTROL AD group + PRE0 NREG3 {RGBAQ,ST,XYZ2} + pad",
+    "F CONTROL no AD group, PRE1 NREG3 {RGBAQ,ST,XYZ2} + pad (recorder tag)"
+};
+/* The shape word both 12l's and 12m's rows print, kept in one table because the two rungs grade the same
+ * top-row law and a second copy of the words would let them drift apart.  `PARTIAL` is the honest middle:
+ * a top row that is neither one pixel nor edge-to-edge is neither shape, and 12k's pictures show what that
+ * is -- C and E lay a solid rect AND a gradient triangle over the same box. */
+static const char *const gslive_sh_kind[3] = { "TRIANGLE", "PARTIAL", "RECT" };
+
+/* Rung 12r: tally one rectangle of a read band with the census's own class order -- corner words first,
+ * then the canvas compare, then the field -- so the pre-draw picture and the post-draw picture differ ONLY
+ * in when they were taken.  It writes its own accumulator and never touches `sh_*`, `mv_*` or the gspeak
+ * grids: those hold this census's answer, and a shared accumulator would make the two readings one number.
+ * `buf` is the band this read filled, whose row 0 is absolute `y0`; `canvas` is the desktop canvas the census
+ * compares against, indexed by absolute row, so both have to be handed the same `width`.
+ *
+ * Rung 12s adds the four fields on the right, and they are the reason the class order above is now known to
+ * be a liability rather than a convention: a corner word is counted before the canvas compare, so a page
+ * pixel that is the desktop's own palette red is indistinguishable, in `r`/`b`/`painted`, from this census's
+ * ink.  `cv_r/cv_g/cv_b` count the canvas's words by the same three constants, at the same positions, and
+ * `match` counts positions where the page word equals the canvas word whatever they are -- the agreement
+ * that separates "chrome uploaded through the same buffer" from "a GS-side writer this file does not own". */
+static void ps2_gslive_pre_rect(gslive_pre_t *acc, const uint32_t *buf, uint32_t width,
+                                const uint32_t *canvas, uint32_t x0, uint32_t x1,
+                                uint32_t y0, uint32_t rows)
+{
+    uint32_t rr, x;
+
+    acc->tot = acc->same = acc->other = acc->top = acc->sent = 0u;
+    acc->r = acc->g = acc->b = 0u;
+    acc->cv_r = acc->cv_g = acc->cv_b = acc->match = 0u;
+    for (rr = 0u; rr < rows; rr++) {
+        const uint32_t *row = buf + (size_t)rr * width;
+        const uint32_t *crow = canvas + (size_t)(y0 + rr) * width;
+
+        for (x = x0; x < x1; x++) {
+            const uint32_t v = row[x];
+            const uint32_t c = crow[x];
+
+            if (v == c) acc->match++;                       /* before the class order: pure agreement */
+            if (c == GSQUAD_RED)        acc->cv_r++;
+            else if (c == GSQUAD_GREEN) acc->cv_g++;
+            else if (c == GSQUAD_BLUE)  acc->cv_b++;
+            if (v == GSREAD_SENT) { acc->sent++; continue; }
+            acc->tot++;
+            if (v == GSQUAD_RED)        { acc->r++;     if (rr == 0u) acc->top++; }
+            else if (v == GSQUAD_GREEN) { acc->g++;     if (rr == 0u) acc->top++; }
+            else if (v == GSQUAD_BLUE)  { acc->b++;     if (rr == 0u) acc->top++; }
+            else if (v == c)              acc->same++;
+            else                        { acc->other++; if (rr == 0u) acc->top++; }
+        }
+    }
+}
 
 static void ps2_bench_gs_live_census(uint32_t frame)
 {
@@ -7674,12 +9350,96 @@ static void ps2_bench_gs_live_census(uint32_t frame)
     uint32_t read_px = 0u, sent = 0u, same = 0u, win_px = 0u;
     uint32_t diff_all = 0u, diff_console = 0u, diff_ink = 0u, diff_win = 0u;
     uint32_t ctrl = 0u, box_px = 0u, rare = 0u, bins = 0u, qw_sent = 0u, us;
+    /* Rung 12a's and 12d's tallies, one slot per box -- see `s_sh_label[]` for which box is which
+     * shape.  A box is `tot` px of which `same` are the canvas the desktop put there, the three corner
+     * colours are counted where they land whole, and `other` is everything painted that is not one of
+     * the three -- which is the interpolated field, and the only reading that says a shape shaded. */
+    uint32_t sh_tot[GSLIVE_SH_N];
+    uint32_t sh_r[GSLIVE_SH_N], sh_g[GSLIVE_SH_N], sh_b[GSLIVE_SH_N];
+    uint32_t sh_other[GSLIVE_SH_N], sh_same[GSLIVE_SH_N], sh_px = 0u;
+    /* Rung 12j's two extra reads, on the same walk: `sh_bbox[b][c]` is where colour c of box b's own
+     * corners actually is, as {minx, maxx, miny, maxy} with an inclusive max, and the spill arrays are the
+     * same three colours found OUTSIDE every box inside GSLIVE_SP_Y0..Y1.  A box of count 0 keeps its
+     * bbox at the impossible 0xFFFFFFFF so the print can say `none` instead of inventing coordinates. */
+    uint32_t sh_bbox[GSLIVE_SH_N][3][4];
+    uint32_t sp_n[3], sp_bbox[3][4], sp_same = 0u;
+    /* Rung 12l's shape tally: painted px in the band's FIRST row and in its LAST row.  A rect covers the
+     * whole width of the row its top edge sits on; an apex-up triangle covers one or two pixels of it.
+     * That is the only shape law that also grades a FLAT triangle, which is what a fixed box B is
+     * supposed to become -- the `other=` field test cannot see that one, because flat means no field. */
+    uint32_t sh_top[GSLIVE_SH_N], sh_bot[GSLIVE_SH_N];
+    /* Rung 12n's attribution tally: painted px in a box's READ window that sit outside the span that box
+     * was ASKED to draw.  With the ask equal to the window it is identically zero, which is what makes it
+     * a measurement rather than an argument -- the only way it grows is the geometry dial. */
+    uint32_t sh_outside[GSLIVE_SH_N];
+    /* Rung 12t(iii): the band's ink counted over the FULL width and in every non-canvas class at once.  The
+     * per-box tallies cannot answer 12t's question, because they attribute by coordinate: a block that
+     * starts on box B's right edge, crosses box C's whole window and both 16-px gutters and ends on D's apex
+     * gets split between 12j's spill count, C's `painted` and D's `painted`, and that split is exactly what
+     * hides the fact that it is ONE rectangle.  These counters make no attribution: `bp_n` is every band
+     * pixel that disagrees with the canvas under it, `bp_corner`/`bp_field` split it by the same corner-word
+     * law the boxes use, and `bp_bbox` is their extent.  The magenta control's rect is not in here -- the
+     * walk excludes it by coordinate before this branch is reached -- and rows outside the band are not in
+     * here either, so `bp_bbox` is a statement about the strip the six boxes live in. */
+    uint32_t bp_n = 0u, bp_corner = 0u, bp_field = 0u, bp_bbox[4];
+    /* Rung 12o's read of a MOVED ask.  12n moved D's ask within the band and the band block did not move
+     * with it; this rung moves the ask OUT of the band, into rows the box branch never reads, and so needs a
+     * second place to look.  These counters therefore classify, in the spill window, exactly the pixels that
+     * sit inside a session's asked rect while that rect lies outside the band -- the only ink this census can
+     * attribute to the dialled group by coordinate alone.  `mv_box` names which box owns the rect, or stays
+     * GSLIVE_SH_N when nothing was asked outside the band, which is what lets the print say SKIP instead of
+     * reading an unasked rect as an answer.  A pixel claimed here is NOT added to 12j's off-box aggregate:
+     * the two rows must describe different regions or 12j's bbox becomes a merge of an unknown writer and
+     * this rung's named one. */
+    uint32_t mv_box = GSLIVE_SH_N;
+    uint32_t mv_tot = 0u, mv_same = 0u, mv_other = 0u, mv_painted = 0u;
+    uint32_t mv_r = 0u, mv_g = 0u, mv_b = 0u, mv_bbox[4];
+    /* Rung 6b -- SURVIVAL, added because rung 6 and the operator disagree.  Rung 6 answers "did the
+     * stream's ink arrive"; the complaint is about a window that is empty when it is looked at, and
+     * those are different questions -- ink that arrives and is then re-laid over by the next present
+     * reads as a full client rect at the instant of the census and shows nothing one frame later.
+     * The two reads this run already made differ that way (in_win=383951 at one census, 287731 at
+     * the next, with `same` rising by the difference), and `xmb surface ... black=384000 other=0`
+     * says what the replacement value is: the app's CPU canvas, which the eegs path never paints.
+     * So every census keeps the per-row ink count of the window's client rect and compares it with
+     * the previous census's.  A per-pixel mask would be exact and cost 60 kB of a pool this image
+     * has already spent down to a 350 kB hole; a per-row count costs 4.8 kB and answers the only
+     * question asked of it -- did the ink stay, and in which rows did it leave. */
+    static uint32_t s_live_prev_ink[PS2_SCREEN_HEIGHT];
+    static uint32_t s_live_cur_ink[PS2_SCREEN_HEIGHT];
+    static uint32_t s_live_cur_same[PS2_SCREEN_HEIGHT];
+    static uint32_t s_live_census_no;
+    static int s_live_prev_valid;
+    /* Rung 6c -- WHO put the canvas back, and in which rows.  The per-row ink delta says where the
+     * eraser reached; the cover ring above (file statics, recorded at the send) says what went out.
+     * This is the per-client-row px those two agree on, and it is a row count rather than a rect
+     * list because the comparison the verdict needs is "did every lost row have an upload". */
+    static uint32_t s_live_cover_row[PS2_SCREEN_HEIGHT];
+    static uint32_t s_live_cover_since;
+    uint32_t ink_now = 0u, same_now = 0u, ink_then = 0u, erased = 0u, laid = 0u;
+    uint32_t lost_rows = 0u, lost_first = 0u, lost_last = 0u;
+    uint32_t lost_rows_covered = 0u, cover_px = 0u, cover_rects = 0u, cover_missed = 0u;
+    /* The geometry of the uploads in this census's own window, kept because a rect is what names its
+     * producer: `desktop.c`'s deskbar rows and panel rows, `workbench.c`'s open menus, `tip_ife.c`'s
+     * popup and the cursor's own box are all cover-adders, and they are told apart by where their
+     * rect is -- not by the count. */
+    int hc_rect[PS2_HIST_RECTS][4];
+    uint32_t hc_pass[PS2_HIST_RECTS], hc_n = 0u;
+    /* Rung 6c's other half: the colour the eraser LEAVES.  A hole filled with the app's CPU pixmap
+     * (black), with the console's navy, with the desktop's own plate and with a stale wallpaper are
+     * four different authors, and the per-row delta cannot tell them apart -- it only knows the page
+     * came back to the canvas.  So the client pixels that equal the canvas get the same top-N
+     * treatment the ink does. */
+    uint32_t cv_v[GSLIVE_TOP], cv_n[GSLIVE_TOP], cv_bins = 0u, cv_rare = 0u;
+    int cv_box[GSLIVE_TOP][4];
+    int cv_printed[GSLIVE_TOP];
+    int have_prev;
     int all_box[4] = { -1, -1, -1, -1 };
     int win_box[4] = { -1, -1, -1, -1 };
     int ink_box[GSLIVE_TOP][4];
     int ctrl_box[4] = { -1, -1, -1, -1 };
     int cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
-    uint32_t i, y_start, k, best;
+    uint32_t i, y_start, k, best, col, pr;
     int printed[GSLIVE_TOP];
     int32_t got, qw;
     gs_read_bus_err err;
@@ -7688,10 +9448,167 @@ static void ps2_bench_gs_live_census(uint32_t frame)
         ink_v[k] = 0u; ink_n[k] = 0u; ink_in[k] = 0u;
         ink_box[k][0] = ink_box[k][1] = ink_box[k][2] = ink_box[k][3] = -1;
         printed[k] = 0;
+        cv_v[k] = 0u; cv_n[k] = 0u; cv_printed[k] = 0;
+        cv_box[k][0] = cv_box[k][1] = cv_box[k][2] = cv_box[k][3] = -1;
     }
+    for (k = 0u; k < PS2_SCREEN_HEIGHT; k++) {
+        s_live_cur_ink[k] = 0u;
+        s_live_cur_same[k] = 0u;
+        s_live_cover_row[k] = 0u;
+    }
+    for (k = 0u; k < GSLIVE_SH_N; k++) {
+        sh_tot[k] = 0u; sh_r[k] = 0u; sh_g[k] = 0u; sh_b[k] = 0u;
+        sh_other[k] = 0u; sh_same[k] = 0u;
+        sh_top[k] = 0u; sh_bot[k] = 0u;
+        sh_outside[k] = 0u;
+        for (col = 0u; col < 3u; col++) {
+            sh_bbox[k][col][0] = sh_bbox[k][col][1] = GSLIVE_BB_NONE;
+            sh_bbox[k][col][2] = sh_bbox[k][col][3] = GSLIVE_BB_NONE;
+        }
+        for (pr = 0u; pr < GSLIVE_PIC_ROWS; pr++) {
+            for (col = 0u; col < GSLIVE_PIC_COLS; col++) s_band_pic[k][pr][col] = 0u;
+        }
+    }
+    for (col = 0u; col < 3u; col++) {
+        sp_n[col] = 0u;
+        sp_bbox[col][0] = sp_bbox[col][1] = GSLIVE_BB_NONE;
+        sp_bbox[col][2] = sp_bbox[col][3] = GSLIVE_BB_NONE;
+    }
+    sp_same = 0u;
+    bp_n = 0u; bp_corner = 0u; bp_field = 0u;
+    bp_bbox[0] = bp_bbox[1] = bp_bbox[2] = bp_bbox[3] = GSLIVE_BB_NONE;
+    mv_tot = 0u; mv_same = 0u; mv_other = 0u; mv_painted = 0u;
+    mv_r = 0u; mv_g = 0u; mv_b = 0u;
+    mv_bbox[0] = mv_bbox[1] = mv_bbox[2] = mv_bbox[3] = GSLIVE_BB_NONE;
 
-    ps2_kprintf("[GSLIVE] live page vs its canvas at frame %u: draws one MAGENTA control then\n",
+    ps2_kprintf("[GSLIVE] live page vs its canvas at frame %u: one MAGENTA control and\n",
                 (unsigned int)frame);
+    ps2_kprintf("[GSLIVE] six triangles into six boxes -- rung 12i separates the frame's\n");
+    ps2_kprintf("[GSLIVE] ORDER from its SENDER, which 12h never did: its recorder groups\n");
+    ps2_kprintf("[GSLIVE] were transfers 1,2,3 and the hand chain's 4,5,6,7, so every flat\n");
+    ps2_kprintf("[GSLIVE] box was also an early one.  Each recorder triangle now goes alone\n");
+    ps2_kprintf("[GSLIVE] in a session of its own: box D's FIRST, box A's LAST, B's IIP=0\n");
+    ps2_kprintf("[GSLIVE] control early, and C/E/F are the hand controls that say a gradient\n");
+    ps2_kprintf("[GSLIVE] is readable in this band.  Box A's hand chain is built, not sent.\n");
+    ps2_kprintf("[GSLIVE] Rung 12j reads the SAME page again for WHERE each corner colour is:\n");
+    ps2_kprintf("[GSLIVE] a bbox per box per colour, plus the corner words outside every box,\n");
+    ps2_kprintf("[GSLIVE] because 1408 px in an 88x16 box is not a triangle's coverage.\n");
+    ps2_kprintf("[GSLIVE] Rung 12k prints that same band as a picture, 4 px per character,\n");
+    ps2_kprintf("[GSLIVE] so a rect's straight edge and a triangle's hypotenuse cannot be\n");
+    ps2_kprintf("[GSLIVE] confused for each other the way two readings of a bbox can be.\n");
+    ps2_kprintf("[GSLIVE] 12k's pictures said the two FLAT boxes are RECTS, not bad shading,\n");
+    ps2_kprintf("[GSLIVE] and that the recorder chain interpolates when it goes out LAST.\n");
+    ps2_kprintf("[GSLIVE] Rung 12l clears PRE on box D's tag alone.  ps2sdk says PRE=1 means\n");
+    ps2_kprintf("[GSLIVE] the tag's PRIM field is not output, so D has been drawing under the\n");
+    ps2_kprintf("[GSLIVE] SPRITE poster's latched PRIM.  B is NOT patched: it is the test of\n");
+    ps2_kprintf("[GSLIVE] whether that latch carries to the next PRE=1 group or not.\n");
+    ps2_kprintf("[GSLIVE] 12l answered NO, and the answer is conditional: clearing PRE only\n");
+    ps2_kprintf("[GSLIVE] bites if the PRIM register D inherits differs from the TRI+IIP its\n");
+    ps2_kprintf("[GSLIVE] tag carries, and no rung here read that register.  Rung 12m therefore\n");
+    ps2_kprintf("[GSLIVE] zeroes D's whole PRIM FIELD too, so the one authoritative ask this\n");
+    ps2_kprintf("[GSLIVE] frame makes is for POINT: points laid means 12l's block was laid by\n");
+    ps2_kprintf("[GSLIVE] TRI+IIP and the answer is geometry; the same block laid means no tag\n");
+    ps2_kprintf("[GSLIVE] PRIM field of this group reaches the rasteriser at all.\n");
+    ps2_kprintf("[GSLIVE] 12m answered THAT too: the same 1408-px block under a tag that asks\n");
+    ps2_kprintf("[GSLIVE] for POINT and under one that asks for TRI+IIP.  Two tag fields edited on\n");
+    ps2_kprintf("[GSLIVE] purpose, no answer, so rung 12n doubts what both of them assumed: that\n");
+    ps2_kprintf("[GSLIVE] the block in D's window is D's triangle's ink.  D is now asked 24 px\n");
+    ps2_kprintf("[GSLIVE] wide at the left of the 88-px window it is read across, and painted px\n");
+    ps2_kprintf("[GSLIVE] outside the ask are counted: ink that follows its ask is this group's,\n");
+    ps2_kprintf("[GSLIVE] a block that holds while the ask moves is another writer's ink.\n");
+    ps2_kprintf("[GSLIVE] 12n held too: asked 24 px, it laid top=88/88 painted=1408 with\n");
+    ps2_kprintf("[GSLIVE] out=1024 -- a thousand painted px at an x never asked for.  Three\n");
+    ps2_kprintf("[GSLIVE] inputs edited on purpose, three identical answers, so rung 12o\n");
+    ps2_kprintf("[GSLIVE] asks the one question none of them could: where does THIS group's\n");
+    ps2_kprintf("[GSLIVE] ink go?  D's ask moves out of the band into rows 576-591, which no\n");
+    ps2_kprintf("[GSLIVE] box is read out of, and the census reads both the emptied band and\n");
+    ps2_kprintf("[GSLIVE] the asked rect -- after decoding D's own XYZ2 words, so the ask is\n");
+    ps2_kprintf("[GSLIVE] certified as bytes that left the EE and not as an argument.\n");
+    ps2_kprintf("[GSLIVE] 12o answered, and with two surprises: the packet IS the ask, and 384\n");
+    ps2_kprintf("[GSLIVE] red px fill the moved 24x16 rect -- while the band's 1408-px block\n");
+    ps2_kprintf("[GSLIVE] stands unchanged with the group gone, so it was never D's.  And B\n");
+    ps2_kprintf("[GSLIVE] moved: its blue rect (945 px, foreign since 12j) held, but its OWN red\n");
+    ps2_kprintf("[GSLIVE] went from the left half of rows 560-574 (975 px) to row 575 alone\n");
+    ps2_kprintf("[GSLIVE] (128 px).  A neighbour's y rewrote this triangle's scanlines, so rung\n");
+    ps2_kprintf("[GSLIVE] 12p edits the one input left: DELIVERY.  D's group is still captured\n");
+    ps2_kprintf("[GSLIVE] and decoded, and the sink then hands it to nobody.  If the moved ink\n");
+    ps2_kprintf("[GSLIVE] and the band block both stand, neither is D's; and if B's red comes\n");
+    ps2_kprintf("[GSLIVE] back with D's bytes absent, one transfer's delivery rules another's.\n");
+    ps2_kprintf("[GSLIVE] 12p answered NEITHER: with D's bytes withheld both its windows stood\n");
+    ps2_kprintf("[GSLIVE] (band 1408, moved 384) and box B, whose own group DID go out, read\n");
+    ps2_kprintf("[GSLIVE] painted=0, its foreign blue rect included.  So one withheld transfer\n");
+    ps2_kprintf("[GSLIVE] emptied a neighbour: no per-box count here means what 12a assumed.\n");
+    ps2_kprintf("[GSLIVE] 12q arms the mask on all three recorder sessions (A, B, D) and asks\n");
+    ps2_kprintf("[GSLIVE] whether ANY of its ink survives with no census bytes sent at all.\n");
+    ps2_kprintf("[GSLIVE] 12q answered SPLIT: A fell 891 -> 0 and B fell 1073 -> 0, so those two\n");
+    ps2_kprintf("[GSLIVE] really are this file's delivery, while D's band block (1408) and its\n");
+    ps2_kprintf("[GSLIVE] moved rect (384 red) stood with `held=3, to the bus=0` -- no census byte\n");
+    ps2_kprintf("[GSLIVE] reached the GS for them.  No send-side dial can now say who laid them,\n");
+    ps2_kprintf("[GSLIVE] because every dial so far graded a page this census had drawn on first.\n");
+    ps2_kprintf("[GSLIVE] Rung 12r dials the one input never touched -- WHEN the page is\n");
+    ps2_kprintf("[GSLIVE] read: the mask is disarmed so every send goes out as at 12o, and the\n");
+    ps2_kprintf("[GSLIVE] band is read once BEFORE the control is sent, by the same law, and\n");
+    ps2_kprintf("[GSLIVE] printed beside the post-draw numbers.  Census #1 of the process is the\n");
+    ps2_kprintf("[GSLIVE] only look at a page this file has not drawn on, so it alone carries a\n");
+    ps2_kprintf("[GSLIVE] verdict -- and it came back with its own falsifier: the magenta control\n");
+    ps2_kprintf("[GSLIVE] held magenta=0 painted=0, so the read IS a first look.  At that first\n");
+    ps2_kprintf("[GSLIVE] look D's window already held a whole-width red-1024/blue-384 rect, C 320\n");
+    ps2_kprintf("[GSLIVE] and E 1088, while A, B and F came back clean.\n");
+    ps2_kprintf("[GSLIVE] That is not a foreign GS writer -- it is the desktop's own Colour Test\n");
+    ps2_kprintf("[GSLIVE] Bar.  `desktop_render()` fills the bottom 40 rows (560..599) with 8\n");
+    ps2_kprintf("[GSLIVE] swatches of w/8 = 100 px, and swatch 5 is `COLOR_RED`, swatch 6 its blue:\n");
+    ps2_kprintf("[GSLIVE] `fill_rec()` stores them through `BTRON_PIXEL_FB()`, which swaps R and B,\n");
+    ps2_kprintf("[GSLIVE] so they land bit-equal to this census's GSQUAD_RED and GSQUAD_BLUE.  The\n");
+    ps2_kprintf("[GSLIVE] key tests corner words BEFORE the canvas compare, so it has counted that\n");
+    ps2_kprintf("[GSLIVE] chrome as ink since 12a: D's 1408 is 64 red columns plus 24 blue ones,\n");
+    ps2_kprintf("[GSLIVE] E's 1088 is 68 blue columns, C's 320 is the bar in its last 20 columns.\n");
+    ps2_kprintf("[GSLIVE] Rung 12s therefore moves the instrument to rows 32..47 -- the XMB's title\n");
+    ps2_kprintf("[GSLIVE] bar, chrome whose words are not corner words and which no cover rect\n");
+    ps2_kprintf("[GSLIVE] re-lays -- retires D's moved ask, and reads BOTH strips before the first\n");
+    ps2_kprintf("[GSLIVE] send: the new one to certify it, the old one to test the bar explanation\n");
+    ps2_kprintf("[GSLIVE] with the page against its own canvas instead of with a reading of the\n");
+    ps2_kprintf("[GSLIVE] source.  Every verdict below is gated on that certification.\n");
+    ps2_kprintf("[GSLIVE] Rung 12t puts that certified strip to the question 12s left open.  Box A's\n");
+    ps2_kprintf("[GSLIVE] recorder group, sent LAST, lays 891 px of apex-up triangle whose every cell is a\n");
+    ps2_kprintf("[GSLIVE] ramp pixel; box D's -- sent FIRST, and 12i captured it as differing from A's in\n");
+    ps2_kprintf("[GSLIVE] three position words and no colour word -- lays 660 px of pure red as a 44-wide\n");
+    ps2_kprintf("[GSLIVE] block with a 44-px apex row, so flat AND mis-shaped; and 12j says the same red\n");
+    ps2_kprintf("[GSLIVE] runs x384..579, box B's right edge through box C's whole window, both 16-px\n");
+    ps2_kprintf("[GSLIVE] gutters and D's left half: 2940 px of one rectangle no session ever asked for.\n");
+    ps2_kprintf("[GSLIVE] Either this packet alone does that, in which case the recorder's encoding or the\n");
+    ps2_kprintf("[GSLIVE] GS state its first group lands in is the bug, or a NEIGHBOUR drew the rectangle\n");
+    ps2_kprintf("[GSLIVE] and D owns only the part its window covers, in which case 12i's ORDER answer is\n");
+    ps2_kprintf("[GSLIVE] about register latching, not shading.  A census that sends seven things cannot\n");
+    ps2_kprintf("[GSLIVE] tell them apart -- every count in it is a sum of seven.  So census #1 now\n");
+    ps2_kprintf("[GSLIVE] uploads the strip from its own canvas, sends box D's group ALONE (control, B, A\n");
+    ps2_kprintf("[GSLIVE] and the hand chain C/E/F all withheld) and reads the whole band's ink extent;\n");
+    ps2_kprintf("[GSLIVE] censuses 2..4 run 12i's grid on a strip reset the same way, which is also why\n");
+    ps2_kprintf("[GSLIVE] 12s's verdict is no longer confined to whichever census happened to be first.\n");
+    ps2_kprintf("[GSLIVE] 12t ANSWERED, and against its own verdict label: `build/repro/20261018T074741Z`\n");
+    ps2_kprintf("[GSLIVE] census #1 sent box D's group alone on a reset band and got painted=1 at x580 y32\n");
+    ps2_kprintf("[GSLIVE] -- the packet's own apex vertex -- where the grid gets 660 px in that window and\n");
+    ps2_kprintf("[GSLIVE] 6803 px across the band.  A lone group does not even make a TRIANGLE, which is\n");
+    ps2_kprintf("[GSLIVE] what PRE=1 means: GIF_PRE_ENABLE disables the tag's PRIM output, so OP and IIP\n");
+    ps2_kprintf("[GSLIVE] come from whatever the last PRIM WRITE latched, and this port's recorder groups\n");
+    ps2_kprintf("[GSLIVE] never write it.  12u therefore makes that write the only variable: the same eight\n");
+    ps2_kprintf("[GSLIVE] words replayed four times on the same reset band -- V0 undialled, V1 with PRE\n");
+    ps2_kprintf("[GSLIVE] cleared so the tag's own field can rule, V2 with a ps2sdk AD(PRIM) write of the\n");
+    ps2_kprintf("[GSLIVE] Gouraud ask in front, V3 the same preamble with IIP clear as V2's control.  Tag\n");
+    ps2_kprintf("[GSLIVE] field alone puts a triangle down => flip PRE in the recorder; only the AD write\n");
+    ps2_kprintf("[GSLIVE] does => the recorder must program PRIM per group; V2 fields and V3 does not =>\n");
+    ps2_kprintf("[GSLIVE] IIP is the shading lever, which is what the flat gears on the monitor are.\n");
+    ps2_kprintf("[GSLIVE] 12u ANSWERED that, on the machine: the AD write rules and the tag field does not,\n");
+    ps2_kprintf("[GSLIVE] and V2's field against V3's zero named IIP as the lever.  Rung 12v LANDS it --\n");
+    ps2_kprintf("[GSLIVE] ps2_gs_rec.c's open_group() now sends a PACKED NLOOP=1/NREG=1 AD write of the same\n");
+    ps2_kprintf("[GSLIVE] PRIM word its tag carries, in front of every vertex chain, and gs_rec_prim_writes()\n");
+    ps2_kprintf("[GSLIVE] counts them as the [GSTS] row's pwr= column.  So this run is the fix's measurement\n");
+    ps2_kprintf("[GSLIVE] and has three numbers that decide it: box D's own census row must lay a TRIANGLE\n");
+    ps2_kprintf("[GSLIVE] rather than the 1 px 12t found, 12i's grid must call the recorder's cell\n");
+    ps2_kprintf("[GSLIVE] INTERPOLATES, and box B -- the same chain asked with IIP clear -- must stay one\n");
+    ps2_kprintf("[GSLIVE] flat colour.  B is the falsifying control: if it shades, the read is broken and\n");
+    ps2_kprintf("[GSLIVE] nothing else on this page means anything.  12u's replay keeps its bite by putting\n");
+    ps2_kprintf("[GSLIVE] a write of POINT in front of V0, because the census now DOES program PRIM and a\n");
+    ps2_kprintf("[GSLIVE] bare chain would otherwise draw under its own frame's ask rather than under none.\n");
 
     if (!canvas) {
         ps2_kprintf("[GSLIVE] no bound canvas -- SKIP, the page has nothing to be compared against\n");
@@ -7701,6 +9618,49 @@ static void ps2_bench_gs_live_census(uint32_t frame)
         cx0 = (int)w->client.left; cy0 = (int)w->client.top;
         cx1 = (int)w->client.right; cy1 = (int)w->client.bottom;
         if (cx1 > cx0 && cy1 > cy0) win_px = (uint32_t)(cx1 - cx0) * (uint32_t)(cy1 - cy0);
+    }
+
+    /* Rung 6c, taken before the read because the read is the long part: every cover upload that has
+     * gone out since the previous census is a candidate eraser, and each is already intersected with
+     * the layer's client rect by ps2_upload_cover_in_layer(), so its whole area is in the hole.  The
+     * window is [s_live_cover_since, s_cover_writes); if the ring wrapped inside that window the
+     * older rects are named as missed rather than silently dropped, because a verdict of "the cover
+     * path did it" has to say how much of the set it actually saw. */
+    if (win_px) {
+        const uint32_t writes_now = s_cover_writes;
+        uint32_t t = s_live_cover_since;
+
+        cover_missed = (writes_now > t + PS2_COVER_TRACE_N)
+                         ? (writes_now - t - PS2_COVER_TRACE_N) : 0u;
+        if (writes_now > PS2_COVER_TRACE_N &&
+            t < writes_now - PS2_COVER_TRACE_N)
+            t = writes_now - PS2_COVER_TRACE_N;
+        for (; t < writes_now; t++) {
+            const int *r = s_cover_rect[t % PS2_COVER_TRACE_N];
+            const int x0 = r[0] > cx0 ? r[0] : cx0;
+            const int x1 = r[2] < cx1 ? r[2] : cx1;
+            const int y0 = r[1] > cy0 ? r[1] : cy0;
+            const int y1 = r[3] < cy1 ? r[3] : cy1;
+            const int xw = x1 > x0 ? x1 - x0 : 0;
+            int rows = y1 > y0 ? y1 - y0 : 0;
+            int rr;
+
+            if (y0 - cy0 >= PS2_SCREEN_HEIGHT) rows = 0;
+            else if (y0 - cy0 + rows > PS2_SCREEN_HEIGHT)
+                rows = PS2_SCREEN_HEIGHT - (y0 - cy0);
+            if (xw <= 0 || rows <= 0) continue;
+            cover_rects++;
+            if (hc_n < PS2_HIST_RECTS) {
+                hc_rect[hc_n][0] = x0;  hc_rect[hc_n][1] = y0;
+                hc_rect[hc_n][2] = x1;  hc_rect[hc_n][3] = y1;
+                hc_pass[hc_n] = s_cover_pass[t % PS2_COVER_TRACE_N];
+                hc_n++;
+            }
+            for (rr = 0; rr < rows; rr++)
+                s_live_cover_row[(uint32_t)(y0 - cy0 + rr)] += (uint32_t)xw;
+            cover_px += (uint32_t)xw * (uint32_t)rows;
+        }
+        s_live_cover_since = writes_now;
     }
 
     /* The band buffer is asked for before the control is drawn for the same reason gsread allocates
@@ -7713,11 +9673,104 @@ static void ps2_bench_gs_live_census(uint32_t frame)
                     (unsigned int)(GSREAD_BAND_QWC * 16u));
         return;
     }
+    gspeak_reset();     /* rung 10's two grids: every pixel of this read goes into them */
 
     /* Whatever the frame's own presents queued has to be on the GS before a read is meaningful --
      * and before a synchronous send is allowed to interleave with it. */
     (void)ps2_gif_drain();
     (void)ps2_gif_reap();
+
+    /* Rung 12t(i): put the band back to its canvas, then look.
+     *
+     * 12s could only grade census #1, because VRAM is not cleared between app opens and a dirty window at
+     * census #2 is equally this file's own triangle left over from census #1.  That limit is what stops any
+     * rung that wants a different SEND set from getting a clean page: the first census has one page and
+     * every later one inherits it.  So the census now writes the strip first -- `ps2_gs_upload()` is a
+     * Host->Local IMAGE stream of these very canvas rows, synchronous through `ps2_gs_gif_send()`, and the
+     * identical thing the present does every frame, so it is the port's own law being applied rather than a
+     * special state the bench invents.  Rows GSLIVE_SP_Y0..Y1 go back to the canvas: the band the six boxes
+     * are read out of AND the spill strip around them, because 12j's off-box block is half of the question.
+     * The old colour-bar strip at 560..575 is deliberately NOT reset: its page-vs-canvas agreement is 12s's
+     * independent control on the chrome explanation, and an upload would make that agreement true by
+     * construction instead of by measurement.
+     *
+     * The reset does not have to be trusted.  The pre-draw read below is the check on it: `band_dirty` counts
+     * the six windows that still disagree with their canvas or still hold a sentinel, and the 12s verdict
+     * takes case 3 when that count is non-zero, which now means the upload failed rather than that some
+     * desktop writer is ahead of this census. */
+    ps2_gs_upload(0, GSLIVE_SP_Y0, PS2_SCREEN_WIDTH, GSLIVE_SP_Y1 - GSLIVE_SP_Y0);
+
+    /* Rung 12r: look at the page BEFORE this census puts anything on it.  12q's answer split the band down
+     * the middle -- A emptied 891 -> 0 and B emptied 1073 -> 0 with their own bytes withheld, while D's
+     * 1408-px block and D's 384-px moved rect stood at their 12o numbers with NOTHING of this file's ever
+     * reaching the GS -- so the two readings of the same column are now opposite claims about the same pixel
+     * count, and no send-side dial can settle them: every dial still graded a page this census had already
+     * drawn on.  This read is the other half of the instrument.  The GIF is drained and reaped above, so
+     * what comes back is the page as the app, the console and any EARLIER census left it; the magenta
+     * control has not been sent yet and neither has any triangle.  Nothing prints before it (`Imalloc()`
+     * already happened above, and a print repaints the console band), and nothing prints between it and the
+     * draw below, so no upload of this file's sits between the look and the page it describes.
+     *
+     * `s_pre_pass` is what makes the reading decidable: the census re-runs on every app open, and at pass 2
+     * a held block may be this file's OWN triangle from pass 1 -- VRAM is not cleared between opens -- which
+     * is a different finding from "the app laid it".  Only pass 1 can say that, so only pass 1 is graded.
+     *
+     * Rung 12s reads TWO bands in that one pre-draw pass, because 12r's first look was real and its conclusion
+     * was still wrong: the block it found in D is the desktop's own Colour Test Bar (see the note at GSLIVE_X0),
+     * which the corner-word key counted as ink because it tests colours BEFORE the canvas compare.  The
+     * instrument therefore moved to rows 32..47, and the old strip stays in the read as a control on that
+     * explanation: a window whose page words ARE the canvas words at the same positions is chrome, and only a
+     * window where the two disagree is a writer this file has not named. */
+    s_pre_pass++;
+    /* Rung 12t(ii): census #1 of the process runs LONE -- box D's recorder session and nothing else -- and
+     * censuses 2..4 run 12i's whole grid, each on a band the reset above just made equal to its canvas.
+     * D is the box because D is the anomaly: it is the frame's FIRST transfer, it is the one box whose count
+     * 12q withheld-and-it-stood, and the block inside it reaches outside its own ask. */
+    s_census_only = (s_pre_pass == 1u) ? 3u : (uint32_t)GSLIVE_SH_N;
+    s_pre_ok = 0;
+    s_pre_old_ok = 0;
+    {
+        const uint32_t pre_y[2]  = { (uint32_t)GSLIVE_SH_Y0, GSLIVE_OLD_BAND_Y0 };
+        gslive_pre_t *pre_box[2] = { s_pre, s_pre_old };
+        uint32_t pb, pre_b, pre_x;
+        int ok;
+
+        for (pb = 0u; pb < 2u; pb++) {
+            ok = 0;
+            for (pre_b = 0u; pre_b < (uint32_t)GSLIVE_PIC_ROWS; pre_b++)
+                for (pre_x = 0u; pre_x < width; pre_x++)
+                    buf[(size_t)pre_b * width + pre_x] = GSREAD_SENT;
+            if (ps2_gs_vram_read(0, (int)pre_y[pb], (int)width,
+                                 (int)GSLIVE_PIC_ROWS, buf) > 0
+                    && ps2_gs_vram_read_err() == GS_READ_BUS_OK) {
+                ok = 1;
+                for (pre_b = 0u; pre_b < GSLIVE_SH_N; pre_b++)
+                    ps2_gslive_pre_rect(&pre_box[pb][pre_b], buf, width, canvas,
+                                        s_sh_x0[pre_b], s_sh_x1[pre_b],
+                                        pre_y[pb], (uint32_t)GSLIVE_PIC_ROWS);
+            }
+            if (pb == 0u) s_pre_ok = ok; else s_pre_old_ok = ok;
+        }
+
+        /* 12r's own control, on the band that actually holds it: the magenta box has exactly one writer --
+         * the send below -- so any magenta here is this read looking at ink that has not been laid yet.
+         * Rung 12s makes it certify more than the read's timing: the control now sits INSIDE the band, at
+         * x32..95 of rows 32..47, so a clean read there is 12a's missing proof that the strip the six boxes
+         * are read out of holds nothing before this census draws on it. */
+        s_pre_ctrl_mag = 0u;
+        s_pre_ctrl_paint = 0u;
+        if (s_pre_ok) {
+            for (pre_b = 0u; pre_b < (uint32_t)GSLIVE_PIC_ROWS; pre_b++) {
+                const uint32_t *row = buf + (size_t)pre_b * width;
+                const uint32_t *crow = canvas + (uint32_t)(GSLIVE_SH_Y0 + pre_b) * width;
+
+                for (pre_x = (uint32_t)GSLIVE_X0; pre_x < (uint32_t)GSLIVE_X1; pre_x++) {
+                    if (row[pre_x] == GSQUAD_MAGENTA) s_pre_ctrl_mag++;
+                    if (row[pre_x] != crow[pre_x]) s_pre_ctrl_paint++;
+                }
+            }
+        }
+    }
 
     r.x0 = GSLIVE_X0; r.y0 = GSLIVE_Y0;
     r.x1 = GSLIVE_X1; r.y1 = GSLIVE_Y1;
@@ -7729,7 +9782,39 @@ static void ps2_bench_gs_live_census(uint32_t frame)
         Ifree(buf);
         return;
     }
-    ps2_gs_gif_send(s_pkt, (uint32_t)qw);
+    /* Rung 12t: the environment the control is drawn under is applied in a LONE census too -- that is the
+     * state D's lone group will rasterise in, and it has to be the same state the grid censuses give it --
+     * but the magenta quad itself is one of the sends this census exists to withhold. */
+    if (s_census_only >= GSLIVE_SH_N) ps2_gs_gif_send(s_pkt, (uint32_t)qw);
+
+    /* Rung 12a rides the same window as the magenta box: the GIF is drained, the environment is the
+     * one the box was drawn with, and nothing prints between this draw and the read below.  Rung 12i
+     * puts the recorder's own triangles at both ends of it -- D first, A last -- because the order the
+     * transfers leave in is now the variable being measured. */
+    ps2_gslive_shading_reset();
+    /* Rung 12q asked whether ANY of this census's counted ink depends on its own bytes, and got a split
+     * answer: A emptied 891 -> 0 and B emptied 1073 -> 0, so those two really are delivered by this file,
+     * while D's band block (1408) and D's moved rect (384 red) stood at their 12o numbers with
+     * `mask=0xb, held=3, to the bus=0` -- no census byte ever reached the GS for them.  C moved again
+     * (1221 -> 1121, the same shift it made in 12p when only D was held), so the hand shapes answer to
+     * D's delivery too, which is a coupling no per-box model has.  That leaves two claims about the same
+     * 1408 px and no send-side dial that can separate them: every dial so far has graded a page this
+     * census had ALREADY drawn on.  So 12r puts the dial back where the claim lives -- time, not delivery.
+     * The mask stays DISARMED (the reset above leaves it 0), which is what makes the whole rung honest:
+     * every session goes out as it did at 12o, the shading grid grades again instead of self-gating to
+     * SKIP, and the pre-draw read taken above is the only new input.  Rung 12s then moved the geometry: the
+     * ask is D's WHOLE window in the new band again, because the narrowing and the y576-591 rect were both
+     * dials on a strip that turned out to be the Colour Test Bar, and a dial that grades chrome answers
+     * nothing.  With ask == window, 12n's `out=` is identically zero and 12o's moved-rect rows self-gate to
+     * SKIP, which is the honest price of the finding. */
+    ps2_gslive_shading_session(3u, GSLIVE_SH_D_X0, GSLIVE_SH_D_X1,
+                               GSLIVE_SH_Y0, GSLIVE_SH_Y1, 1u);
+    ps2_gslive_shading_session(1u, GSLIVE_SH_B_X0, GSLIVE_SH_B_X1,
+                               GSLIVE_SH_Y0, GSLIVE_SH_Y1, 0u);
+    ps2_gslive_shape_matrix();
+    ps2_gslive_shape_hold(1, GSLIVE_SH_A_X0, GSLIVE_SH_A_X1);
+    ps2_gslive_shading_session(0u, GSLIVE_SH_A_X0, GSLIVE_SH_A_X1,
+                               GSLIVE_SH_Y0, GSLIVE_SH_Y1, 1u);
 
     us = btron_render_perf_us();
     for (y_start = 0u; y_start < height; y_start += GSREAD_BAND_ROWS) {
@@ -7756,6 +9841,12 @@ static void ps2_bench_gs_live_census(uint32_t frame)
             if (v == GSREAD_SENT) { sent++; continue; }
             x = i % width;
             y = y_start + i / width;
+            /* Rung 10 keeps every pixel this loop sees, including the control box and the console's
+             * own rows: the magenta box coming back magenta in the P grid is the read's alignment
+             * proving itself in the picture, which is a stronger statement than `ctrl=1024` in a
+             * count column. */
+            gspeak_add(&s_spk_page, x, y, v);
+            gspeak_add(&s_spk_canvas, x, y, canvas[y * width + x]);
             if (x >= GSLIVE_X0 && x < GSLIVE_X1 && y >= GSLIVE_Y0 && y < GSLIVE_Y1) {
                 /* This rung's own ink, excluded by COORDINATE and not by colour: the box is the
                  * certification and nothing else, so a magenta UI pixel outside it stays census
@@ -7767,9 +9858,148 @@ static void ps2_bench_gs_live_census(uint32_t frame)
                 if (v == GSQUAD_MAGENTA) { ctrl++; gsread_box(ctrl_box, x, y); }
                 continue;
             }
-            if (v == canvas[y * width + x]) { same++; continue; }
+            if (y >= GSLIVE_SH_Y0 && y < GSLIVE_SH_Y1) {
+                uint32_t sh;
 
-            diff_all++;
+                /* Rung 12t: attributed to no box, this pixel is band ink, and it is either a corner word or
+                 * a ramp pixel.  The box walk below still counts it its own way; nothing is moved here. */
+                if (v != canvas[y * width + x]) {
+                    bp_n++;
+                    gslive_bbox(bp_bbox, x, y);
+                    if (v == GSQUAD_RED || v == GSQUAD_GREEN || v == GSQUAD_BLUE) bp_corner++;
+                    else bp_field++;
+                }
+                for (sh = 0u; sh < GSLIVE_SH_N; sh++) {
+                    if (x >= s_sh_x0[sh] && x < s_sh_x1[sh]) break;
+                }
+                if (sh < GSLIVE_SH_N) {
+                    /* Counted by coordinate and excluded from the page's own partition the same way
+                     * the magenta box is: this rung's ink is its own evidence, and a red pixel that
+                     * also entered `ink_v[]` would spend one of eight histogram slots on the
+                     * instrument.  The gspeak grids above still hold these pixels, so rung 10's
+                     * picture shows the pair and can be looked at rather than read as counts. */
+                    const uint32_t prow = y - (uint32_t)GSLIVE_SH_Y0;
+                    const uint32_t pcol = (x - s_sh_x0[sh]) >> GSLIVE_PIC_SHIFT;
+                    uint32_t bit;
+
+                    sh_tot[sh]++;
+                    sh_px++;
+                    if (v == GSQUAD_RED)        { bit = GSLIVE_PIC_R;     sh_r[sh]++;
+                                                  gslive_bbox(sh_bbox[sh][0], x, y); }
+                    else if (v == GSQUAD_GREEN) { bit = GSLIVE_PIC_G;     sh_g[sh]++;
+                                                  gslive_bbox(sh_bbox[sh][1], x, y); }
+                    else if (v == GSQUAD_BLUE)  { bit = GSLIVE_PIC_B;     sh_b[sh]++;
+                                                  gslive_bbox(sh_bbox[sh][2], x, y); }
+                    else if (v == canvas[y * width + x]) { bit = GSLIVE_PIC_CANVAS; sh_same[sh]++; }
+                    else                                  { bit = GSLIVE_PIC_FIELD;  sh_other[sh]++; }
+                    /* Rung 12l's shape tally, straight off the class bit: the first and last rows of a
+                     * box separate a rect (its top edge is the whole width) from an apex-up triangle
+                     * (one or two px), and they do it whatever the shading flag says, so this grades a
+                     * flat triangle as well as a gradient one. */
+                    if (bit != GSLIVE_PIC_CANVAS) {
+                        if (prow == 0u) sh_top[sh]++;
+                        else if (prow == (uint32_t)GSLIVE_PIC_ROWS - 1u) sh_bot[sh]++;
+                        /* Rung 12n's attribution count, widened by 12o to the other axis: this pixel is
+                         * painted, and it sits outside the RECT the session asked.  Boxes with no ask of
+                         * their own -- the hand controls are not drawn by a session -- are read AT their
+                         * window, so their count is 0 by definition and `out=` can only grow where a
+                         * geometry dial moved.  With 12o's ask entirely below the band, every painted band
+                         * pixel of that box is outside it, so out= == px is 12o's reading of the block
+                         * holding; out= == 0 would mean the band emptied itself, which is the other answer. */
+                        if (s_sh_ask_x1[sh] != 0
+                                && ((int32_t)x < s_sh_ask_x0[sh]
+                                    || (int32_t)x >= s_sh_ask_x1[sh]
+                                    || (int32_t)y < s_sh_ask_y0[sh]
+                                    || (int32_t)y >= s_sh_ask_y1[sh]))
+                            sh_outside[sh]++;
+                    }
+                    if (prow < GSLIVE_PIC_ROWS && pcol < GSLIVE_PIC_COLS)
+                        s_band_pic[sh][prow][pcol] =
+                            (uint8_t)(s_band_pic[sh][prow][pcol] | bit);
+                    continue;
+                }
+            }
+            if (y >= GSLIVE_SP_Y0 && y < GSLIVE_SP_Y1) {
+                /* Rung 12j: this pixel is outside every box, in the rows the band does not read, and is
+                 * bit-exactly one of the three corner words -- so either one of this rung's triangles was
+                 * rasterised HERE, or the desktop painted this exact word and put it on its own canvas
+                 * too.  The second case is what `sp_same` counts, and it is why the tally asks the canvas
+                 * rather than calling every corner-coloured pixel outside a box a spill: an uploaded UI
+                 * pixel is page == canvas, ink this census did not lay is not.
+                 *
+                 * No `continue` here, unlike the box branch above: a spill pixel is still a page pixel,
+                 * and the partition `read = sent + box + same + diff_all` has to stay checkable. */
+                int sc = -1;
+                int claimed = 0;   /* rung 12o: inside a moved ask, so mv_* names this pixel already */
+                uint32_t mb;
+
+                /* Rung 12o: a session asked for a rect OUTSIDE the band (only the dialled box can be in
+                 * that state, because every other ask is at the band's own rows), and this pixel lies inside
+                 * it.  Classed by the same three corner words and the same `differs from the canvas` law the
+                 * box branch uses, so the two readings are the same measurement at two positions. */
+                for (mb = 0u; mb < GSLIVE_SH_N; mb++) {
+                    if (s_sh_ask_x1[mb] == 0) continue;            /* never asked */
+                    if (s_sh_ask_y0[mb] >= (int32_t)GSLIVE_SH_Y0
+                            && s_sh_ask_y1[mb] <= (int32_t)GSLIVE_SH_Y1) continue; /* asked IN the band */
+                    if ((int32_t)x >= s_sh_ask_x0[mb] && (int32_t)x < s_sh_ask_x1[mb]
+                            && (int32_t)y >= s_sh_ask_y0[mb] && (int32_t)y < s_sh_ask_y1[mb]) {
+                        claimed = 1;
+                        mv_box = mb;
+                        mv_tot++;
+                        if (v == GSQUAD_RED)        { mv_r++; mv_painted++; gslive_bbox(mv_bbox, x, y); }
+                        else if (v == GSQUAD_GREEN) { mv_g++; mv_painted++; gslive_bbox(mv_bbox, x, y); }
+                        else if (v == GSQUAD_BLUE)  { mv_b++; mv_painted++; gslive_bbox(mv_bbox, x, y); }
+                        else if (v == canvas[y * width + x]) mv_same++;
+                        else { mv_other++; mv_painted++; gslive_bbox(mv_bbox, x, y); }
+                        break;
+                    }
+                }
+                if (sc < 0 && !claimed) {
+                    /* 12j's aggregate keeps its original meaning -- corner colours off-box and NOT named by
+                     * any ask of this census -- so its bbox cannot merge an unknown writer with a dialled
+                     * one.  A corner word inside the moved rect is counted once, by mv_*. */
+                    if (v == GSQUAD_RED)               sc = 0;
+                    else if (v == GSQUAD_GREEN)        sc = 1;
+                    else if (v == GSQUAD_BLUE)         sc = 2;
+                    if (sc >= 0) {
+                        if (v == canvas[y * width + x]) sp_same++;
+                        else { sp_n[sc]++; gslive_bbox(sp_bbox[sc], x, y); }
+                    }
+                }
+            }
+            if (win_px && (int)x >= cx0 && (int)x < cx1 && (int)y >= cy0 && (int)y < cy1) {
+                /* Rung 6b's per-row tally, restricted to the client rect and keyed on the row rather
+                 * than on the band: the two reads have to be comparable frame to frame even though
+                 * the bands themselves are a read-stride detail of this file, not a property of the
+                 * picture.  A pixel equal to the canvas is either still untouched or has been put
+                 * BACK to the canvas, and telling those two apart is the whole question, so it is
+                 * answered by the row's count moving down and not by the pixel's colour. */
+                const uint32_t row = (uint32_t)((int)y - cy0);
+                if (row < PS2_SCREEN_HEIGHT) {
+                    if (v == canvas[y * width + x]) {
+                        s_live_cur_same[row]++;
+                        /* Rung 6c: what the page was put BACK to, colour by colour.  The ink
+                         * histogram below cannot see these -- they are the pixels that agree with
+                         * the canvas -- and they are the whole of the eraser's evidence trail. */
+                        for (k = 0u; k < cv_bins; k++) {
+                            if (cv_v[k] != v) continue;
+                            cv_n[k]++;
+                            gsread_box(cv_box[k], x, y);
+                            break;
+                        }
+                        if (k >= cv_bins) {
+                            if (cv_bins < GSLIVE_TOP) {
+                                cv_v[cv_bins] = v;
+                                cv_n[cv_bins] = 1u;
+                                cv_box[cv_bins][0] = cv_box[cv_bins][2] = (int)x;
+                                cv_box[cv_bins][1] = cv_box[cv_bins][3] = (int)y;
+                                cv_bins++;
+                            } else cv_rare++;
+                        }
+                    } else s_live_cur_ink[row]++;
+                }
+            }
+            if (v == canvas[y * width + x]) { same++; continue; }            diff_all++;
             gsread_box(all_box, x, y);
             if (v == GSLIVE_INK || v == GSLIVE_BG) { diff_console++; continue; }
             diff_ink++;
@@ -7800,6 +10030,11 @@ static void ps2_bench_gs_live_census(uint32_t frame)
         }
     }
     us = btron_render_perf_us() - us;
+    /* Rung 12u: replay D's captured lone group four times under four different PRIM sources.  It runs here,
+     * after this census's own page has been graded into the counters above and before `buf` goes back, so it
+     * cannot disturb any count the rows above print -- and it prints nothing, because a print would upload
+     * the console band between one variant's send and that variant's read. */
+    ps2_gslive_u_probe(buf, canvas, width);
     Ifree(buf);
 
     ps2_kprintf("[GSLIVE] win: client=%d,%d..%d,%d px=%u gl_layer=%d img_valid=%d visible=%d\n",
@@ -7807,10 +10042,10 @@ static void ps2_bench_gs_live_census(uint32_t frame)
                 w ? (int)w->gl_layer : -1, w ? (int)w->img_valid : -1,
                 w ? (int)w->visible : -1);
     ps2_kprintf("[GSLIVE] page: read=%u same=%u diff_all=%u console=%u ink=%u box=%u ctrl=%u "
-                "sent=%u %u us %u qw\n",
+                "shading=%u sent=%u %u us %u qw\n",
                 (unsigned int)read_px, (unsigned int)same, (unsigned int)diff_all,
                 (unsigned int)diff_console, (unsigned int)diff_ink, (unsigned int)box_px,
-                (unsigned int)ctrl, (unsigned int)sent,
+                (unsigned int)ctrl, (unsigned int)sh_px, (unsigned int)sent,
                 (unsigned int)us, (unsigned int)qw_sent);
     ps2_kprintf("[GSLIVE] boxes: all=%d,%d..%d,%d window=%d,%d..%d,%d in_win=%u control=%u/%u "
                 "%d,%d..%d,%d rare=%u\n",
@@ -7818,16 +10053,1647 @@ static void ps2_bench_gs_live_census(uint32_t frame)
                 win_box[0], win_box[1], win_box[2], win_box[3],
                 (unsigned int)diff_win, (unsigned int)ctrl, (unsigned int)GSLIVE_PX,
                 ctrl_box[0], ctrl_box[1], ctrl_box[2], ctrl_box[3], (unsigned int)rare);
+    /* The four hottest inks, each named ONCE.  The search has to seed itself on an UNPRINTED bin: it
+     * only ever compares a candidate against `best`, so starting `best` at bin 0 re-selects bin 0 on
+     * every pass from the second row onward whenever bin 0 is the hottest -- which, being the largest
+     * bin, it always is.  The rung then printed the same colour four times, and its own closing
+     * instruction ("read the ink colours and boxes above") had one colour to read.  That is the whole
+     * difference between "this page is one flat plate" and "this page is this plate plus these inks",
+     * and only the histogram can answer the second question. */
     for (k = 0u; k < 4u && k < bins; k++) {
+        int seeded = 0;
+
         best = 0u;
-        for (i = 1u; i < bins; i++)
-            if (!printed[i] && ink_n[i] > ink_n[best]) best = i;
+        for (i = 0u; i < bins; i++) {
+            if (printed[i]) continue;
+            if (!seeded || ink_n[i] > ink_n[best]) { best = i; seeded = 1; }
+        }
+        if (!seeded) break;
         printed[best] = 1;
         ps2_kprintf("[GSLIVE] ink: 0x%08x n=%u in=%u box=%d,%d..%d,%d\n",
                     (unsigned int)ink_v[best], (unsigned int)ink_n[best],
                     (unsigned int)ink_in[best],
                     ink_box[best][0], ink_box[best][1], ink_box[best][2], ink_box[best][3]);
     }
+
+    /* Rung 12a's and 12d's reading, printed where its counts can be checked against the certification
+     * above.  `painted` is the box minus the pixels that still hold their canvas value, and it is the
+     * denominator every reading needs: a triangle covers half its rect, so A's and B's 2,048-px boxes
+     * hold ~1,024 painted px and C/D/E's 1,920-px boxes ~960, and a threshold in whole pixels would
+     * call a half-drawn box a flat one.  A box is GRADIENT when a quarter of its painted px are none of
+     * its three corners: an interpolated triangle's interior is everything between its corners, so the
+     * field is most of the box and any threshold well under a half separates the two readings without
+     * needing to know how the rasteriser walks a span. */
+    {
+        char grad[16];
+        uint32_t n_grad = 0u, n_empty = 0u, n_flat = 0u, gn = 0u;
+        uint32_t b;
+
+        for (b = 0u; b < GSLIVE_SH_N; b++) {
+            const uint32_t painted = sh_tot[b] - sh_same[b];
+            const char *kind;
+            char win = '-';   /* for a flat box, the corner that won -- and since red is v0, green is
+                               * v1 and blue is v2, the same letter names WHICH VERTEX this shape's GS
+                               * drew with, the half of rung 12a's answer a packet cannot show. */
+
+            if (painted == 0u) {
+                kind = "lays NOTHING";
+                n_empty++;
+            } else if (sh_other[b] > painted / 4u) {
+                kind = "INTERPOLATES";
+                n_grad++;
+                if (gn + 1u < sizeof(grad)) grad[gn++] = (char)('A' + b);
+            } else {
+                win = (sh_r[b] >= sh_g[b] && sh_r[b] >= sh_b[b]) ? 'R'
+                    : ((sh_g[b] >= sh_b[b]) ? 'G' : 'B');
+                kind = "one FLAT colour";
+                n_flat++;
+            }
+            ps2_kprintf("[GSLIVE] shade %s: tot=%u painted=%u red=%u green=%u blue=%u other=%u "
+                        "canvas=%u -> %s %c\n", s_sh_label[b],
+                        (unsigned int)sh_tot[b], (unsigned int)painted,
+                        (unsigned int)sh_r[b], (unsigned int)sh_g[b], (unsigned int)sh_b[b],
+                        (unsigned int)sh_other[b], (unsigned int)sh_same[b],
+                        kind, win);
+        }
+        grad[gn] = '\0';
+        ps2_kprintf("[GSLIVE] shapes: recorder %u group(s) / %u refused, %u captured send(s),"
+                    " hand matrix %u sent / %u refused; %u gradient (%s), %u flat, %u empty\n",
+                    (unsigned int)s_sh_groups, (unsigned int)s_sh_refused,
+                    (unsigned int)s_cap_sends,
+                    (unsigned int)s_shape_sent, (unsigned int)s_shape_refused,
+                    (unsigned int)n_grad, grad,
+                    (unsigned int)n_flat, (unsigned int)n_empty);
+
+        /* Rung 12j -- WHERE, not how many.  The counts above grade a box as a gradient or a flat colour,
+         * and 12i's answer ("the variable is the frame's ORDER") only means shading if the flat boxes are
+         * flat AT THEIR OWN COORDINATES.  They did not look like that: box D came back `painted=1408`,
+         * its whole 88x16 rect, split red=1024 blue=384, and a 1,024-px red region inside an 88-wide box
+         * is a 64-wide full-height column, which no triangle in this census has.  Box B came back
+         * `painted=1920` of 2,048 in TWO colours, which is two triangles' coverage for one packet.  So
+         * the same walk now records the bounding box of each corner colour inside its box, and of the
+         * three corner words OUTSIDE every box, and this row prints both.
+         *
+         * `%c %u-%ux%u` is the x range and the number of rows that colour spans; a triangle's own corner
+         * colour spans the full 16 rows only at its wide end and a few rows at the apex, so a colour that
+         * spans 16 rows across a stripe of x is a rect, and the SOLID rows below name exactly that.  A
+         * box that never got its colour prints `%c n=0` rather than an invented range. */
+        {
+            static const char sp_chr[3] = { 'R', 'G', 'B' };
+            static const char *const sp_word[3] = { "red", "green", "blue" };
+            uint32_t b2, sp_all = 0u, sp_i;
+
+            for (b2 = 0u; b2 < GSLIVE_SH_N; b2++) {
+                ps2_kprintf("[GSLIVE] 12j %c:", s_sh_label[b2][0]);
+                for (col = 0u; col < 3u; col++) {
+                    const uint32_t cnt = (col == 0u) ? sh_r[b2] : ((col == 1u) ? sh_g[b2] : sh_b[b2]);
+
+                    if (cnt == 0u) {
+                        ps2_kprintf(" %c n=0", sp_chr[col]);
+                        continue;
+                    }
+                    ps2_kprintf(" %c %u-%ux%u n=%u", sp_chr[col],
+                                (unsigned int)sh_bbox[b2][col][0], (unsigned int)sh_bbox[b2][col][1],
+                                (unsigned int)(sh_bbox[b2][col][3] - sh_bbox[b2][col][2] + 1u),
+                                (unsigned int)cnt);
+                }
+                ps2_kprintf("\n");
+            }
+            /* A colour that fills its own bounding box solidly is not a corner of a triangle.  Quoted per
+             * box so the row that says `one FLAT colour` can be read against the SHAPE it was counted on:
+             * SOLID means the geometry is wrong, no SOLID row with a full box means the rasteriser laid a
+             * real triangle and only the interpolation failed. */
+            for (b2 = 0u; b2 < GSLIVE_SH_N; b2++) {
+                for (col = 0u; col < 3u; col++) {
+                    const uint32_t cnt = (col == 0u) ? sh_r[b2] : ((col == 1u) ? sh_g[b2] : sh_b[b2]);
+                    const uint32_t area = (sh_bbox[b2][col][1] - sh_bbox[b2][col][0] + 1u)
+                                        * (sh_bbox[b2][col][3] - sh_bbox[b2][col][2] + 1u);
+
+                    if (cnt >= area && cnt != 0u) {
+                        ps2_kprintf("[GSLIVE] 12j SOLID %c %s: x%u-%u y%u-%u n=%u fills its own box\n",
+                                    s_sh_label[b2][0], sp_word[col],
+                                    (unsigned int)sh_bbox[b2][col][0], (unsigned int)sh_bbox[b2][col][1],
+                                    (unsigned int)sh_bbox[b2][col][2], (unsigned int)sh_bbox[b2][col][3],
+                                    (unsigned int)cnt);
+                    }
+                }
+            }
+            for (sp_i = 0u; sp_i < 3u; sp_i++) sp_all += sp_n[sp_i];
+            ps2_kprintf("[GSLIVE] 12j spill off-box rows %u..%u: R=%u G=%u B=%u (equal-canvas %u)\n",
+                        (unsigned int)GSLIVE_SP_Y0, (unsigned int)GSLIVE_SP_Y1 - 1u,
+                        (unsigned int)sp_n[0], (unsigned int)sp_n[1], (unsigned int)sp_n[2],
+                        (unsigned int)sp_same);
+            for (sp_i = 0u; sp_i < 3u; sp_i++) {
+                if (sp_n[sp_i] == 0u) continue;
+                ps2_kprintf("[GSLIVE] 12j spill %s: x%u-%u y%u-%u n=%u\n", sp_word[sp_i],
+                            (unsigned int)sp_bbox[sp_i][0], (unsigned int)sp_bbox[sp_i][1],
+                            (unsigned int)sp_bbox[sp_i][2], (unsigned int)sp_bbox[sp_i][3],
+                            (unsigned int)sp_n[sp_i]);
+            }
+            ps2_kprintf("[GSLIVE] 12j verdict: %s\n",
+                        (sp_all == 0u)
+                          ? "nothing this rung laid is outside its own box, so a FLAT box is a SHADING "
+                              "answer and 12i's ORDER reading stands"
+                          : "corner-coloured ink landed off-box, so at least one triangle was rasterised "
+                              "somewhere other than its own rect -- the flat boxes are a GEOMETRY answer, "
+                              "not a shading one, and 12i's grid has to be re-read that way");
+        }
+
+        /* Rung 12k -- the band as a PICTURE, because 12j's numbers were being read three ways in one
+         * conversation.  A bounding box says how far a colour reached; only a picture says whether it
+         * reached as a triangle's hypotenuse or as the straight edge of a rect, and that distinction is
+         * what separates "the interpolator never ran" from "the geometry landed wrong".  Each box gets
+         * the corners it ASKED for on the header line, so the reader can hold the picture up against the
+         * triangle it should be: v0 red at the box's left on the bottom row, v1 green at the right on the
+         * same row, v2 blue at the apex on the band's first row.  `want` is what was sent, not what was
+         * read back -- 12a's certification is that the packet left, so anything else on the picture is the
+         * GS's answer to it.
+         *
+         * One character per FOUR pixels of x, one line per band row: a 128-px box is 32 columns and the
+         * whole band prints in six headers and 96 rows.  The resolution is the compromise -- at one char
+         * per pixel a 128-px line is 137 chars and wraps the 80-col console, and at 8 px/col a triangle's
+         * 1-px-per-row hypotenuse disappears.  At 4 px a column is a span of 4 rows of the hypotenuse, so
+         * a slope still reads as a slope. */
+        {
+            uint32_t b3, pc;
+            char pic[GSLIVE_PIC_COLS + 1];
+
+            ps2_kprintf("[GSLIVE] 12k mask: R red  G green  B blue  Y=R+G  M=R+B  C=G+B  W all three\n");
+            ps2_kprintf("[GSLIVE] 12k f = field only; lowercase r g y b m c w = the same, in a cell\n");
+            ps2_kprintf("[GSLIVE]     that also holds interpolated field ink (a ramp's edge)\n");
+            ps2_kprintf("[GSLIVE] 12k '.' = nothing but the canvas here; a space = past this box\n");
+            for (b3 = 0u; b3 < GSLIVE_SH_N; b3++) {
+                const uint32_t painted = sh_tot[b3] - sh_same[b3];
+                const char *kind = (painted == 0u) ? "NOTHING"
+                                   : ((sh_other[b3] > painted / 4u) ? "INTERP" : "FLAT");
+                const uint32_t cols = (s_sh_x1[b3] - s_sh_x0[b3]) >> GSLIVE_PIC_SHIFT;
+                /* Rung 12n makes `want` mean what it always claimed to mean -- the corners that were SENT --
+                 * by reading them off the ask rather than off the read window.  A box with no session ask
+                 * falls back to its window, which is what every box was until this rung, so the five rows
+                 * that are not dialled keep the header 12k printed. */
+                const uint32_t ax0 = (s_sh_ask_x1[b3] != 0u)
+                                       ? (uint32_t)s_sh_ask_x0[b3] : s_sh_x0[b3];
+                const uint32_t ax1 = (s_sh_ask_x1[b3] != 0u)
+                                       ? (uint32_t)s_sh_ask_x1[b3] : s_sh_x1[b3];
+                const uint32_t ay0 = (s_sh_ask_y1[b3] != 0u)
+                                       ? (uint32_t)s_sh_ask_y0[b3] : (uint32_t)GSLIVE_SH_Y0;
+                const uint32_t ay1 = (s_sh_ask_y1[b3] != 0u)
+                                       ? (uint32_t)s_sh_ask_y1[b3] - 1u
+                                       : (uint32_t)GSLIVE_SH_Y1 - 1u;
+                const int ask_moved = (ax0 != s_sh_x0[b3] || ax1 != s_sh_x1[b3]
+                                        || ay0 != (uint32_t)GSLIVE_SH_Y0
+                                        || ay1 != (uint32_t)GSLIVE_SH_Y1 - 1u);
+
+                ps2_kprintf("[GSLIVE] 12k %c: x%u-%u %s  want R(%u,%u) G(%u,%u) B(%u,%u)\n",
+                            s_sh_label[b3][0], (unsigned int)s_sh_x0[b3],
+                            (unsigned int)s_sh_x1[b3] - 1u, kind,
+                            (unsigned int)ax0, (unsigned int)ay1,
+                            (unsigned int)ax1 - 1u, (unsigned int)ay1,
+                            (unsigned int)((ax0 + ax1) / 2u), (unsigned int)ay0);
+                if (ask_moved) {
+                    ps2_kprintf("[GSLIVE] 12k %c: ASKED x%u-%u y%u-%u, READ at x%u-%u y%u-%u\n",
+                                s_sh_label[b3][0], (unsigned int)ax0, (unsigned int)ax1 - 1u,
+                                (unsigned int)ay0, (unsigned int)ay1,
+                                (unsigned int)s_sh_x0[b3], (unsigned int)s_sh_x1[b3] - 1u,
+                                (unsigned int)GSLIVE_SH_Y0, (unsigned int)GSLIVE_SH_Y1 - 1u);
+                }
+                for (pr = 0u; pr < GSLIVE_PIC_ROWS; pr++) {
+                    for (pc = 0u; pc < cols; pc++) {
+                        const uint32_t m = s_band_pic[b3][pr][pc];
+
+                        pic[pc] = (m & 15u) ? s_pic_chr[m & 15u]
+                                            : ((m & GSLIVE_PIC_CANVAS) ? '.' : ' ');
+                    }
+                    pic[cols] = '\0';
+                    ps2_kprintf("[GSLIVE] 12k %c y%u %s\n", s_sh_label[b3][0],
+                                (unsigned int)(GSLIVE_SH_Y0 + pr), pic);
+                }
+            }
+        }
+
+        /* Rung 12l's own reading -- the SHAPE rows, because the colour law cannot see a fixed box B (a
+         * flat triangle has no field, so it still grades FLAT) and 12k's pictures cannot be diffed
+         * between runs by eye.  `top=` is painted px in the band's first row: 12k measured D with its
+         * whole 88-px top edge laid, B with its whole 128, and A with exactly one pixel (the apex).
+         * `bot=` is the last row, which 12k showed as the ramp boxes' unwritten base -- it is printed
+         * because a rect that reaches y575 and a triangle that stops at y574 is itself a difference the
+         * next rung may need. */
+        {
+            static const char *const v_tag[4] = {
+                "PRE IS THE LATCH", "PRE FIXED D ONLY", "PRE FIXED B, NOT D", "PRE IS NOT THE VARIABLE"
+            };
+            static const char *const v_body[4][2] = {
+                { "D and B are both triangles now: the register D's tag wrote",
+                  "carried to the next PRE=1 group -- the latch is the cause" },
+                { "only D moved: B kept its rect with TRI already in the",
+                  "register, so B's flatness is IIP=0 or position, not PRE" },
+                { "only B moved: D still laid its rect with its own PRIM",
+                  "honoured, so PRE is not the front-of-frame variable" },
+                { "neither moved -- but this rung cannot fire unless the inherited",
+                  "PRIM differs from TRI+IIP, and 12m tests the tag field directly" }
+            };
+            uint32_t b4;
+            const uint32_t a_at = s_sh_sess_first[0u], d_at = s_sh_sess_first[3u];
+            const int d_tri = (sh_top[3u] <= 4u);
+            const int b_tri = (sh_top[1u] <= 4u);
+            const int case_i = (d_tri && b_tri) ? 0 : ((d_tri && !b_tri) ? 1
+                                                   : ((!d_tri && b_tri) ? 2 : 3));
+            /* Rung 12n retires this dial, and a retired dial must not keep voting: 12l's four-way answer
+             * is only this run's answer if D went out patched AND asked at its whole window.  With either
+             * changed, the shape rows above are 12n's evidence, not 12l's, and the verdict says SKIP. */
+            const int armed = (s_pre0_box == 3u && s_prim_pt_box == GSLIVE_SH_N
+                                && s_sh_ask_x0[3u] == (int32_t)s_sh_x0[3u]
+                                && s_sh_ask_x1[3u] == (int32_t)s_sh_x1[3u]
+                                && s_sh_ask_x0[1u] == (int32_t)s_sh_x0[1u]
+                                && s_sh_ask_x1[1u] == (int32_t)s_sh_x1[1u]);
+
+            ps2_kprintf("[GSLIVE] 12l dial %s: D's tag bit 46 PRE 1->0, so its own PRIM is\n",
+                        armed ? "ARMED" : "OFF");
+            ps2_kprintf("[GSLIVE]   honoured; ps2sdk gif_tags.h names that bit GIF_PRE_ENABLE =\n");
+            ps2_kprintf("[GSLIVE]   \"Disable PRIM field output\", so a PRE=1 group draws under the\n");
+            ps2_kprintf("[GSLIVE]   LAST tag's PRIM.  B and A keep PRE=1: B is the latch cell.\n");
+            ps2_kprintf("[GSLIVE]   12k's baseline: D laid top=88/88, B laid top=128/128, A top=1.\n");
+            ps2_kprintf("[GSLIVE] 12l shape (row %u = a rect's whole width, a triangle's 1-2 px):\n",
+                        (unsigned int)GSLIVE_SH_Y0);
+            for (b4 = 0u; b4 < GSLIVE_SH_N; b4++) {
+                const uint32_t w = s_sh_x1[b4] - s_sh_x0[b4];
+                const int kind = (sh_top[b4] <= 4u) ? 0 : ((sh_top[b4] * 2u >= w) ? 2 : 1);
+
+                ps2_kprintf("[GSLIVE] 12l %c: top=%u/%u bot=%u/%u -> %s\n", s_sh_label[b4][0],
+                            (unsigned int)sh_top[b4], (unsigned int)w,
+                            (unsigned int)sh_bot[b4], (unsigned int)w, gslive_sh_kind[kind]);
+            }
+            if (a_at < GSLIVE_CAP_SENDS && d_at < GSLIVE_CAP_SENDS) {
+                const uint64_t hx = s_cap_send[d_at][0] ^ s_cap_send[a_at][0];
+
+                ps2_kprintf("[GSLIVE] 12l tag check: D PRE=%u PRIM=0x%02x, A PRE=%u PRIM=0x%02x\n",
+                            (unsigned int)gslive_pre_of(s_cap_send[d_at]),
+                            (unsigned int)gslive_prim_of(s_cap_send[d_at]),
+                            (unsigned int)gslive_pre_of(s_cap_send[a_at]),
+                            (unsigned int)gslive_prim_of(s_cap_send[a_at]));
+                if (armed) {
+                    ps2_kprintf("[GSLIVE] 12l tag xor: hi=0x%08x lo=0x%08x -> %s\n",
+                                (unsigned int)(hx >> 32), (unsigned int)(hx & 0xFFFFFFFFu),
+                                (hx == ((uint64_t)1u << 46)) ? "exactly bit 46, nothing else moved"
+                                                             : "MORE THAN bit 46 moved");
+                } else {
+                    /* With the dial off, neither tag is patched and this xor says nothing about PRE -- it
+                     * is the two boxes' ordinary difference, and printing it as though 12l had fired is how
+                     * a retired rung got read as a live measurement once.  The check row above still stands:
+                     * it is what certifies the dials really are off. */
+                    ps2_kprintf("[GSLIVE] 12l tag xor: not printed -- the dial is off, so this xor is\n");
+                    ps2_kprintf("[GSLIVE]   not 12l's evidence; D's PRE above just says unpatched\n");
+                }
+            } else {
+                ps2_kprintf("[GSLIVE] 12l tag check: SKIP -- D's or A's group was not captured\n");
+            }
+            if (!armed) {
+                ps2_kprintf("[GSLIVE] 12l verdict: SKIP -- 12l's dial is not the one armed here (D's\n");
+                ps2_kprintf("[GSLIVE]   PRE patch is off, or its ask moved), so the shape rows above are\n");
+                ps2_kprintf("[GSLIVE]   12n's evidence.  12l measured NO on 2026-10-18, conditionally.\n");
+            } else {
+                ps2_kprintf("[GSLIVE] 12l verdict: %s\n", v_tag[case_i]);
+                ps2_kprintf("[GSLIVE]   %s\n", v_body[case_i][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", v_body[case_i][1]);
+            }
+        }
+
+        /* Rung 12m's reading, and the reason it exists is that 12l's verdict has a hole in it.  Clearing
+         * PRE changes what a group draws only if the PRIM register the group would otherwise inherit
+         * DIFFERS from the TRI+IIP its tag carries -- and no rung here ever read that register, so "PRE is
+         * not the variable" is proven against a latch that may already have held the right value.  12m
+         * closes the hole by making the tag's ask WRONG on purpose: box D goes out PRE=0 with its whole
+         * PRIM field zeroed, which the SDK's own op table reads as POINT, flat, untextured, context 1, no
+         * FIX.  A tag that asks for points and lays points means the field rules and 12l's block was laid
+         * by TRI+IIP, so the flat boxes are a VERTEX or CLIP answer; a tag that asks for points and still
+         * lays the same 88x16 block means no PRIM field of this group reaches the rasteriser, and the next
+         * rung has to write the register itself.  Either way the diagnosis narrows, which is what the rung
+         * was designed to buy.
+         *
+         * B is no longer a propagation cell, because 12m's answer does not depend on it: it is the control
+         * that says the census has not moved, and if it stops being the RECT 12l measured then neither
+         * verdict can be read from this run.  The verdict is also gated on the captured tag decoding as
+         * patched, so a patch that never left the EE cannot come back as a measurement. */
+        {
+            static const char *const m_tag[3] = {
+                "THE TAG'S PRIM FIELD RULES", "THE TAG'S PRIM FIELD IS IGNORED", "CONTROL MOVED: READ NOTHING"
+            };
+            static const char *const m_body[3][2] = {
+                { "an ask for POINT laid points, so 12l's block WAS laid by TRI+IIP:",
+                  "the flat boxes are a vertex/clip answer, not a primitive one" },
+                { "an ask for POINT laid the same block, so this group's tag PRIM field",
+                  "is not what the GS rasterises by -- write the register and re-read" },
+                { "B is not the RECT that 12l measured, so this census is not 12l's and",
+                  "neither answer above can be taken from these rows" }
+            };
+            const uint32_t wd = s_sh_x1[3u] - s_sh_x0[3u];
+            const uint32_t wb = s_sh_x1[1u] - s_sh_x0[1u];
+            const uint32_t dm = s_sh_sess_first[3u], am = s_sh_sess_first[0u];
+            const int have_dm = (dm < GSLIVE_CAP_SENDS && s_cap_send_words[dm] != 0u);
+            const int have_am = (am < GSLIVE_CAP_SENDS && s_cap_send_words[am] != 0u);
+            const uint32_t dpre = have_dm ? gslive_pre_of(s_cap_send[dm]) : 2u;
+            const uint32_t dprim = have_dm ? gslive_prim_of(s_cap_send[dm]) : 0x7FFu;
+            /* Two things must hold for this row to be 12m's answer: the tag that left the EE is the tag
+             * 12m patched (measured, not assumed), AND the geometry the patched tag asked for is the box
+             * the shape numbers are read across -- rung 12n narrows exactly that, so 12m's "same block"
+             * comparison has to stop claiming once the ask and the window are different things. */
+            const int prim_dial = (s_prim_pt_box == 3u);
+            const int same_geo = (s_sh_ask_x0[3u] == (int32_t)s_sh_x0[3u]
+                                   && s_sh_ask_x1[3u] == (int32_t)s_sh_x1[3u]);
+            const int certified = (have_dm && dpre == 0u && dprim == 0u
+                                    && prim_dial && same_geo);
+            const int scattered = (sh_top[3u] * 2u <= wd);
+            const int b_stable = (sh_top[1u] >= wb);
+            const int case_m = !certified ? -1 : (!b_stable ? 2 : (scattered ? 0 : 1));
+            uint32_t b5;
+
+            ps2_kprintf("[GSLIVE] 12m dial %s: D's tag ALSO has PRIM (bits 47-57) zeroed, so the\n",
+                        prim_dial ? "ARMED" : "OFF");
+            ps2_kprintf("[GSLIVE]   authoritative ask in this frame is POINT -- flat, untextured,\n");
+            ps2_kprintf("[GSLIVE]   ctx1, no FIX.  NLOOP, EOP, FLG, NREG, the REGS list and all six\n");
+            ps2_kprintf("[GSLIVE]   vertex words are the recorder's own, unchanged from 12l.\n");
+            ps2_kprintf("[GSLIVE]   12l's xor row now reads MORE THAN bit 46, and that is this field.\n");
+            ps2_kprintf("[GSLIVE]   12l laid D as top=88/88 bot=88/88 painted=1408 nofield: the ask\n");
+            ps2_kprintf("[GSLIVE]   to compare against is TRI+IIP -> block, POINT -> ?\n");
+            ps2_kprintf("[GSLIVE] 12m shape and field, two words because one hid that C and E each\n");
+            ps2_kprintf("[GSLIVE]   lay a solid rect AND a gradient triangle in the same box:\n");
+            for (b5 = 0u; b5 < GSLIVE_SH_N; b5++) {
+                const uint32_t w5 = s_sh_x1[b5] - s_sh_x0[b5];
+                const uint32_t p5 = sh_tot[b5] - sh_same[b5];
+                const int kind = (sh_top[b5] <= 4u) ? 0 : ((sh_top[b5] * 2u >= w5) ? 2 : 1);
+                const int fld = (p5 != 0u && sh_other[b5] > p5 / 4u);
+
+                ps2_kprintf("[GSLIVE] 12m %c: top=%u/%u painted=%u %s %s\n", s_sh_label[b5][0],
+                            (unsigned int)sh_top[b5], (unsigned int)w5, (unsigned int)p5,
+                            gslive_sh_kind[kind], fld ? "FIELD" : "nofield");
+            }
+            if (have_dm && have_am) {
+                ps2_kprintf("[GSLIVE] 12m tag decode: D PRE=%u PRIM=0x%03x, A PRE=%u PRIM=0x%03x\n",
+                            (unsigned int)dpre, (unsigned int)dprim,
+                            (unsigned int)gslive_pre_of(s_cap_send[am]),
+                            (unsigned int)gslive_prim_of(s_cap_send[am]));
+            } else {
+                ps2_kprintf("[GSLIVE] 12m tag decode: SKIP -- D's or A's group was not captured\n");
+            }
+            if (case_m < 0) {
+                ps2_kprintf("[GSLIVE] 12m verdict: SKIP -- this run is not 12m's run: the dial is off or\n");
+                ps2_kprintf("[GSLIVE]   the tag that left is not the tag it patched, or rung 12n moved the\n");
+                ps2_kprintf("[GSLIVE]   geometry the shape rows measure.  12m measured IGNORED.\n");
+            } else {
+                ps2_kprintf("[GSLIVE] 12m verdict: %s\n", m_tag[case_m]);
+                ps2_kprintf("[GSLIVE]   %s\n", m_body[case_m][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", m_body[case_m][1]);
+            }
+        }
+
+        /* Rung 12n's own reading -- WHOSE ink.  12l changed one bit of box D's tag and 12m changed the
+         * tag's whole primitive ask, and both times the captured bytes proved the patch left the EE and D
+         * laid the same 88x16 block, 1408 px, no field.  Two of the three things a tag can say about a
+         * transfer have therefore been edited on purpose without moving the picture, which leaves exactly
+         * one assumption untested since 12i: that the block in D's window is D's GROUP's ink.  It may
+         * belong to another writer -- the poster that sets the environment, the AD stream, the desktop's
+         * own upload -- and if so the ORDER/PLACE/SESSION grid of 12h and 12i and both of 12l/12m's
+         * negatives were read off somebody else's pixels.
+         *
+         * The dial is the geometry: D is asked a 24-px triangle at the LEFT edge of its own 88-px window
+         * and read across the whole window, so the ask and the ruler differ by coordinate and painted px
+         * can be counted at an x that was never asked for.  Three readings, and the third one is the one
+         * that costs a new rung either way:
+         *   out=0 and ink present -- the ink moved with the ask, so the block IS this group's, and the
+         *     flat full-width box is this group's coverage of its own bounding box;
+         *   the 88-px top edge still laid -- the block held while the ask moved, so it is NOT this group's
+         *     ink and the tag rungs have been grading a writer that was never the recorder;
+         *   anything in between -- two writers in one box, and 12k's picture is the evidence.
+         * B is 12m's control unchanged: it must still lay its whole 128-px top edge, or this census is not
+         * 12k's census with one number changed and none of the readings above can be taken from it. */
+        {
+            static const char *const n_tag[5] = {
+                "THE INK FOLLOWS THE ASK", "THE BLOCK HELD: NOT THIS GROUP'S INK",
+                "CONTROL MOVED: READ NOTHING", "SPLIT: TWO WRITERS IN ONE BOX",
+                "THE INK VANISHED WITH THE WIDE ASK"
+            };
+            static const char *const n_body[5][2] = {
+                { "asked 24 px, laid only 24: box D's block is this recorder group's",
+                  "rasterisation, and the flat box is its OWN bbox -- a setup answer" },
+                { "asked 24 px, laid the same 88-px block: that ink is another writer's",
+                  "and 12i-12m read their tag answers off pixels this group never laid" },
+                { "B is not the RECT 12m measured, so the census itself moved and",
+                  "nothing here can say whose pixels D's window holds" },
+                { "some of the ink followed the ask and some of it stayed: two senders",
+                  "share box D, and 12k's picture of it is what to read next" },
+                { "the narrowed ask laid nothing where the wide ask laid 1408 px, so the",
+                  "ask does rule -- and a wide ask is what turns it into a block" }
+            };
+            const uint32_t wd = s_sh_x1[3u] - s_sh_x0[3u];
+            const uint32_t wb = s_sh_x1[1u] - s_sh_x0[1u];
+            const uint32_t pd = sh_tot[3u] - sh_same[3u];
+            const uint32_t aw = (s_sh_ask_x1[3u] > s_sh_ask_x0[3u])
+                                  ? (uint32_t)(s_sh_ask_x1[3u] - s_sh_ask_x0[3u]) : 0u;
+            const int dialled = (aw != 0u && aw < wd);
+            /* Rung 12o takes this box's ask out of the band, and 12n's law -- painted px at an x never
+             * asked for, measured across the window the group was asked to fill -- only means what 12n
+             * measured while the ask is still IN the band.  out= then reads 1408 simply because every band
+             * row is a row that was never asked, which is 12o's evidence, not a split. */
+            const int in_band = (s_sh_ask_y0[3u] == (int32_t)GSLIVE_SH_Y0
+                                    && s_sh_ask_y1[3u] == (int32_t)GSLIVE_SH_Y1);
+            const int b_stable = (sh_top[1u] >= wb);
+            const int confined = (sh_outside[3u] == 0u);
+            const int block_kept = (sh_top[3u] * 2u >= wd);
+            int case_n;
+            uint32_t b6;
+
+            if (!dialled || !in_band) {
+                case_n = -1;
+            } else if (!b_stable) {
+                case_n = 2;
+            } else if (pd == 0u) {
+                case_n = 4;
+            } else if (confined) {
+                case_n = 0;
+            } else if (block_kept) {
+                case_n = 1;
+            } else {
+                case_n = 3;
+            }
+
+            ps2_kprintf("[GSLIVE] 12n dial: box D is ASKED x%u-%u, %u px wide (apex %u), and READ\n",
+                        (unsigned int)s_sh_ask_x0[3u], (unsigned int)s_sh_ask_x1[3u] - 1u,
+                        (unsigned int)aw,
+                        (unsigned int)(((uint32_t)s_sh_ask_x0[3u]
+                                        + (uint32_t)s_sh_ask_x1[3u]) / 2u));
+            ps2_kprintf("[GSLIVE]   across x%u-%u, %u px, because its window is the ruler.  Both tag\n",
+                        (unsigned int)s_sh_x0[3u], (unsigned int)s_sh_x1[3u] - 1u, (unsigned int)wd);
+            ps2_kprintf("[GSLIVE]   asked rows y%u-%u, band rows y%u-%u%s\n",
+                        (unsigned int)s_sh_ask_y0[3u], (unsigned int)s_sh_ask_y1[3u] - 1u,
+                        (unsigned int)GSLIVE_SH_Y0, (unsigned int)GSLIVE_SH_Y1 - 1u,
+                        in_band ? "" : "  <- 12o moved it");
+            ps2_kprintf("[GSLIVE]   dials are OFF, so the ask is the one thing that moved since 12k,\n");
+            ps2_kprintf("[GSLIVE]   which laid D top=88/%u painted=1408 RECT nofield at the wide ask.\n",
+                        (unsigned int)wd);
+            ps2_kprintf("[GSLIVE]   out= counts painted px in the window at an x never asked for; it\n");
+            ps2_kprintf("[GSLIVE]   is 0 wherever ask == window, so only a dialled box can show it.\n");
+            ps2_kprintf("[GSLIVE] 12n rows: ask span, painted px in the top row, painted px, out=:\n");
+            for (b6 = 0u; b6 < GSLIVE_SH_N; b6++) {
+                const uint32_t w6 = s_sh_x1[b6] - s_sh_x0[b6];
+                const uint32_t p6 = sh_tot[b6] - sh_same[b6];
+                const int kind = (sh_top[b6] <= 4u) ? 0 : ((sh_top[b6] * 2u >= w6) ? 2 : 1);
+                const int fld = (p6 != 0u && sh_other[b6] > p6 / 4u);
+                const uint32_t q0 = (s_sh_ask_x1[b6] != 0u)
+                                      ? (uint32_t)s_sh_ask_x0[b6] : s_sh_x0[b6];
+                const uint32_t q1 = (s_sh_ask_x1[b6] != 0u)
+                                      ? (uint32_t)s_sh_ask_x1[b6] : s_sh_x1[b6];
+
+                ps2_kprintf("[GSLIVE] 12n %c: ask %u-%u top=%u/%u px=%u out=%u %s %s\n",
+                            s_sh_label[b6][0], (unsigned int)q0, (unsigned int)q1 - 1u,
+                            (unsigned int)sh_top[b6], (unsigned int)w6, (unsigned int)p6,
+                            (unsigned int)sh_outside[b6], gslive_sh_kind[kind],
+                            fld ? "FIELD" : "nofield");
+            }
+            ps2_kprintf("[GSLIVE] 12n inside the ask: %u of D's %u painted px.  The asked bbox is\n",
+                        (unsigned int)(pd - sh_outside[3u]), (unsigned int)pd);
+            ps2_kprintf("[GSLIVE]   %u px (%u wide x %u rows): that many means the bbox was FILLED,\n",
+                        (unsigned int)(aw * (uint32_t)GSLIVE_PIC_ROWS), (unsigned int)aw,
+                        (unsigned int)GSLIVE_PIC_ROWS);
+            ps2_kprintf("[GSLIVE]   half of it (%u px) means a triangle, 0 means the ink is elsewhere.\n",
+                        (unsigned int)(aw * (uint32_t)GSLIVE_PIC_ROWS / 2u));
+            if (case_n < 0) {
+                ps2_kprintf("[GSLIVE] 12n verdict: SKIP -- this run does not hold 12n's condition (D is\n");
+                ps2_kprintf("[GSLIVE]   asked across its whole window, or 12o moved its ask out of the\n");
+                ps2_kprintf("[GSLIVE]   band), so out= is 12o's reading, not a split.  12n measured\n");
+                ps2_kprintf("[GSLIVE]   THE BLOCK HELD on 2026-10-18, eight censuses, both runs.\n");
+            } else {
+                ps2_kprintf("[GSLIVE] 12n verdict: %s\n", n_tag[case_n]);
+                ps2_kprintf("[GSLIVE]   %s\n", n_body[case_n][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", n_body[case_n][1]);
+            }
+        }
+
+        /* Rung 12o's own reading -- WHERE this group's ink goes, and whether the ask is even the ask.
+         *
+         * 12n narrowed D's ask to 24 px at the left of its own 88-px window and the block stayed
+         * byte-for-byte the same, so a group's geometry joined PRE (12l) and its PRIM field (12m) as a third
+         * input that does not move this picture.  Three answers of "no" in a row are a suspicious coincidence
+         * unless the thing being measured has one property none of the rungs tested: it was never this
+         * group's to move.  So this rung stops dialling inside the band and moves D's ask OUT of it -- the
+         * same 24x16 triangle, 16 rows lower, at rows the band branch never reads -- and asks two questions
+         * that can now be answered separately: did the band's block go away when the group left the band, and
+         * did ink arrive inside the rect the packet asked for?  The four combinations are four different
+         * diagnoses, which is why both halves are needed rather than the one 12n read.
+         *
+         * The third row is the rung's insurance: the captured group's own XYZ2 words are decoded by the
+         * inverse of the encoder this file uses, so "the ask" is certified as bytes that left the EE rather
+         * than as a C argument.  If the decoded corners differ from the ask, the geometry was rewritten
+         * between the session and the packet and no verdict below can be taken from this run -- that itself
+         * would be the finding, and it is why the rows print both. */
+        {
+            static const char *const o_tag[5] = {
+                "Y IS HONOURED: BAND EMPTIED, INK LANDED",
+                "TWO WRITERS: INK LANDED, BAND BLOCK STAYED",
+                "THIS GROUP DRAWS NOTHING: no ink landed",
+                "BAND EMPTIED, NO INK: read 12j's spill bbox",
+                "CONTROL MOVED: READ NOTHING"
+            };
+            static const char *const o_body[5][2] = {
+                { "the block followed the ask in y and not in x, so an x-specific",
+                  "override (clip, clamp, re-derived x) is what 12n was hiding" },
+                { "this group's ink is in the asked rect and the band block is a",
+                  "different writer's: the census graded a stranger's pixels" },
+                { "nothing landed in the asked rect and the band is unchanged: no",
+                  "vertex of this group rasterises, so its stream is the dead one" },
+                { "the ask rules and the answer is emptiness -- the ink went",
+                  "somewhere this rung did not name; 12j's bbox is next" },
+                { "B is not the RECT 12k measured, so the census moved and",
+                  "neither reading above can be attributed to this dial" }
+            };
+            const uint32_t od = s_sh_sess_first[3u];
+            const int have_d = (od < GSLIVE_CAP_SENDS && s_cap_send_words[od] >= 8u);
+            const int nreg_d = have_d ? (int)gslive_nreg_of(s_cap_send[od]) : 0;
+            const int32_t vx0 = have_d ? gslive_xyz_axis(s_cap_send[od][3], 0) : -2048;
+            const int32_t vy0 = have_d ? gslive_xyz_axis(s_cap_send[od][3], 1) : -2048;
+            const int32_t vx1 = have_d ? gslive_xyz_axis(s_cap_send[od][5], 0) : -2048;
+            const int32_t vy1 = have_d ? gslive_xyz_axis(s_cap_send[od][5], 1) : -2048;
+            const int32_t vx2 = have_d ? gslive_xyz_axis(s_cap_send[od][7], 0) : -2048;
+            const int32_t vy2 = have_d ? gslive_xyz_axis(s_cap_send[od][7], 1) : -2048;
+            const int sent_ok = (have_d && nreg_d == 2
+                                    && vx0 == s_sh_ask_x0[3u]
+                                    && vy0 == s_sh_ask_y1[3u] - 1
+                                    && vx1 == s_sh_ask_x1[3u] - 1
+                                    && vy1 == s_sh_ask_y1[3u] - 1
+                                    && vx2 == (s_sh_ask_x0[3u] + s_sh_ask_x1[3u]) / 2
+                                    && vy2 == s_sh_ask_y0[3u]);
+            const uint32_t wb_o = s_sh_x1[1u] - s_sh_x0[1u];
+            const uint32_t pd_o = sh_tot[3u] - sh_same[3u];
+            const int dialled = (mv_box < GSLIVE_SH_N);
+            const int b_stable = (sh_top[1u] >= wb_o);
+            const int block_gone = (pd_o == 0u);
+            const int ink_found = (mv_painted != 0u);
+            int case_o;
+
+            if (!dialled || !sent_ok) case_o = -1;
+            else if (!b_stable) case_o = 4;
+            else if (block_gone && ink_found) case_o = 0;
+            else if (ink_found) case_o = 1;
+            else if (!block_gone) case_o = 2;
+            else case_o = 3;
+
+            ps2_kprintf("[GSLIVE] 12o dial: D's ask is x%u-%u y%u-%u -- below the band (y%u-%u),\n",
+                        (unsigned int)s_sh_ask_x0[3u], (unsigned int)s_sh_ask_x1[3u] - 1u,
+                        (unsigned int)s_sh_ask_y0[3u], (unsigned int)s_sh_ask_y1[3u] - 1u,
+                        (unsigned int)GSLIVE_SH_Y0, (unsigned int)GSLIVE_SH_Y1 - 1u);
+            ps2_kprintf("[GSLIVE]   inside the spill window (%u-%u), same 24x16 triangle as 12n, and\n",
+                        (unsigned int)GSLIVE_SP_Y0, (unsigned int)GSLIVE_SP_Y1 - 1u);
+            ps2_kprintf("[GSLIVE]   both tag dials off.  Two questions: did the band block go, and did\n");
+            ps2_kprintf("[GSLIVE]   ink arrive in the asked rect.  12n's baseline: painted=1408 RECT.\n");
+            ps2_kprintf("[GSLIVE] 12o packet: D's group NREG=%u words=%u; XYZ2 at 3/5/7 decoded as\n",
+                        (unsigned int)nreg_d,
+                        (unsigned int)(have_d ? s_cap_send_words[od] : 0u));
+            ps2_kprintf("[GSLIVE]   (field >> 4) - 2048, the encoder's own law inverted:\n");
+            ps2_kprintf("[GSLIVE] 12o got v0=(%d,%d) v1=(%d,%d) v2=(%d,%d)\n",
+                        (int)vx0, (int)vy0, (int)vx1, (int)vy1, (int)vx2, (int)vy2);
+            ps2_kprintf("[GSLIVE] 12o ask v0=(%d,%d) v1=(%d,%d) v2=(%d,%d) -> %s\n",
+                        (int)s_sh_ask_x0[3u], (int)s_sh_ask_y1[3u] - 1,
+                        (int)s_sh_ask_x1[3u] - 1, (int)s_sh_ask_y1[3u] - 1,
+                        (int)((s_sh_ask_x0[3u] + s_sh_ask_x1[3u]) / 2), (int)s_sh_ask_y0[3u],
+                        sent_ok ? "PACKET == ASK" : "PACKET DIFFERS: SKIP");
+            ps2_kprintf("[GSLIVE] 12o band D: top=%u/%u painted=%u out=%u  <- 12n laid 1408 here\n",
+                        (unsigned int)sh_top[3u], (unsigned int)(s_sh_x1[3u] - s_sh_x0[3u]),
+                        (unsigned int)pd_o, (unsigned int)sh_outside[3u]);
+            if (dialled) {
+                const uint32_t mv_area = ((uint32_t)(s_sh_ask_x1[mv_box] - s_sh_ask_x0[mv_box]))
+                                       * ((uint32_t)(s_sh_ask_y1[mv_box] - s_sh_ask_y0[mv_box]));
+
+                ps2_kprintf("[GSLIVE] 12o moved %c: tot=%u/%u painted=%u R=%u G=%u B=%u field=%u\n",
+                            s_sh_label[mv_box][0], (unsigned int)mv_tot, (unsigned int)mv_area,
+                            (unsigned int)mv_painted, (unsigned int)mv_r, (unsigned int)mv_g,
+                            (unsigned int)mv_b, (unsigned int)mv_other);
+                ps2_kprintf("[GSLIVE]   same-as-canvas there: %u of %u px (ink %u + field %u)\n",
+                            (unsigned int)mv_same, (unsigned int)mv_tot,
+                            (unsigned int)(mv_r + mv_g + mv_b), (unsigned int)mv_other);
+                if (mv_painted != 0u) {
+                    ps2_kprintf("[GSLIVE] 12o moved ink bbox: x%u-%u y%u-%u\n",
+                                (unsigned int)mv_bbox[0], (unsigned int)mv_bbox[1],
+                                (unsigned int)mv_bbox[2], (unsigned int)mv_bbox[3]);
+                } else {
+                    ps2_kprintf("[GSLIVE] 12o moved ink bbox: none -- every px equals its canvas\n");
+                }
+            } else {
+                ps2_kprintf("[GSLIVE] 12o moved: SKIP -- no box was asked outside the band this run\n");
+            }
+            ps2_kprintf("[GSLIVE] 12o control B: top=%u/%u painted=%u (12k: 128/128, 1920)\n",
+                        (unsigned int)sh_top[1u], (unsigned int)wb_o,
+                        (unsigned int)(sh_tot[1u] - sh_same[1u]));
+            if (case_o < 0) {
+                ps2_kprintf("[GSLIVE] 12o verdict: SKIP -- either nothing was asked below the band, or\n");
+                ps2_kprintf("[GSLIVE]   D's packet is missing/too short/NREG!=2, or its decoded corners\n");
+                ps2_kprintf("[GSLIVE]   are not the ask (the row above says which).\n");
+            } else {
+                ps2_kprintf("[GSLIVE] 12o verdict: %s\n", o_tag[case_o]);
+                ps2_kprintf("[GSLIVE]   %s\n", o_body[case_o][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", o_body[case_o][1]);
+            }
+        }
+
+        /* Rung 12p: the SAME BYTES, WITHHELD.  Every rung from 12i to 12o has edited something the transfer
+         * says -- PRE (12l), its PRIM field (12m), its x ask (12n), its y ask (12o) -- and the census has
+         * never asked the one question that separates "this group's picture" from "a picture in this
+         * group's neighbourhood": does the group reach the GS at all?  12o's answer makes that question
+         * urgent twice over.  It found 384 red px filling D's moved 24x16 ask -- which it could only call
+         * "ink where the packet asked", not "ink THIS packet laid" -- and it found the control box B change
+         * shape, eight times in a row and identically in both pinned runs, for a dial that named nothing
+         * about B.
+         *
+         * B's own picture says what moved, and it is not the pair of shapes 12l/12n's counts suggested: the
+         * blue rect is INVARIANT at 945 px (x320-382, rows 560-574 -- 12j's "exactly 63x15", a foreign
+         * writer) and only B's red moved.  With D's ask in the band the red is the left half of rows
+         * 560-574 (975 px); with D's ask 16 rows lower the red is row 575 alone, full width (128 px).  So a
+         * neighbour's y rewrote which scanlines of this triangle rasterised, which is either a real
+         * cross-group coupling or an artifact of the instrument -- opposite cures, and nothing in 12o can
+         * tell them apart.
+         *
+         * So this rung changes the delivery and nothing else: D's session still opens, its group is still
+         * captured and decoded, and the sink returns before `ps2_gs_gif_send()`, so the GIF receives two of
+         * the census's three recorder groups and the page never sees D's bytes.  Two questions, both answerable
+         * from one page: did anything survive at the two places 12o read (the band's block and the moved
+         * rect), and did B's red come back?  They are printed as two verdicts, because they are two
+         * measurements -- an ink answer says who laid a picture, and a B answer says whether one transfer's
+         * DELIVERY can move another's raster, or whether the EE-side recorder state did it before the sink
+         * ever saw a byte.  Both are graded only when the dial is armed and the sink held exactly one group:
+         * a run that withheld nothing, or withheld three, is not this rung's run. */
+        {
+            static const char *const p_tag[4] = {
+                "BOTH VANISH: ONE AUTHOR WAS D",
+                "BLOCK WENT, INK STAYED: D DRAWS ITS ASK",
+                "INK WENT, BLOCK STAYED: 12n CONFIRMED",
+                "NEITHER IS D'S: STRANGERS EVERYWHERE"
+            };
+            static const char *const p_body[4][2] = {
+                { "with D's bytes gone, the band's 1408 px and the moved 384 are both",
+                  "empty: both pictures were this transfer's, so 12n graded its own ink" },
+                { "the band block empties with the bytes and the moved rect still",
+                  "fills: the ink follows the ask, and 12n's HELD was a coincidence" },
+                { "the moved rect empties -- those 384 px WERE this transfer's --",
+                  "while the band block stands, so that block is a foreign writer's" },
+                { "both pictures stand without this group's bytes: band block AND",
+                  "moved ink are other writers', and no per-box row is a recorder row" }
+            };
+            static const char *const p_btag[3] = {
+                "B'S RED IS BACK (975): D'S BYTES MOVED IT",
+                "B STAYS RED-LESS: NOT THE GIF",
+                "B IS A THIRD STATE: READ THE PICTURE"
+            };
+            static const char *const p_bbody[3][2] = {
+                { "the only difference is whether D's words reached the GS, and B's left",
+                  "half returns: one transfer's delivery rules another's scanlines" },
+                { "B still has 128 red on row 575 without D on the bus, so the coupling",
+                  "is EE-side (the recorder's own state) or a foreign writer, not the GIF" },
+                { "B matches neither 975 nor 128 red, so this run put the page somewhere",
+                  "no rung has described; 12k's picture of B is the row to read next" }
+            };
+            const uint32_t od_p = s_sh_sess_first[3u];
+            const int captured = (od_p < GSLIVE_CAP_SENDS && s_cap_send_words[od_p] >= 8u);
+            /* Rung 12v: a session is now two groups, so withholding D's packet withholds two transfers.
+             * A run that held one of the two has D's chain without its PRIM write, which is 12u's V0, not
+             * 12p's dial -- so the law counts 2 and says so rather than grading a different experiment. */
+            const int armed_p = (s_hold_gif_mask == (1u << 3) && s_sh_held == 2u);
+            const uint32_t bp_p = s_sh_x1[1u] - s_sh_x0[1u];
+            const uint32_t pd_p = sh_tot[3u] - sh_same[3u];
+            const uint32_t pb_p = sh_tot[1u] - sh_same[1u];
+            const int band_kept = (pd_p != 0u);
+            const int ink_kept = (mv_painted != 0u);
+            /* B is classified by its OWN red count and not by `painted=`, because the blue 945 is a foreign
+             * rect in both baselines: red=975 is 12n/12k's B and red=128 is 12o's, and either of them can
+             * coexist with any blue.  A third number is a third state and says so rather than being read
+             * as one of the two. */
+            const int b_state = (sh_r[1u] == 975u) ? 0
+                              : ((sh_r[1u] == 128u && pb_p == 1073u) ? 1 : 2);
+            int case_p;
+
+            ps2_kprintf("[GSLIVE] 12p dial: D's group is captured and decoded, and NOT handed to the\n");
+            ps2_kprintf("[GSLIVE]   GIF.  ask x%u-%u y%u-%u, held=%u, to the bus=%u group(s).\n",
+                        (unsigned int)s_sh_ask_x0[3u], (unsigned int)s_sh_ask_x1[3u] - 1u,
+                        (unsigned int)s_sh_ask_y0[3u], (unsigned int)s_sh_ask_y1[3u] - 1u,
+                        (unsigned int)s_sh_held, (unsigned int)s_sh_groups);
+            ps2_kprintf("[GSLIVE]   12o, with those bytes SENT: band 1408, moved ink 384 red,\n");
+            ps2_kprintf("[GSLIVE]     B red=975 (left half, rows 560-574) -> red=128 (row 575).\n");
+            ps2_kprintf("[GSLIVE] 12p band D: top=%u/%u painted=%u   moved %c: tot=%u painted=%u\n",
+                        (unsigned int)sh_top[3u], (unsigned int)(s_sh_x1[3u] - s_sh_x0[3u]),
+                        (unsigned int)pd_p, s_sh_label[mv_box < GSLIVE_SH_N ? mv_box : 3u][0],
+                        (unsigned int)mv_tot, (unsigned int)mv_painted);
+            ps2_kprintf("[GSLIVE]   moved ink R=%u G=%u B=%u field=%u bbox x%u-%u y%u-%u\n",
+                        (unsigned int)mv_r, (unsigned int)mv_g, (unsigned int)mv_b,
+                        (unsigned int)mv_other,
+                        (mv_painted != 0u) ? (unsigned int)mv_bbox[0] : 0u,
+                        (mv_painted != 0u) ? (unsigned int)mv_bbox[1] : 0u,
+                        (mv_painted != 0u) ? (unsigned int)mv_bbox[2] : 0u,
+                        (mv_painted != 0u) ? (unsigned int)mv_bbox[3] : 0u);
+            ps2_kprintf("[GSLIVE] 12p control B: top=%u/%u painted=%u red=%u blue=%u  (12n 975,\n",
+                        (unsigned int)sh_top[1u], (unsigned int)bp_p, (unsigned int)pb_p,
+                        (unsigned int)sh_r[1u], (unsigned int)sh_b[1u]);
+            ps2_kprintf("[GSLIVE]   12o 128; the blue 945 is a foreign rect in both)\n");
+            if (!armed_p || !captured) {
+                ps2_kprintf("[GSLIVE] 12p verdict: SKIP -- the dial is %s, the sink held %u group(s)\n",
+                            ((s_hold_gif_mask & (1u << 3)) != 0u) ? "D-armed" : "NOT D-armed",
+                            (unsigned int)s_sh_held);
+                ps2_kprintf("[GSLIVE]   of D's %u, and its packet %s.  This is not 12p's run.\n",
+                            (unsigned int)s_sh_sess_groups[3u],
+                            captured ? "is captured" : "is missing or short");
+            } else {
+                case_p = (band_kept ? 2 : 0) + (ink_kept ? 1 : 0);
+                ps2_kprintf("[GSLIVE] 12p verdict INK: %s\n", p_tag[case_p]);
+                ps2_kprintf("[GSLIVE]   %s\n", p_body[case_p][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", p_body[case_p][1]);
+                ps2_kprintf("[GSLIVE] 12p verdict B: %s\n", p_btag[b_state]);
+                ps2_kprintf("[GSLIVE]   %s\n", p_bbody[b_state][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", p_bbody[b_state][1]);
+            }
+        }
+
+        /* Rung 12q: the mask, because 12p answered "nobody" and left a worse question behind.  Withholding
+         * ONE transfer's bytes emptied a box whose own transfer went out -- B, from `painted=1073` (its red
+         * left half plus the foreign blue rect) to `painted=0`, blue included -- while the two windows that
+         * were supposedly B's neighbour, D's band block and D's moved rect, kept their 12o counts exactly
+         * (1408 and 384).  A per-box reading of this census cannot survive that pair of facts: it means the
+         * number in one box's slot is answered by a different box's delivery.  So this rung holds the mask
+         * to ALL THREE recorder sessions (bits 0, 1 and 3: A, B and D) and asks the only question that can
+         * re-base the instrument: is there ANY census ink left when no census triangle reaches the GS?
+         * The hand shapes C/E/F do not pass through this sink, so they are the within-frame witness -- C
+         * moved between 12n and 12o with nothing but D's ask changed, which is why it is read here rather
+         * than assumed constant.  The law is per box against this page's OWN 12o baselines (A 891, B 1073
+         * with red 128, D's band 1408, D's moved rect 384): four STAND says every rung-12 count has been
+         * the app's stream and the census must be re-based on a window the app never paints; four FELL says
+         * the band really is this file's ink and the cross-box coupling of 12p is a GS-side mechanism worth
+         * chasing. Anything in between names itself. */
+        {
+            static const char *const q_tag[5] = {
+                "ALL FELL: THE BAND IS THIS FILE'S INK",
+                "1 OF 4 STOOD: ONE WINDOW IS NOT OURS",
+                "SPLIT: D STANDS, A AND B FALL",
+                "3 OF 4 STOOD: ALMOST NONE OF IT IS OURS",
+                "ALL STOOD: NO CENSUS TRIANGLE RASTERISED"
+            };
+            static const char *const q_body[5][2] = {
+                { "every one of the four empties with its transfer, so 12a-on's",
+                  "counts really were this census's own rasterisation" },
+                { "one window keeps its 12o number with no bytes and three do",
+                  "not, so that one is the foreign writer -- the rows name it" },
+                { "the two D windows stand while A and B empty: the instrument",
+                  "works, and D's 1408-px block is another writer's ink" },
+                { "three of the four stand with nothing sent: at most one box",
+                  "here is ours, and every law built on the others graded ink" },
+                { "all three sessions withheld and all four windows stand, so",
+                  "rung 12 never measured its own ink -- re-base the read" }
+            };
+            const uint32_t qa = sh_tot[0u] - sh_same[0u];
+            const uint32_t qb = sh_tot[1u] - sh_same[1u];
+            const uint32_t qc = sh_tot[2u] - sh_same[2u];
+            const uint32_t qe = sh_tot[4u] - sh_same[4u];
+            const uint32_t qf = sh_tot[5u] - sh_same[5u];
+            const uint32_t qd = sh_tot[3u] - sh_same[3u];
+            const int armed_q = (s_hold_gif_mask == ((1u << 0) | (1u << 1) | (1u << 3)) &&
+                                 s_sh_held == 6u);   /* 12v: three sessions, two groups each */
+            const int a_stands = (qa == 891u);
+            const int b_stands = (qb == 1073u);
+            const int d_stands = (qd == 1408u);
+            const int m_stands = (mv_painted == 384u);
+            const int stand_count = a_stands + b_stands + d_stands + m_stands;
+
+            ps2_kprintf("[GSLIVE] 12q dial: mask=0x%x, held=%u, to the bus=%u group(s); the hand\n",
+                        (unsigned int)s_hold_gif_mask, (unsigned int)s_sh_held,
+                        (unsigned int)s_sh_groups);
+            ps2_kprintf("[GSLIVE]   shapes C/E/F and the magenta control still go out.  12o, all SENT:\n");
+            ps2_kprintf("[GSLIVE]   A 891, B 1073 (red 128), D band 1408, D moved 384, C 1221.\n");
+            if (!armed_q) {
+                ps2_kprintf("[GSLIVE] 12q verdict: SKIP -- mask=0x%x held %u of %u session group(s),\n",
+                            (unsigned int)s_hold_gif_mask, (unsigned int)s_sh_held,
+                            (unsigned int)(s_sh_groups + s_sh_held));
+                ps2_kprintf("[GSLIVE]   %u send(s) captured.  This is not 12q's run.\n",
+                            (unsigned int)s_cap_sends);
+            } else {
+                ps2_kprintf("[GSLIVE] 12q A band: painted=%u, 12o 891 -> %s\n",
+                            (unsigned int)qa, a_stands ? "STOOD" : "FELL");
+                ps2_kprintf("[GSLIVE] 12q B band: painted=%u, 12o 1073 -> %s (red %u)\n",
+                            (unsigned int)qb, b_stands ? "STOOD" : "FELL",
+                            (unsigned int)sh_r[1u]);
+                ps2_kprintf("[GSLIVE] 12q D band: painted=%u, 12o 1408 -> %s\n",
+                            (unsigned int)qd, d_stands ? "STOOD" : "FELL");
+                ps2_kprintf("[GSLIVE] 12q D moved: painted=%u, 12o 384 -> %s (red %u)\n",
+                            (unsigned int)mv_painted, m_stands ? "STOOD" : "FELL",
+                            (unsigned int)mv_r);
+                ps2_kprintf("[GSLIVE] 12q witness C: painted=%u, 12o 1221 -> %s\n",
+                            (unsigned int)qc, (qc == 1221u) ? "SAME" : "MOVED");
+                ps2_kprintf("[GSLIVE]   E: %u vs 1145 %s   F: %u vs 442 %s\n",
+                            (unsigned int)qe, (qe == 1145u) ? "same" : "moved",
+                            (unsigned int)qf, (qf == 442u) ? "same" : "moved");
+                ps2_kprintf("[GSLIVE] 12q verdict: %d of 4 stand -- %s\n",
+                            stand_count, q_tag[stand_count]);
+                ps2_kprintf("[GSLIVE]   %s\n", q_body[stand_count][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", q_body[stand_count][1]);
+            }
+        }
+
+        /* Rung 12s: the two pre-draw reads, printed as the CONTROL on the finding rather than as a verdict
+         * about D.  12r's first look was real -- the magenta control came back empty -- and its conclusion was
+         * still wrong: the block it found in D is the desktop's own Colour Test Bar (the note at GSLIVE_X0 has
+         * the arithmetic), and the corner-word key counted that chrome as ink because it tests colours BEFORE
+         * the canvas compare.  So this rung reads the strip the instrument now lives in AND the strip it used
+         * to live in, and asks each of them the same question: where the page holds a corner word, is it the
+         * canvas's own word?  Where the answer is yes the ink is chrome and no rung may claim it; where it is
+         * no, a GS-side writer really does exist and 12s has not named it either.
+         *
+         * The pass number WAS the thing that made that reading decidable -- the census re-runs on every app
+         * open, VRAM is not cleared between opens, and from pass 2 onward a dirty window is equally this
+         * file's own triangle left over from pass 1, so only census #1 could carry a verdict.  Rung 12t took
+         * the limitation away by putting the band back to its canvas before the look (see the upload above),
+         * which makes every census's first look a real one and lets the verdict be graded on the censuses that
+         * run the grid instead of on whichever census happened to be first.  The old strip at 560..575 is NOT
+         * uploaded, so its page-vs-canvas agreement stays a measurement of the desktop rather than a restatement
+         * of this file's own copy. */
+        {
+            static const char *const s_tag[4] = {
+                "BAND CLEAN, OLD BLOCK IS THE DESKTOP'S OWN COLOUR BAR",
+                "BAND CLEAN, A GS-SIDE WRITER STAYS UNNAMED",
+                "BAND CLEAN, OLD STRIP EMPTY TOO",
+                "THE NEW BAND IS NOT CLEAN EITHER"
+            };
+            static const char *const s_body[4][2] = {
+                { "the six band windows hold nothing before the draws, and the old strip's",
+                  "words ARE the canvas's -- 12a..12r graded the colour bar, not the GS" },
+                { "the band is clean, but the old strip holds corner words the canvas does",
+                  "not hold at those positions: a GS-side writer is still unnamed" },
+                { "the band is clean and the old strip is empty, so every block the rungs",
+                  "saw came from THIS census's draws and chrome was never the answer" },
+                { "12t's canvas upload did NOT take: a band window still disagrees with its own",
+                  "canvas, or came back full of sentinels, before this census sent anything" }
+            };
+            uint32_t post[GSLIVE_SH_N], pre_paint[GSLIVE_SH_N];
+            uint32_t band_dirty = 0u, sent_band = 0u, sent_old = 0u;
+            uint32_t band_canvas = 0u, old_page = 0u, old_canvas = 0u;
+            uint32_t old_match = 0u, old_tot = 0u;
+            int k_s, b_s, case_s;
+
+            for (k_s = 0; k_s < (int)GSLIVE_SH_N; k_s++) {
+                post[k_s] = sh_tot[k_s] - sh_same[k_s];
+                pre_paint[k_s] = s_pre[k_s].tot - s_pre[k_s].same;
+                if (pre_paint[k_s] != 0u || s_pre[k_s].sent != 0u) band_dirty++;
+                sent_band += s_pre[k_s].sent;
+                sent_old += s_pre_old[k_s].sent;
+                band_canvas += s_pre[k_s].cv_r + s_pre[k_s].cv_g + s_pre[k_s].cv_b;
+                old_page += s_pre_old[k_s].r + s_pre_old[k_s].g + s_pre_old[k_s].b;
+                old_canvas += s_pre_old[k_s].cv_r + s_pre_old[k_s].cv_g + s_pre_old[k_s].cv_b;
+                old_match += s_pre_old[k_s].match;
+                old_tot += s_pre_old[k_s].tot;
+            }
+            ps2_kprintf("[GSLIVE] 12s pre-draw: the band (rows %u..%u) and the old strip\n",
+                        (unsigned int)GSLIVE_SH_Y0, (unsigned int)GSLIVE_SH_Y1 - 1u);
+            ps2_kprintf("[GSLIVE]   (rows %u..%u) read with the GIF drained BEFORE this census\n",
+                        (unsigned int)GSLIVE_OLD_BAND_Y0,
+                        (unsigned int)(GSLIVE_OLD_BAND_Y0 + GSLIVE_PIC_ROWS - 1u));
+            ps2_kprintf("[GSLIVE]   sent anything: census #%u of this process, band=%s old=%s\n",
+                        (unsigned int)s_pre_pass, s_pre_ok ? "OK" : "FAILED",
+                        s_pre_old_ok ? "OK" : "FAILED");
+            ps2_kprintf("[GSLIVE]   words never filled: band=%u old=%u\n",
+                        (unsigned int)sent_band, (unsigned int)sent_old);
+            ps2_kprintf("[GSLIVE] 12s self-check: control x%u-%u y%u-%u held magenta=%u\n",
+                        (unsigned int)GSLIVE_X0, (unsigned int)GSLIVE_X1 - 1u,
+                        (unsigned int)GSLIVE_Y0, (unsigned int)GSLIVE_Y1 - 1u,
+                        (unsigned int)s_pre_ctrl_mag);
+            ps2_kprintf("[GSLIVE]   painted=%u BEFORE its only sender ran: magenta>0 means this read\n",
+                        (unsigned int)s_pre_ctrl_paint);
+            ps2_kprintf("[GSLIVE]   is not a first look, and it voids every number below.\n");
+            if (!s_pre_ok || !s_pre_old_ok) {
+                ps2_kprintf("[GSLIVE] 12s verdict: SKIP -- %s did not come back GS_READ_BUS_OK,\n",
+                            (!s_pre_ok) ? "the band read" : "the old-strip read");
+                ps2_kprintf("[GSLIVE]   so there is no first look to grade and no chrome to name.\n");
+            } else if (s_pre_ctrl_mag != 0u) {
+                ps2_kprintf("[GSLIVE] 12s verdict: VOID -- %u of the control's own %u px were already\n",
+                            (unsigned int)s_pre_ctrl_mag,
+                            (unsigned int)((GSLIVE_X1 - GSLIVE_X0) * GSLIVE_PIC_ROWS));
+                ps2_kprintf("[GSLIVE]   magenta before the control was sent, so this read saw the page\n");
+                ps2_kprintf("[GSLIVE]   AFTER the draws.  Nothing on this page is attributable.\n");
+            } else {
+                ps2_kprintf("[GSLIVE]   band pre/post painted: A %u/%u  B %u/%u  C %u/%u\n",
+                            (unsigned int)pre_paint[0u], (unsigned int)post[0u],
+                            (unsigned int)pre_paint[1u], (unsigned int)post[1u],
+                            (unsigned int)pre_paint[2u], (unsigned int)post[2u]);
+                ps2_kprintf("[GSLIVE]                    D %u/%u  E %u/%u  F %u/%u\n",
+                            (unsigned int)pre_paint[3u], (unsigned int)post[3u],
+                            (unsigned int)pre_paint[4u], (unsigned int)post[4u],
+                            (unsigned int)pre_paint[5u], (unsigned int)post[5u]);
+                ps2_kprintf("[GSLIVE]   the band's CANVAS holds %u corner words across the six\n",
+                            (unsigned int)band_canvas);
+                ps2_kprintf("[GSLIVE]   windows (0 = the post-draw `same` column cannot be chrome).\n");
+                for (b_s = 0; b_s < (int)GSLIVE_SH_N; b_s++) {
+                    ps2_kprintf("[GSLIVE] 12s old %c: page r/g/b=%u/%u/%u canvas r/g/b=%u/%u/%u\n",
+                                s_sh_label[b_s][0],
+                                (unsigned int)s_pre_old[b_s].r, (unsigned int)s_pre_old[b_s].g,
+                                (unsigned int)s_pre_old[b_s].b,
+                                (unsigned int)s_pre_old[b_s].cv_r, (unsigned int)s_pre_old[b_s].cv_g,
+                                (unsigned int)s_pre_old[b_s].cv_b);
+                    ps2_kprintf("[GSLIVE]        %c: match=%u/%u field=%u top=%u/%u\n",
+                                s_sh_label[b_s][0], (unsigned int)s_pre_old[b_s].match,
+                                (unsigned int)s_pre_old[b_s].tot,
+                                (unsigned int)s_pre_old[b_s].other,
+                                (unsigned int)s_pre_old[b_s].top,
+                                (unsigned int)(s_sh_x1[b_s] - s_sh_x0[b_s]));
+                }
+                if (s_census_only < GSLIVE_SH_N) {
+                    ps2_kprintf("[GSLIVE] 12s verdict: SKIP for the grid -- census #%u runs 12t's LONE mode,\n",
+                                (unsigned int)s_pre_pass);
+                    ps2_kprintf("[GSLIVE]   box D's session is the only send in it, so the six pre/post pairs\n");
+                    ps2_kprintf("[GSLIVE]   describe one box and five windows nobody drew in.  The cleanliness\n");
+                    ps2_kprintf("[GSLIVE]   still counts: band_dirty=%u of 6 is 12t's upload checking itself.\n",
+                                (unsigned int)band_dirty);
+                } else {
+                    case_s = (band_dirty != 0u) ? 3
+                           : (old_page == 0u) ? 2
+                           : ((old_match == old_tot && old_page == old_canvas) ? 0 : 1);
+                    ps2_kprintf("[GSLIVE] 12s verdict: %s\n", s_tag[case_s]);
+                    ps2_kprintf("[GSLIVE]   %s\n", s_body[case_s][0]);
+                    ps2_kprintf("[GSLIVE]   %s\n", s_body[case_s][1]);
+                    if (case_s != 3) {
+                        ps2_kprintf("[GSLIVE]   the shading grid therefore grades this census's own ink:\n");
+                        ps2_kprintf("[GSLIVE]   read 12m's INTERPOLATES/FLAT and 12l's shape word per box.\n");
+                    }
+                }
+            }
+        }
+
+        /* Rung 12t: one send on the bus, one look at the page.
+         *
+         * 12s moved the instrument onto a strip this census can certify empty, and what it certified is the
+         * sharpest pair in the lane.  Box A's recorder group -- sent LAST, behind the hand chain -- lays 891 px
+         * whose every cell reads `f`, an apex-up triangle with a real gradient in it (12k's picture, 12m's
+         * INTERPOLATES).  Box D's group -- sent FIRST, and captured by 12i as differing from A's in exactly three
+         * position words and no colour word -- lays 660 px of pure GSQUAD_RED: `other=0`, no ramp anywhere, and
+         * an apex row holding 44 of 88 columns.  A triangle asked with its apex at the TOP does not have a 44-px
+         * top row, so that answer is wrong twice over -- flat AND mis-shaped.  Worse, it is not even D's alone:
+         * 12j's spill says the same red runs from x384 to x579, which is box B's right edge through box C's whole
+         * window, both 16-px gutters and D's left half -- 480 + 1800 + 660 = 2940 px of one rectangle that no
+         * session of this census ever asked for.
+         *
+         * Two claims fit that, and their cures are opposite.  Either the packet ALONE rasterises flat and
+         * mis-shaped -- then the recorder's encoding, or the GS state its first group lands in, is the bug -- or a
+         * NEIGHBOUR drew the rectangle and D owns only the part its window covers -- then the packet is fine, the
+         * frame that carries it is not, and 12i's "a gradient needs a transfer in front of it" is a statement about
+         * register latching rather than about shading.  Every rung since 12i has graded a census that sends seven
+         * things, so every count has been a sum of seven and neither claim could be falsified there.  This rung
+         * sends ONE: census #1 of the process keeps box D's recorder session and withholds the magenta control,
+         * the B and A sessions and the hand chain C/E/F, on a band the upload above laid back to its canvas.
+         * `groups to the bus` and `hand sent` are the check that the withholding actually happened -- a dial that
+         * does not dial is the failure mode this lane has been bitten by, so the dial prints its own effect.
+         * Censuses 2..4 then run 12i's whole grid on the same reset band, and the two extents are compared: what
+         * the neighbours add is the block's author, named in pixels instead of argued. */
+        {
+            static const char *const t_tag[5] = {
+                "NOTHING: THE LONE GROUP LAID NO BAND INK AT ALL",
+                "FOREIGN COORDINATES: THE LONE GROUP DREW OUTSIDE ITS ASK",
+                "THE PACKET ALONE: FLAT AND MIS-SHAPED WITH NO NEIGHBOUR",
+                "THE PACKET ALONE: A TRIANGLE WITH A FIELD, SHADING AND ALL",
+                "NO TRIANGLE AT ALL: THE LONE PACKET LAYS A FEW PX, NOT ITS ASK"
+            };
+            static const char *const t_body[5][2] = {
+                { "with the control, B, A and the hand chain all withheld, D's group paints nothing: the",
+                  "660 px and the 2940-px block are a neighbour's, and 12i graded the wrong variable" },
+                { "one packet, no neighbours, and ink at coordinates no session of this census named -- the",
+                  "bbox's own edges are the law to chase now: a clip, an offset or a context, not a shade" },
+                { "the block reproduces with nothing in front of it: corner words only, no ramp, a wide apex",
+                  "row.  ORDER cannot be what explains it; the encoding or the GS state it lands in does" },
+                { "the same eight words alone lay an apex-up triangle full of interpolated px: flatness and",
+                  "the block both need a transfer IN FRONT, which is a frame problem and not an encoder one" },
+                { "a few px and nothing else: three vertex kicks, no triangle -- no OP was ever programmed,",
+                  "because PRE=1 forbids this tag from writing PRIM.  12u names who does; first seen 2026-10-18" }
+            };
+            const int t_lone = (s_census_only < GSLIVE_SH_N);
+            const uint32_t t_dwin = sh_tot[3u] - sh_same[3u];   /* D's own window, the same unit 12m prints */
+            int t_case = -1;
+            int t_inside;
+
+            t_inside = (bp_n != 0u && bp_bbox[0] >= (uint32_t)GSLIVE_SH_D_X0
+                        && bp_bbox[1] < (uint32_t)GSLIVE_SH_D_X1
+                        && bp_bbox[2] >= (uint32_t)GSLIVE_SH_Y0
+                        && bp_bbox[3] < (uint32_t)GSLIVE_SH_Y1);
+
+            ps2_kprintf("[GSLIVE] 12t mode: census #%u runs %s.\n",
+                        (unsigned int)s_pre_pass, t_lone ? "LONE" : "GRID");
+            if (t_lone) {
+                ps2_kprintf("[GSLIVE]   box D's session is the ONLY thing sent: 12v makes that two groups,\n");
+                ps2_kprintf("[GSLIVE]   its AD write of PRIM and then its vertex chain.  The magenta\n");
+                ps2_kprintf("[GSLIVE]   control, the B and A sessions and the hand chain C/E/F are withheld.\n");
+            } else {
+                ps2_kprintf("[GSLIVE]   12i's whole grid: control, D, B, hand C/E/F, then A -- every\n");
+                ps2_kprintf("[GSLIVE]   transfer every rung since 12i has been counting as one sum, with\n");
+                ps2_kprintf("[GSLIVE]   each recorder session now handing two of them.\n");
+            }
+            ps2_kprintf("[GSLIVE] 12t reset: rows %u..%u uploaded from the canvas before the read, so the\n",
+                        (unsigned int)GSLIVE_SP_Y0, (unsigned int)GSLIVE_SP_Y1 - 1u);
+            ps2_kprintf("[GSLIVE]   12s pre-draw pairs above are that upload checking itself.\n");
+            ps2_kprintf("[GSLIVE] 12t dial proof: groups to the bus=%u hand sent=%u refused=%u\n",
+                        (unsigned int)s_sh_groups, (unsigned int)s_shape_sent,
+                        (unsigned int)s_shape_refused);
+            if (bp_n == 0u) {
+                ps2_kprintf("[GSLIVE] 12t band ink: painted=0 -- the strip came back its own canvas.\n");
+            } else {
+                ps2_kprintf("[GSLIVE] 12t band ink: painted=%u corner=%u field=%u\n",
+                            (unsigned int)bp_n, (unsigned int)bp_corner, (unsigned int)bp_field);
+                ps2_kprintf("[GSLIVE]   bbox x%u-%u y%u-%u (%u wide)   ask D = x%u-%u y%u-%u\n",
+                            (unsigned int)bp_bbox[0], (unsigned int)bp_bbox[1],
+                            (unsigned int)bp_bbox[2], (unsigned int)bp_bbox[3],
+                            (unsigned int)(bp_bbox[1] - bp_bbox[0] + 1u),
+                            (unsigned int)GSLIVE_SH_D_X0, (unsigned int)GSLIVE_SH_D_X1 - 1u,
+                            (unsigned int)GSLIVE_SH_Y0, (unsigned int)GSLIVE_SH_Y1 - 1u);
+                ps2_kprintf("[GSLIVE]   all of it inside D's ask: %s | D's window: painted=%u top=%u/%u\n",
+                            t_inside ? "yes" : "NO",
+                            (unsigned int)(sh_tot[3u] - sh_same[3u]),
+                            (unsigned int)sh_top[3u],
+                            (unsigned int)(GSLIVE_SH_D_X1 - GSLIVE_SH_D_X0));
+            }
+            if (t_lone) {
+                /* 12t's first run (build/repro/20261018T074741Z) graded painted=1 as case 2, "FLAT AND
+                 * MIS-SHAPED WITH NO NEIGHBOUR", because the law only asked whether the band held ANY ink.
+                 * One px is not a mis-shaped triangle, it is no triangle: the ask is 88x16 = 1408 px and the
+                 * answer was 1.  So the point-like extent is now its own case, graded on D's window because
+                 * that is the window the ask lives in. */
+                t_case = (bp_n == 0u) ? 0
+                       : (!t_inside) ? 1
+                       : (t_dwin <= 8u) ? 4
+                       : ((bp_field != 0u && sh_top[3u] <= 4u) ? 3 : 2);
+                ps2_kprintf("[GSLIVE] 12t verdict: %s\n", t_tag[t_case]);
+                ps2_kprintf("[GSLIVE]   %s\n", t_body[t_case][0]);
+                ps2_kprintf("[GSLIVE]   %s\n", t_body[t_case][1]);
+                ps2_kprintf("[GSLIVE]   12k's D picture and 12m's D rows above are this census's own.\n");
+                s_t_lone_n = bp_n;
+                s_t_lone_field = bp_field;
+                s_t_lone_bbox[0] = bp_bbox[0];
+                s_t_lone_bbox[1] = bp_bbox[1];
+                s_t_lone_bbox[2] = bp_bbox[2];
+                s_t_lone_bbox[3] = bp_bbox[3];
+                s_t_lone_done = 1u;
+            } else if (s_t_lone_done == 0u) {
+                ps2_kprintf("[GSLIVE] 12t verdict: SKIP -- no LONE census has been measured in this process,\n");
+                ps2_kprintf("[GSLIVE]   so the grid has no single-send extent to be compared against.\n");
+            } else {
+                const uint32_t lone_w = (s_t_lone_n == 0u) ? 0u
+                                        : (s_t_lone_bbox[1] - s_t_lone_bbox[0] + 1u);
+                const uint32_t grid_w = (bp_n == 0u) ? 0u : (bp_bbox[1] - bp_bbox[0] + 1u);
+
+                ps2_kprintf("[GSLIVE] 12t grid-vs-lone: lone painted=%u field=%u wide=%u | grid painted=%u\n",
+                            (unsigned int)s_t_lone_n, (unsigned int)s_t_lone_field,
+                            (unsigned int)lone_w, (unsigned int)bp_n);
+                ps2_kprintf("[GSLIVE]   grid field=%u wide=%u bbox x%u-%u: the neighbours add %s\n",
+                            (unsigned int)bp_field, (unsigned int)grid_w,
+                            (unsigned int)bp_bbox[0], (unsigned int)bp_bbox[1],
+                            (grid_w > lone_w) ? "WIDTH no lone packet asks for"
+                                              : "nothing beyond the lone extent");
+                ps2_kprintf("[GSLIVE]   if this census's D picture matches the LONE one, the block is the\n");
+                ps2_kprintf("[GSLIVE]   packet's own answer; if it is wider, 12i measured a neighbour.\n");
+            }
+        }
+
+        /* Rung 12u: the four PRIM sources, replayed from the LONE census's own captured group.  Every row here
+         * had its band uploaded back to the canvas first and its page read before anything printed, so no
+         * neighbour stands behind any of these pixels -- which is the sentence 12t's `painted=1` forced this
+         * file to go and measure rather than infer from 12c. */
+        {
+            static const char *const u_name[4] = {
+                "V0 POINT write, then chain",
+                "V1 PRE=0, tag field kept  ",
+                "V2 AD(PRIM) TRI+IIP then V0",
+                "V3 AD(PRIM) TRI flat then V0"
+            };
+            static const char *const u_ask[4] = {
+                "PRIM=POINT in front: no OP that can make a triangle, and the chain as captured (PRE=1)",
+                "the tag's own 11-bit field is allowed to write PRIM at packet start",
+                "an AD write programs PRIM with IIP SET, then the group as captured",
+                "an AD write programs PRIM with IIP CLEAR, then the group as captured"
+            };
+            uint32_t v;
+
+            if (s_census_only != 3u) {
+                ps2_kprintf("[GSLIVE] 12u: SKIP -- this census is 12i's grid; 12u replays a LONE group and\n");
+                ps2_kprintf("[GSLIVE]   measures it against nothing, which is the whole point of the dial.\n");
+            } else if (s_u_ok == 0u) {
+                ps2_kprintf("[GSLIVE] 12u verdict: SKIP -- the probe did not run: box D's group was not\n");
+                ps2_kprintf("[GSLIVE]   captured in a form this file can re-send, or a band read failed.\n");
+            } else {
+                int v0_tri = 0, v1_tri = 0, v2_tri = 0, v3_tri = 0;
+
+                ps2_kprintf("[GSLIVE] 12u: the same captured chain, four times, each on a band the upload put\n");
+                ps2_kprintf("[GSLIVE]   back to its canvas, with nothing but its own session's transfers in\n");
+                ps2_kprintf("[GSLIVE]   front of it -- and, since 12v, a write of the OP it is being asked\n");
+                ps2_kprintf("[GSLIVE]   about in front of the replay, so no inherited PRIM is ever the cause.\n");
+                for (v = 0u; v < 4u; v++) {
+                    const uint32_t p = s_u_n[v];
+                    const uint32_t w = (p == 0u) ? 0u : (s_u_bbox[v][1] - s_u_bbox[v][0] + 1u);
+                    const char *kind;
+
+                    kind = (p == 0u) ? "NO INK"
+                           : (p <= 8u) ? "POINT-LIKE: THREE KICKS, NO TRIANGLE"
+                           : (s_u_top[v] <= 4u) ? "TRIANGLE"
+                           : (s_u_top[v] * 2u >= w) ? "RECT" : "SCATTERED";
+                    ps2_kprintf("[GSLIVE] 12u %s qw=%u: painted=%-5u corner=%-5u field=%-5u top=%-3u/%u "
+                                "bbox x%u-%u y%u-%u -> %s\n",
+                                u_name[v], (unsigned int)s_u_send[v], (unsigned int)p,
+                                (unsigned int)s_u_corner[v], (unsigned int)s_u_field[v],
+                                (unsigned int)s_u_top[v],
+                                (unsigned int)(GSLIVE_SH_D_X1 - GSLIVE_SH_D_X0),
+                                (unsigned int)(p ? s_u_bbox[v][0] : 0u),
+                                (unsigned int)(p ? s_u_bbox[v][1] : 0u),
+                                (unsigned int)(p ? s_u_bbox[v][2] : 0u),
+                                (unsigned int)(p ? s_u_bbox[v][3] : 0u), kind);
+                    ps2_kprintf("[GSLIVE]      dial: %s\n", u_ask[v]);
+                    /* "A triangle" is the one predicate every verdict below is built from: more than a few
+                     * px of ink, and an apex row of at most 4 px, which is 12l's shape law. */
+                    if (s_u_n[v] > 8u && s_u_top[v] <= 4u) {
+                        if (v == 0u) v0_tri = 1;
+                        else if (v == 1u) v1_tri = 1;
+                        else if (v == 2u) v2_tri = 1;
+                        else v3_tri = 1;
+                    }
+                }
+                ps2_kprintf("[GSLIVE] 12u triangle alone?  V0 (PRIM=POINT in front) %s | V1 (tag field) %s |\n",
+                            v0_tri ? "YES" : "NO", v1_tri ? "YES" : "NO");
+                ps2_kprintf("[GSLIVE]   V2 (AD write, Gouraud) %s | V3 (AD write, flat) %s\n",
+                            v2_tri ? "YES" : "NO", v3_tri ? "YES" : "NO");
+                if (!v1_tri && !v2_tri && !v3_tri) {
+                    ps2_kprintf("[GSLIVE] 12u verdict: NEITHER dial puts a triangle on the page -- what a lone\n");
+                    ps2_kprintf("[GSLIVE]   group needs is in neither this packet nor either write, so the GS\n");
+                    ps2_kprintf("[GSLIVE]   environment this port applies per present is the next thing to read.\n");
+                } else if (v1_tri && !v2_tri && !v3_tri) {
+                    ps2_kprintf("[GSLIVE] 12u verdict: THE TAG FIELD RULES WHEN PRE IS CLEAR -- ps2sdk's own\n");
+                    ps2_kprintf("[GSLIVE]   PRE=0 tag is enough, and the fix is one bit in the recorder.\n");
+                } else if (v1_tri && (v2_tri || v3_tri)) {
+                    ps2_kprintf("[GSLIVE] 12u verdict: BOTH program PRIM, so the recorder's PRE=1 is what throws\n");
+                    ps2_kprintf("[GSLIVE]   the ask away: one bit per group, and the frame stops mattering.\n");
+                } else if (!v1_tri && (v2_tri || v3_tri)) {
+                    ps2_kprintf("[GSLIVE] 12u verdict: THE AD WRITE RULES AND THE TAG FIELD DOES NOT -- the\n");
+                    ps2_kprintf("[GSLIVE]   draw_prim_start() shape is the fix: a PRIM write in front of each\n");
+                    ps2_kprintf("[GSLIVE]   chain, which is what box C has always done and 12c watched shade.\n");
+                } else {
+                    ps2_kprintf("[GSLIVE] 12u verdict: read the four rows above by hand.  V0 now carries a\n");
+                    ps2_kprintf("[GSLIVE]   write of POINT in front of the chain, so V0 laying a triangle is\n");
+                    ps2_kprintf("[GSLIVE]   the tag's own PRIM field being honoured with PRE SET -- which is\n");
+                    ps2_kprintf("[GSLIVE]   what 12u measured as NO, and if it comes back YES the census was\n");
+                    ps2_kprintf("[GSLIVE]   not lone after all: 12t's dial proof row is the thing to check.\n");
+                }
+                ps2_kprintf("[GSLIVE] 12u shading: V2 asked Gouraud and laid field=%u | V3 asked FLAT and laid\n",
+                            (unsigned int)s_u_field[2]);
+                ps2_kprintf("[GSLIVE]   field=%u, and the two differ in IIP alone: %s\n",
+                            (unsigned int)s_u_field[3],
+                            (s_u_field[2] != 0u && s_u_field[2] > s_u_field[3])
+                                ? "IIP IN THE PRIM WORD IS THE LEVER -- that bit is what the GS interpolates on"
+                                : (s_u_field[2] == 0u && s_u_field[3] == 0u)
+                                    ? "neither lays a field, so the interpolation measured at A does not come"
+                                      " from PRIM's IIP"
+                                    : "both lay a field, so IIP did not switch it and the lever is elsewhere");
+                /* Rung 12v: this probe is now the before-and-after of the fix.  The census's OWN box D row
+                 * above is V2's shape drawn by the recorder itself -- the session writes its own PRIM and
+                 * then its chain -- while V0 is the same chain with an OP that cannot make a triangle put in
+                 * front of it.  Reading the two against each other is the measurement of what the write
+                 * bought in the frame rather than in this replay, which is why both numbers print here. */
+                ps2_kprintf("[GSLIVE] 12u x 12v: box D in the FRAME (its session's own AD write + chain):\n");
+                ps2_kprintf("[GSLIVE]   painted=%u top=%u/%u | REPLAYED as V0 (chain after a POINT write):"
+                            " painted=%u\n",
+                            (unsigned int)(sh_tot[3u] - sh_same[3u]),
+                            (unsigned int)sh_top[3u],
+                            (unsigned int)(s_sh_x1[3u] - s_sh_x0[3u]),
+                            (unsigned int)s_u_n[0]);
+                ps2_kprintf("[GSLIVE]   %s\n",
+                            ((sh_tot[3u] - sh_same[3u]) > 8u && s_u_n[0] <= 8u)
+                                ? "the frame lays a shape and a chain with POINT in front of it does not: the"
+                                  " write of the REAL primitive is what the stream was missing -- 12v measured"
+                                : ((sh_tot[3u] - sh_same[3u]) <= 8u && s_u_n[0] <= 8u)
+                                    ? "both point-like: the frame's own write did not take, so read 12t's row"
+                                      " and the [GSTS] pwr= column before quoting anything else"
+                                    : "both lay a shape: V0 has a POINT write in front of it, so its triangle"
+                                      " came from the tag -- re-read 12u's verdict above");
+            }
+        }
+
+        /* rung 12g, and the row that decides what the two rows above mean.  12f's claim is an identity
+         * between two packets, so the census prints both of them as they left their own builders:
+         * word 0 is the GIF tag (NLOOP, EOP, PRE, PRIM, FLG and NREG all live in its low 64 bits), word 1
+         * is the REGS list, and words 2..7 are the three RGBAQ/XYZ2 pairs.  `words=` is the FULL count
+         * even when the capture stopped at eight, so a four-register group that costs sixteen words is
+         * visible as one instead of being silently trimmed.
+         *
+         * The first run of this row (2026-10-18) answered the tag and the REGS list outright -- both
+         * packets `NLOOP=3 EOP=1 PRE=1 FLG=1(REGLIST) NREG=2 PRIM=0x0b REGS=0x51`, byte for byte -- and
+         * then found the first difference at WORD 3, which is a vertex's XYZ2: the two boxes were at
+         * different x then, so that difference was not a finding, it was the geometry.  A verdict that
+         * stops at the first difference therefore cannot be read, so this classifies every word by the
+         * register the group's own NREG says it holds.  Rung 12h moved the hand chain onto box A's
+         * coordinates, which removes the geometry excuse, and 12i keeps them there but stops sending the
+         * hand chain: A's recorder group is now the frame's LAST send and its slot is named by
+         * `s_cap_rec_at`, while the chain comes from `ps2_gslive_shape_hold()`, so the two captures are
+         * still one triangle at one box as two builders made it -- and the expected answer is still
+         * `SAME BYTES`.  Rung 12v changed what that last session hands over: two groups, the AD write of
+         * its PRIM then the chain, and `s_cap_rec_at` is set at the chain, because a chain compared with
+         * a hand chain is the identity 12g measured and a chain compared with a preamble is not. */
+        /* Rung 12t: in a LONE census the hand chain never went out and box A's session never opened, so the
+         * hand capture is zeroed here and 12g's own `SKIP -- a packet was not captured` row becomes the true
+         * statement about the census.  Since 12v the recorder-side dump describes whatever `s_cap_rec_at` was
+         * reset to -- an empty slot, `words=0` -- rather than box D's preamble, so the row cannot read one
+         * box's packet as another's; 12i's per-send rows still name each captured group's owner. */
+        if (s_census_only < GSLIVE_SH_N) s_cap_hand_words = 0u;
+        {
+            uint32_t k, mask = 0u, colour_diff = 0u, coord_diff = 0u;
+            const uint32_t nreg = gslive_nreg_of(s_cap_rec);
+            uint32_t n = s_cap_rec_words < s_cap_hand_words ? s_cap_rec_words : s_cap_hand_words;
+
+            if (n > GSLIVE_CAP_WORDS) n = GSLIVE_CAP_WORDS;
+            for (k = 2u; k < n; k++) {
+                if (s_cap_rec[k] == s_cap_hand[k]) continue;
+                mask |= 1u << k;
+                /* In a dense REGLIST the data words run in the order the REGS list names them, so a
+                 * word's register is its position modulo the group's NREG: register 0 is always RGBAQ,
+                 * and for a two-register chain register 1 is the drawing kick XYZ2. */
+                if (nreg != 0u && (k - 2u) % nreg == 0u) colour_diff++;
+                else coord_diff++;
+            }
+            ps2_kprintf("[GSLIVE] 12g A rec(LAST)  words=%u tag=0x%08x%08x NLOOP=%u EOP=%u PRE=%u FLG=%u"
+                        " NREG=%u PRIM=0x%03x REGS=0x%08x%08x\n",
+                        (unsigned int)s_cap_rec_words,
+                        (unsigned int)(s_cap_rec[0] >> 32), (unsigned int)s_cap_rec[0],
+                        (unsigned int)gslive_nloop_of(s_cap_rec), (unsigned int)gslive_eop_of(s_cap_rec),
+                        (unsigned int)gslive_pre_of(s_cap_rec), (unsigned int)gslive_flg_of(s_cap_rec),
+                        (unsigned int)gslive_nreg_of(s_cap_rec), (unsigned int)gslive_prim_of(s_cap_rec),
+                        (unsigned int)(s_cap_rec[1] >> 32), (unsigned int)s_cap_rec[1]);
+            ps2_kprintf("[GSLIVE] 12g A(hand)     words=%u tag=0x%08x%08x NLOOP=%u EOP=%u PRE=%u FLG=%u"
+                        " NREG=%u PRIM=0x%03x REGS=0x%08x%08x\n",
+                        (unsigned int)s_cap_hand_words,
+                        (unsigned int)(s_cap_hand[0] >> 32), (unsigned int)s_cap_hand[0],
+                        (unsigned int)gslive_nloop_of(s_cap_hand), (unsigned int)gslive_eop_of(s_cap_hand),
+                        (unsigned int)gslive_pre_of(s_cap_hand), (unsigned int)gslive_flg_of(s_cap_hand),
+                        (unsigned int)gslive_nreg_of(s_cap_hand), (unsigned int)gslive_prim_of(s_cap_hand),
+                        (unsigned int)(s_cap_hand[1] >> 32), (unsigned int)s_cap_hand[1]);
+            ps2_kprintf("[GSLIVE] 12g words 0..%u differ=0x%02x: %u colour register(s), %u kick/position"
+                        " register(s); header words %s\n",
+                        (unsigned int)(n ? n - 1u : 0u), (unsigned int)mask,
+                        (unsigned int)colour_diff, (unsigned int)coord_diff,
+                        (s_cap_rec[0] == s_cap_hand[0] && s_cap_rec[1] == s_cap_hand[1])
+                            ? "MATCH" : "DIFFER");
+            if (s_cap_rec_words == 0u || s_cap_hand_words == 0u)
+                ps2_kprintf("[GSLIVE] 12g: SKIP -- a packet was not captured (recorder %u word(s),"
+                            " hand %u), so no identity is being claimed\n",
+                            (unsigned int)s_cap_rec_words, (unsigned int)s_cap_hand_words);
+            else if (mask == 0u && s_cap_rec_words == s_cap_hand_words)
+                ps2_kprintf("[GSLIVE] 12g: the recorder's LAST group and the hand chain ask the SAME %u"
+                            " WORDS at box A -- same tag, same REGS, same three colours, same vertices,"
+                            " so the packet is excluded and A-early against A-late is one box, one"
+                            " encoding and one variable: where in the frame it went out\n",
+                            (unsigned int)s_cap_rec_words);
+            else if (colour_diff == 0u && coord_diff != 0u)
+                ps2_kprintf("[GSLIVE] 12g: same tag, same REGS, same three colours, but %u POSITION"
+                            " word(s) differ AT ONE AND THE SAME BOX -- so the two builders disagree"
+                            " about where the triangle is, not about shading, and A's two cells are not"
+                            " one triangle.  Fix the geometry before quoting the verdict below\n",
+                            (unsigned int)coord_diff);
+            else
+                ps2_kprintf("[GSLIVE] 12g: the COLOUR PAYLOAD differs at %u register(s) (mask 0x%02x) --"
+                            " so the recorder and the hand chain do not hand the GS the same triangle\n",
+                            (unsigned int)colour_diff, (unsigned int)mask);
+        }
+
+        /* Rung 12i's send dump.  The verdict below reads box D's group against box A's as ONE packet in
+         * two places in the frame, and that claim is only good if each of the two really is one group of
+         * one triangle, with nothing else riding out beside it.  So the census prints every group its
+         * three one-triangle sessions handed the sink, in the order they left, and names the box each came
+         * from -- a session that flushed twice, or a group that went out behind a texture AD trio, shows
+         * here instead of being inferred from the pixel counts.  Rung 12v makes that row load-bearing in a
+         * new way: every session now DOES hand two groups, so the dump is the place a reader can see the
+         * AD write of PRIM and the chain that follows it as the two transfers they are, and `CHAIN` /
+         * `AD(PRIM)` are read off each group's own FLG rather than asserted from the recorder's source. */
+        {
+            uint32_t k, n_diff = 0u, n_pos = 0u, n_col = 0u;
+            const uint32_t a_at = s_sh_sess_first[0u];
+            const uint32_t d_at = s_sh_sess_first[3u];
+            const int have_a = (a_at < GSLIVE_CAP_SENDS && s_cap_send_words[a_at] != 0u);
+            const int have_d = (d_at < GSLIVE_CAP_SENDS && s_cap_send_words[d_at] != 0u);
+
+            ps2_kprintf("[GSLIVE] 12i %u send(s) from 3 one-triangle sessions: A=%u B=%u D=%u group(s)"
+                        " (12v: 2 = one PRIM write + one chain)\n",
+                        (unsigned int)s_cap_sends, (unsigned int)s_sh_sess_groups[0u],
+                        (unsigned int)s_sh_sess_groups[1u], (unsigned int)s_sh_sess_groups[3u]);
+            for (k = 0u; k < s_cap_sends && k < GSLIVE_CAP_SENDS; k++) {
+                const uint8_t own = s_sh_sess_owner[k];
+                char owner = (own != 0u && own - 1u < GSLIVE_SH_N) ? (char)('A' + own - 1u) : '?';
+                const char *pos = "none";
+                const char *kind = (gslive_flg_of(s_cap_send[k]) == GS_FLG_REGLIST) ? "CHAIN" : "AD(PRIM)";
+
+                if (owner == 'A') pos = "LAST";
+                else if (owner == 'B') pos = "2ND";
+                else if (owner == 'D') pos = "EARLY";
+                ps2_kprintf("[GSLIVE] 12i send %u %c %s %s words=%u NLOOP=%u EOP=%u PRE=%u FLG=%u"
+                            " NREG=%u PRIM=0x%02x\n",
+                            (unsigned int)k, owner, pos, kind,
+                            (unsigned int)s_cap_send_words[k],
+                            (unsigned int)gslive_nloop_of(s_cap_send[k]),
+                            (unsigned int)gslive_eop_of(s_cap_send[k]),
+                            (unsigned int)gslive_pre_of(s_cap_send[k]),
+                            (unsigned int)gslive_flg_of(s_cap_send[k]),
+                            (unsigned int)gslive_nreg_of(s_cap_send[k]),
+                            (unsigned int)gslive_prim_of(s_cap_send[k]));
+            }
+            if (!have_a || !have_d) {
+                ps2_kprintf("[GSLIVE] 12i: SKIP -- D's or A's group was not captured (D have=%d A have=%d"
+                            " of %u send(s)), so the two cells are not compared\n",
+                            have_d, have_a, (unsigned int)s_cap_sends);
+            } else {
+                const uint32_t nreg_d = gslive_nreg_of(s_cap_send[d_at]);
+                uint32_t n = s_cap_send_words[d_at] < s_cap_send_words[a_at]
+                               ? s_cap_send_words[d_at] : s_cap_send_words[a_at];
+
+                if (n > GSLIVE_CAP_WORDS) n = GSLIVE_CAP_WORDS;
+                for (k = 2u; k < n; k++) {
+                    if (s_cap_send[d_at][k] == s_cap_send[a_at][k]) continue;
+                    n_diff++;
+                    if (nreg_d != 0u && (k - 2u) % nreg_d == 0u) n_col++;
+                    else n_pos++;
+                }
+                ps2_kprintf("[GSLIVE] 12i D-vs-A: header words %s, %u data word(s) differ = %u position,"
+                            " %u colour -- %s\n",
+                            (s_cap_send[d_at][0] == s_cap_send[a_at][0] &&
+                             s_cap_send[d_at][1] == s_cap_send[a_at][1]) ? "MATCH" : "DIFFER",
+                            (unsigned int)n_diff, (unsigned int)n_pos, (unsigned int)n_col,
+                            (s_cap_send[d_at][0] == s_cap_send[a_at][0] && n_col == 0u)
+                                ? "one packet, two boxes" : "NOT one packet"
+                            );
+            }
+        }
+
+        /* Rung 12i's reading: two cells, both the recorder's own group, each alone in a session of one
+         * triangle -- box A asked LAST, behind three hand triangles, and box D asked FIRST, in front of
+         * everything.  The constants they are read against are 12h's, measured in this same band: that
+         * group at A's coordinates at the FRONT of the frame was FLAT four censuses running
+         * (painted=960) and the hand chain at A's coordinates behind three transfers laid a field
+         * (other=890).  A-late against A-early is therefore one box, one packet, two positions; D-first
+         * against D-third is one box, one sender, one group alone versus one of three.  Four combinations
+         * come back and they mean four different things to fix, so the row names which one this run gave
+         * instead of leaving it to be worked out from two counts. */
+        const int ok_c = (sh_other[2u] > (sh_tot[2u] - sh_same[2u]) / 4u);
+        const int ok_e = (sh_other[4u] > (sh_tot[4u] - sh_same[4u]) / 4u);
+        const int ok_f = (sh_other[5u] > (sh_tot[5u] - sh_same[5u]) / 4u);
+        const uint32_t a_painted = sh_tot[0u] - sh_same[0u];   /* recorder, alone, LAST */
+        const uint32_t b_painted = sh_tot[1u] - sh_same[1u];
+        const uint32_t d_painted = sh_tot[3u] - sh_same[3u];   /* recorder, alone, FIRST */
+        const int cell_a_late = (sh_other[0u] > a_painted / 4u);
+        const int cell_d_early = (sh_other[3u] > d_painted / 4u);
+        const int ok_b = (b_painted != 0u && sh_other[1u] <= b_painted / 4u);
+        const int win_b = (sh_r[1u] >= sh_g[1u] && sh_r[1u] >= sh_b[1u]) ? 'R'
+                          : ((sh_g[1u] >= sh_b[1u]) ? 'G' : 'B');
+
+        if (s_census_only < GSLIVE_SH_N)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- this is 12t's LONE census.  The control, box B, "
+                        "box A and the hand chain were withheld, so one box has a packet behind it and the "
+                        "2x2 cannot be graded; 12t's own verdict above is this census's answer\n");
+        else if (ctrl != GSLIVE_PX)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- the magenta control in this same band did "
+                        "not come back whole (%u/%u), so the page these boxes were read out of is not "
+                        "certified and no shading answer above may be quoted\n",
+                        (unsigned int)ctrl, (unsigned int)GSLIVE_PX);
+        else if (s_sh_refused != 0u || s_shape_refused != 0u)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- a group was refused on the way out, so at "
+                        "least one box on the page is a part-draw\n");
+        else if (s_sh_groups + s_sh_held != 6u || s_cap_sends != 6u || s_sh_held != 0u ||
+                 s_sh_sess_groups[0u] != 2u || s_sh_sess_groups[1u] != 2u ||
+                 s_sh_sess_groups[3u] != 2u || s_shape_sent != 3u)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- the recorder sent %u group(s) and 12q's mask "
+                        "held %u, in %u captured send(s) (A=%u B=%u D=%u) and the matrix %u.  Since 12v "
+                        "each box must be TWO groups -- one write of its PRIM and one chain -- EVERY one "
+                        "must go out, or a cell above has no packet behind it -- which is 12q's dial, not "
+                        "a failure\n",
+                        (unsigned int)s_sh_groups, (unsigned int)s_sh_held,
+                        (unsigned int)s_cap_sends,
+                        (unsigned int)s_sh_sess_groups[0u], (unsigned int)s_sh_sess_groups[1u],
+                        (unsigned int)s_sh_sess_groups[3u], (unsigned int)s_shape_sent);
+        else if (!(ok_c && ok_e && ok_f))
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- a CONTROL went flat (C %d, E %d, F %d; the "
+                        "three measured other=840, 609 and 441), so this run's read or environment "
+                        "differs from the one the recorder change was designed against and the grid "
+                        "below would be an answer about the instrument, not about the GS\n",
+                        ok_c, ok_e, ok_f);
+        else if (!ok_b)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- box B, asked IIP=0 on the same chain as the "
+                        "recorder's cells, came back with a field (painted=%u other=%u) instead of one "
+                        "corner, so this read cannot tell a gradient from a flat colour and a cell "
+                        "answer means nothing\n",
+                        (unsigned int)b_painted, (unsigned int)sh_other[1u]);
+        else if (s_cap_rec_at != s_sh_sess_first[0u] || s_cap_send_words[s_cap_rec_at] == 0u)
+            ps2_kprintf("[GSLIVE] shading verdict: SKIP -- A's group is not in the capture array at the "
+                        "slot its session names (captured slot %u, session slot %u), so 12g's identity "
+                        "is being read out of some other box's packet\n",
+                        (unsigned int)s_cap_rec_at, (unsigned int)s_sh_sess_first[0u]);
+        else {
+            ps2_kprintf("[GSLIVE] shading verdict: the grid is readable (C/E/F interpolated, B is one "
+                        "flat colour %c).  Box D, the recorder's group ALONE and FIRST, %s "
+                        "(painted=%u other=%u).  Box A, the same group ALONE and LAST, %s "
+                        "(painted=%u other=%u).\n",
+                        win_b, cell_d_early ? "INTERPOLATES" : "is FLAT",
+                        (unsigned int)d_painted, (unsigned int)sh_other[3u],
+                        cell_a_late ? "INTERPOLATES" : "is FLAT",
+                        (unsigned int)a_painted, (unsigned int)sh_other[0u]);
+            ps2_kprintf("[GSLIVE] grid: recorder@A first FLAT (12h, 4 censuses, painted=960), hand@A "
+                        "behind 3 INTERPOLATES (12h, other=890), recorder@D third FLAT (12h,"
+                        " painted=1408), recorder@D alone-first %s, recorder@A alone-last %s -- %s\n",
+                        cell_d_early ? "INTERPOLATES" : "FLAT",
+                        cell_a_late ? "INTERPOLATES" : "FLAT",
+                        (!cell_d_early && !cell_a_late) ? "SENDER: order and session both excluded"
+                            : (cell_d_early && cell_a_late) ? "SESSION: position excluded"
+                                : (cell_a_late && !cell_d_early) ? "ORDER: a gradient needs transfers"
+                                    : "PLACE: the box decides, and only for the recorder");
+            if (!cell_d_early && !cell_a_late)
+                ps2_kprintf("[GSLIVE] shading verdict: the variable is the SENDER.  The recorder's group "
+                            "is flat at the front of the frame (D: painted=%u, other=%u) and at the back "
+                            "of it (A: %u, %u), alone in a session and shared in one, while the hand "
+                            "chain -- the same eight bytes (12g) -- shades at A's coordinates from this "
+                            "same late position.  Where it goes out and what goes out beside it move "
+                            "nothing, so what is left is the code that stages and hands the packet: the "
+                            "sink's aligned copy, the qwc it passes, the buffer it lives in.  Rung 12k "
+                            "takes the recorder's CAPTURED bytes back through the hand's own send at "
+                            "box A, which is the last split between the packet and the sender.\n",
+                            (unsigned int)d_painted, (unsigned int)sh_other[3u],
+                            (unsigned int)a_painted, (unsigned int)sh_other[0u]);
+            else if (cell_d_early && cell_a_late)
+                ps2_kprintf("[GSLIVE] shading verdict: the variable is the SESSION.  Alone in a session "
+                            "of its own the recorder's group shades at BOTH ends of the frame (D "
+                            "painted=%u other=%u, A %u/%u), and in 12h the same group shared one session "
+                            "and went flat at both -- the only difference left is that a session's "
+                            "second and third groups are cut by `gs_rec_prim()` out of a buffer the "
+                            "first one already used.  The production recorder draws whole frames of "
+                            "triangles in one session, so this is the answer that matters, and rung 12k "
+                            "puts TWO triangles in one session at two boxes and reads whether the second "
+                            "goes flat behind the first\n",
+                            (unsigned int)d_painted, (unsigned int)sh_other[3u],
+                            (unsigned int)a_painted, (unsigned int)sh_other[0u]);
+            else if (cell_a_late)
+                ps2_kprintf("[GSLIVE] shading verdict: the variable is the frame's ORDER.  Box A shades "
+                            "once three transfers have gone out in front of it (painted=%u other=%u) and "
+                            "box D, first in the frame with nothing in front, does not (%u/%u) -- so a "
+                            "gradient here needs a triangle transfer BEFORE it, not a different packet.  "
+                            "That is a frame problem, not an encoder problem, and it says the production "
+                            "stream has to put something in front of its first shaded triangle -- but "
+                            "rung 12j's bbox and spill rows above have to be read FIRST, because a flat "
+                            "box holding its whole rect is a geometry answer and not a shading one\n",
+                            (unsigned int)a_painted, (unsigned int)sh_other[0u],
+                            (unsigned int)d_painted, (unsigned int)sh_other[3u]);
+            else
+                ps2_kprintf("[GSLIVE] shading verdict: the variable is the PLACE, for the recorder alone. "
+                            "Box D's group shades at the front of the frame (painted=%u other=%u) and "
+                            "box A's is flat at the back of it (%u/%u) after being flat at the front in "
+                            "12h, so the recorder shades at one x in this band and not at another while "
+                            "the hand chain shades at both.  In 12k the two boxes differed in width (A "
+                            "128 px, apex 176; D 88 px, apex 580), which is why 12k swept the "
+                            "recorder's x at one encoding -- and rung 12n now narrows D's ask inside its "
+                            "own window, so read that sweep as 12k's and this row as 12n's\n",
+                            (unsigned int)d_painted, (unsigned int)sh_other[3u],
+                            (unsigned int)a_painted, (unsigned int)sh_other[0u]);
+        }
+    }
+
+    have_prev = s_live_prev_valid;
+    for (i = 0u; i < (uint32_t)PS2_SCREEN_HEIGHT; i++) {
+        ink_now += s_live_cur_ink[i];
+        same_now += s_live_cur_same[i];
+        if (!have_prev) continue;
+        ink_then += s_live_prev_ink[i];
+        if (s_live_cur_ink[i] < s_live_prev_ink[i]) {
+            erased += s_live_prev_ink[i] - s_live_cur_ink[i];
+            if (s_live_cover_row[i]) lost_rows_covered++;
+            if (lost_rows++ == 0u) lost_first = i;
+            lost_last = i;
+        } else if (s_live_cur_ink[i] > s_live_prev_ink[i]) {
+            laid += s_live_cur_ink[i] - s_live_prev_ink[i];
+        }
+    }
+    /* What the client area holds that is NOT ink, in the same top-N shape as the ink rows above, and
+     * read against them rather than alone: a hole of 0x00000000 is the app's own CPU pixmap having
+     * been blitted and uploaded, a hole of 0xFF121B29 is the console, a hole of the desktop's plate
+     * colour is the composite's frame stage, a hole of the wallpaper is the background cache.  Those
+     * are four different files to change, and rung 6b's row count cannot tell them apart -- it only
+     * knows the page came back to the canvas. */
+    ps2_kprintf("[GSLIVE] canvas in the client: %u px, %u bin(s), rare=%u\n",
+                (unsigned int)same_now, (unsigned int)cv_bins, (unsigned int)cv_rare);
+    for (k = 0u; k < 3u && k < cv_bins; k++) {
+        int seeded = 0;
+
+        best = 0u;
+        for (i = 0u; i < cv_bins; i++) {
+            if (cv_printed[i]) continue;
+            if (!seeded || cv_n[i] > cv_n[best]) { best = i; seeded = 1; }
+        }
+        if (!seeded) break;
+        cv_printed[best] = 1;
+        ps2_kprintf("[GSLIVE] canvas: 0x%08x n=%u box=%d,%d..%d,%d\n",
+                    (unsigned int)cv_v[best], (unsigned int)cv_n[best],
+                    cv_box[best][0], cv_box[best][1], cv_box[best][2], cv_box[best][3]);
+    }
+
+    ps2_kprintf("[GSLIVE] survival: census #%u client ink=%u canvas=%u of %u px%s\n",
+                (unsigned int)(s_live_census_no + 1u), (unsigned int)ink_now,
+                (unsigned int)same_now, (unsigned int)win_px,
+                win_px ? "" : " (no client rect: no XMB window, so nothing to tally)");
+    if (have_prev && win_px) {
+        uint32_t cover_rows = 0u;
+
+        for (i = 0u; i < (uint32_t)PS2_SCREEN_HEIGHT; i++)
+            if (s_live_cover_row[i]) cover_rows++;
+
+        /* Rung 6c's prints follow the survival rows they are read against. */
+        ps2_kprintf("[GSLIVE] survival: ink %u -> %u px between census #%u and #%u -- erased=%u over "
+                    "%u row(s) (client y %d..%d), newly laid=%u\n",
+                    (unsigned int)ink_then, (unsigned int)ink_now,
+                    (unsigned int)s_live_census_no, (unsigned int)(s_live_census_no + 1u),
+                    (unsigned int)erased, (unsigned int)lost_rows,
+                    lost_rows ? cy0 + (int)lost_first : -1,
+                    lost_rows ? cy0 + (int)lost_last : -1, (unsigned int)laid);
+        ps2_kprintf("[GSLIVE] survival verdict: %s\n",
+                    erased * 10u > ink_then
+                        ? "the ink ARRIVES AND THEN LEAVES -- a present between the two reads re-lays "
+                          "the canvas over most of what the stream drew, which is the one reading that "
+                          "puts the census (client rect full) and the operator (window empty) both right, "
+                          "and it makes the eraser, not the stream, the next thing to price"
+                        : (erased == 0u && ink_now == ink_then
+                               ? "the ink HOLDS, row for row, between two presents -- what the census sees "
+                                 "is what the page keeps, so a screen that disagrees is a display-environment "
+                                 "question (which page, which buffer), not a present-order one"
+                               : "the ink mostly holds; the rows that moved are animation, not erasure"));
+        /* Rung 6c: WHO, and does the row set match.  The cover list is the only uploader that puts
+         * the canvas INSIDE a layer's rect after the stream -- by design, for whatever the composite
+         * drew above the layer -- so this is a direct test of it, and it is written to fail: a lost
+         * row with no upload in it falsifies the reading and points back at the pass's own whole-width
+         * upload, or at a stream that stopped reaching those rows.  `cover_px` is an upper bound by
+         * construction (two passes can cover one row), which is why the test is `>=` and never `==`. */
+        ps2_kprintf("[GSLIVE] eraser: %u cover upload(s) since census #%u laid %u px back to the "
+                    "canvas over %u row(s); %u of %u lost row(s) sit inside them%s\n",
+                    (unsigned int)cover_rects, (unsigned int)s_live_census_no,
+                    (unsigned int)cover_px, (unsigned int)cover_rows,
+                    (unsigned int)lost_rows_covered, (unsigned int)lost_rows,
+                    cover_missed ? " (the ring wrapped: older rects in this window were not counted)"
+                                 : "");
+        ps2_kprintf("[GSLIVE] eraser verdict: %s\n",
+                    erased == 0u
+                        ? "NOTHING WAS ERASED between the two reads, so the cover ring is a control "
+                          "here rather than a suspect -- it put px on the bus anyway and the stream "
+                          "kept its ink"
+                        : (lost_rows != 0u && lost_rows_covered == lost_rows &&
+                           cover_px >= erased)
+                            ? "THE COVER UPLOADS ACCOUNT FOR THE WHOLE HOLE -- "
+                              "ps2_upload_cover_in_layer() re-laid the canvas inside the client AFTER "
+                              "the stream, which is exactly what the operator calls an empty window. "
+                              "The cure is LANE 9d's predicate: refuse a cover rect whose canvas holds "
+                              "nothing above the layer, the way 9a refuses the body plate"
+                        : (lost_rows_covered == 0u)
+                            ? "FALSIFIED for the cover path: no upload touched a single lost row, so "
+                              "the eraser is the pass's own whole-width canvas upload landing after the "
+                              "stream, or a stream that stopped covering those rows -- read the canvas "
+                              "colour rows above to tell those two apart"
+                            : "PARTLY accounted: the cover path explains some lost rows and not the "
+                              "rest, so at least a second uploader has to be named before any fix");
+        for (i = 0u; i < hc_n; i++)
+            ps2_kprintf("[GSLIVE] eraser: cover rect %u = %d,%d..%d,%d (%u px) sent at pass %u\n",
+                        (unsigned int)i, hc_rect[i][0], hc_rect[i][1], hc_rect[i][2], hc_rect[i][3],
+                        (unsigned int)((hc_rect[i][2] - hc_rect[i][0]) *
+                                       (hc_rect[i][3] - hc_rect[i][1])),
+                        (unsigned int)hc_pass[i]);
+
+        /* The author, by measurement rather than by archaeology.  The cover list has five producers
+         * (panel rows, bar rows, the global menu, the Tracker menu, the TIP candidate window) and the
+         * geometry says which kind of thing the rect is; the getters say which one of them is actually
+         * open THIS frame.  A match is the good outcome -- it means the present re-laid what the
+         * composite really drew above the layer, and the hole is desktop chrome rather than a bug.  No
+         * match means an adder put a rect on the list that nothing above the layer owns, and that is
+         * the LANE 9d refusal case. */
+        {
+            RECT gm, tm;
+            const BOOL gm_open = global_menu_get_open_rect(&gm);
+            const BOOL tm_open = tracker_get_menu_rect(&tm);
+            int who = 0;
+
+            if (hc_n && ps2_bench_cover_is(&gm, hc_rect[0], cx0, cy0, cx1, cy1)) who = 1;
+            else if (hc_n && ps2_bench_cover_is(&tm, hc_rect[0], cx0, cy0, cx1, cy1)) who = 2;
+            ps2_kprintf("[GSLIVE] eraser author: global_menu=%d,%d..%d,%d(%s) "
+                        "tracker_menu=%d,%d..%d,%d(%s) tip_state=%d\n",
+                        gm_open ? (int)gm.left : -1, gm_open ? (int)gm.top : -1,
+                        gm_open ? (int)gm.right : -1, gm_open ? (int)gm.bottom : -1,
+                        gm_open ? "OPEN" : "closed",
+                        tm_open ? (int)tm.left : -1, tm_open ? (int)tm.top : -1,
+                        tm_open ? (int)tm.right : -1, tm_open ? (int)tm.bottom : -1,
+                        tm_open ? "OPEN" : "closed", (int)tip_get_state());
+            ps2_kprintf("[GSLIVE] eraser author: %s\n",
+                        who == 1 ? "THE GLOBAL MENU -- open, and its rect is the hole: the present "
+                                   "re-laid desktop chrome the composite really drew above the layer"
+                                 : (who == 2 ? "THE TRACKER MENU -- open, and its rect is the hole"
+                                             : (hc_n == 0u
+                                                ? "NO COVER UPLOAD went out between the two reads, so "
+                                                  "there is no hole for an overlay to author"
+                                                : "NO OPEN OVERLAY MATCHES the recorded rect, so "
+                                                  "either the TIP window added it or a stale rect is "
+                                                  "on the cover list -- the refusal case, and the one "
+                                                  "the fix is for")));
+        }
+    }    for (i = 0u; i < (uint32_t)PS2_SCREEN_HEIGHT; i++) s_live_prev_ink[i] = s_live_cur_ink[i];
+    s_live_prev_valid = 1;
+    s_live_census_no++;
 
     /* The fork, in the order that stops an incomplete or uncertified read from being filed as an
      * answer about the GS: the read's own completion, then the control's, then the window's absence,
@@ -7874,6 +11740,19 @@ static void ps2_bench_gs_live_census(uint32_t frame)
                     "what arrives is on the page and the remaining question is WHICH picture it is; "
                     "read the ink colours and boxes above against what the XMB should show\n",
                     (unsigned int)diff_win, (unsigned int)win_px);
+    }
+
+    /* LANE 19 rung 10, and the reading every rung above stops short of: the page as something a
+     * person can LOOK at rather than count.  Gate -- a complete read (a part-page would print a
+     * picture with holes in it and call it the app's), a GS-layer window that is mostly ink (an
+     * early census reads a window that has not painted yet, and its picture is the desktop's), and
+     * at most two per run, because the row is 2 kB of log and the second one is what shows whether
+     * the picture moved between presents. */
+    if (sent == 0u && w && w->gl_layer && win_px != 0u &&
+        diff_win > win_px / 2u && s_spk_printed < 2u) {
+        s_spk_sent = sent;
+        s_spk_printed++;
+        gspeak_dump();
     }
 }
 #endif /* BTRON_PS2_BENCH_GS == 2 */
@@ -8064,6 +11943,12 @@ static void ps2_bench_shell_verb(GDEV *screen)
      * already in hand.  The phases that run after this one spend the same pool, so a `no
      * surface` in them is this row's answer rather than a second defect to chase. */
     ps2_bench_pool_census("after the ledger");
+    /* The holder census, run on purpose rather than only after a death: this is the row the operator
+     * reads by hand as `heapstat`, and the bench is the only place it can be proven to print.  The
+     * `at the first unservable ask` path above fires on an OOM; with the pool sized to the session
+     * (11 MB, 2026-10-17) there is no OOM left to trigger it, and an instrument that only speaks
+     * when the machine is already broken is not an instrument. */
+    ps2_heap_holders("from the bench, after the ledger");
     ps2_kprintf("[BENCH] shell ledger: %d cycle(s) on a boot hole of %u kB -- pool used %u kB at boot, %u kB after the last close, so a cycle that gets its planes keeps %u kB and the ledger kept %u kB%s\n",
                 3, (unsigned int)(hole_boot / 1024u), (unsigned int)(used_boot / 1024u),
                 (unsigned int)(s_heap_used / 1024u), leak_kb,
@@ -8211,11 +12096,16 @@ static void ps2_bench_msx(void)
 {
 #ifdef BTRON_PS2_MSX
     static VfsEntry entries[16];
-    static uint8_t  rom[MSX_ROM_SIZE + 1];
+    uint8_t *rom = (uint8_t *)Imalloc((size_t)MSX_ROM_SIZE + 1u);
     char path[VFS_MAX_PATH];
     const char *first = "";
     uint32_t got = 0u;
     int rows, rc, lrc = MSX_ERR_SIZE;
+
+    if (!rom) {
+        ps2_kprintf("[MSX] failed to allocate rom buffer -- SKIP\n");
+        return;
+    }
 
     rows = vfs_list_dir(MSX_ROM_CATALOGUE, entries, 16);
     if (rows > 0) first = entries[0].name;
@@ -8232,7 +12122,7 @@ static void ps2_bench_msx(void)
 
         vfs_child_path(path, sizeof(path), MSX_ROM_CATALOGUE,
                        entries[0].name, entries[0].fid);
-        if (vfs_read_blob(path, rom, sizeof(rom), &n) == 0) {
+        if (vfs_read_blob(path, rom, (size_t)MSX_ROM_SIZE + 1u, &n) == 0) {
             char hdr[8];
             got = (uint32_t)n;
             for (i = 0; i < 6; i++)
@@ -8247,6 +12137,7 @@ static void ps2_bench_msx(void)
         }
     }
 
+    Ifree(rom);
     msx_shutdown();     /* leave no machine instance for the phases below */
 #else
     /* Parked, not absent: the row prints either way so a log line can never be read as
@@ -8597,12 +12488,7 @@ static void ps2_gui_pass(GDEV *screen)
         if (s_bench_app_made >= 4u && s_bench_app_made <= 6u)
             ps2_bench_canvas_census(screen, (unsigned int)s_bench_app_made);
 #if BTRON_PS2_BENCH_GS == 2
-        /* LANE 19 rung 6, on ONE pass rather than the canvas census's three: it reads the whole
-         * page band by band, and the row it answers does not need a delta -- the page either holds
-         * the stream's ink or it does not.  Frame 5 because the window is up by then (the shell
-         * witness above needs three passes at the outside) and the phase's own Escape has not been
-         * injected yet, which is the only reason this runs inside the hook at all. */
-        if (s_bench_app_made == 5u)
+        if (s_bench_app_made == 3u)
             ps2_bench_gs_live_census(s_bench_app_made);
 #endif
     }
@@ -9315,6 +13201,13 @@ static void ps2_log_boot_tail(int hid_devs)
 
 void ps2_kernel_main(void)
 {
+    /* -1. The stack's own watermark, before anything can recurse.  This has to be the first act
+     *     with a frame, because the probe can only paint memory no call has used yet, and the
+     *     answer is what licenses every kB the pool takes from the tail of RAM (see
+     *     ps2_stack_probe_arm).  Anything it misses is a call that ran before this one -- boot's
+     *     own handful of stores. */
+    ps2_stack_probe_arm();
+
     /* 0. The canvas, before anything can draw into it or be measured.  The GS driver
      *    used to own a second 800x600x4 array and the present copied this one into it
      *    one pixel at a time; now the DMA reads the array the compositor paints, so the

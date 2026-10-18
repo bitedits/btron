@@ -60,6 +60,8 @@ __attribute__((weak, weak_import)) WND* open_orchestra_window(void);
 __attribute__((weak, weak_import)) WND* open_drivesetup_window(void);
 __attribute__((weak, weak_import)) WND* launch_beos_chat(void);
 __attribute__((weak, weak_import)) WND* open_clarity_window(void);
+__attribute__((weak, weak_import)) WND* open_quake_window(int x, int y, int width, int height);
+__attribute__((weak, weak_import)) WND* open_msx_window(void);
 #else
 extern WND* open_vobj_manager_window(void);
 extern WND* open_control_panel_window(void);
@@ -70,6 +72,8 @@ extern WND* open_orchestra_window(void);
 extern WND* open_drivesetup_window(void);
 extern WND* launch_beos_chat(void);
 extern WND* open_clarity_window(void);
+extern WND* open_quake_window(int x, int y, int width, int height);
+extern WND* open_msx_window(void);
 #endif
 
 /* Static Tracker Singleton - NASA JPL Rule: No runtime heap allocations */
@@ -124,11 +128,11 @@ void tracker_refresh_windows(void) {
     H tracked_wnds = 0;
     /* The window list is the only part of this menu whose length the desktop
      * decides, so it is the part that has to leave room: everything added after
-     * it is fixed -- two separators, the four application rows below, and the four
-     * system rows -- ten in all.  A list allowed to reach TRACKER_MAX_ITEMS would
+     * it is fixed -- two separators, the six application rows below, and the four
+     * system rows -- twelve in all.  A list allowed to reach TRACKER_MAX_ITEMS would
      * push the shutdown items off the end, because tracker_add_item() drops what
      * does not fit rather than displacing what is already there. */
-    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 10) {
+    while (w && tracked_wnds < 12 && g_tracker.item_count < TRACKER_MAX_ITEMS - 12) {
         if (w->visible) {
             char item_buf[48];
             tracker_format_wnd_title(item_buf, sizeof(item_buf), w->focused, w->title);
@@ -150,11 +154,13 @@ void tracker_refresh_windows(void) {
      * follow this menu's existing "日本語 (English)" convention.  Every open_* here
      * is weak (include/btron/apps.h), so a target that does not link gterm.c,
      * xmb.c, glgears.c or the demoscene gets an inert row rather than a link
-     * error -- which is what lets the same four rows ship on every port. */
+     * error -- which is what lets the same rows ship on every port. */
     tracker_add_item(TRACKER_CMD_TERMINAL, "端末 (Terminal)", NULL);
     tracker_add_item(TRACKER_CMD_XMB,      "横断メディアメニュー (XMB)", NULL);
     tracker_add_item(TRACKER_CMD_GEARS,    "OpenGL 歯車 (GLGears)", NULL);
     tracker_add_item(TRACKER_CMD_DEMO,     "デモシーン (Lil Cu 64)", NULL);
+    tracker_add_item(TRACKER_CMD_MSX,      "MSX ゲーム (B-MSX)", NULL);
+    tracker_add_item(TRACKER_CMD_QUAKE,    "Quake 3D (クエイク)", NULL);
 
     tracker_add_item(TRACKER_CMD_SEPARATOR, "------------------------", NULL);
 
@@ -305,6 +311,12 @@ static void tracker_execute_item(H index) {
             break;
         case TRACKER_CMD_DEMO:
             if (open_lilcu64_demo_window) open_lilcu64_demo_window();
+            break;
+        case TRACKER_CMD_MSX:
+            if (open_msx_window) open_msx_window();
+            break;
+        case TRACKER_CMD_QUAKE:
+            if (open_quake_window) open_quake_window(120, 60, 480, 360);
             break;
         case TRACKER_CMD_AUDIODECK:
             if (open_audio_player_window) open_audio_player_window();

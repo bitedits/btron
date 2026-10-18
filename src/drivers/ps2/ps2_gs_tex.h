@@ -118,4 +118,7 @@ int gs_tex_free(const void *plane);
 /* Compact texture memory and reclaim unused trailing VRAM spans. Returns bytes reclaimed. */
 uint32_t gs_tex_compact(void);
 
+/* VRAM byte offset reserved for hardware Z-buffer. */
+uint32_t gs_tex_zbuf_byte(void);
+
 #endif /* PS2_GS_TEX_H */

@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-#define GMENU_MAX_ITEMS     24
+#define GMENU_MAX_ITEMS     32
 #define GMENU_HEADER_COUNT   5
 
 /* ── Header indices ──────────────────────────────────────────── */
@@ -61,6 +61,7 @@ enum {
     GMENU_CMD_APP_DEMO       = 209,
     GMENU_CMD_APP_XMB        = 217,
     GMENU_CMD_APP_GEARS      = 218,
+    GMENU_CMD_APP_MSX        = 219,
 
     /* ── アプリ(A) — 超漢字 Cho-Kanji suite ── */
     GMENU_CMD_APP_CK_CABINET     = 210,

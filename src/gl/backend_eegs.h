@@ -43,6 +43,7 @@
  * ever had a fraction to put in them. */
 typedef struct {
     int32_t  x_px, y_px;
+    uint32_t z;
     float    s, t;
     uint32_t rgba;            /* r in bits 7:0, g 15:8, b 23:16, a 31:24 */
 } eegs_vertex_t;
@@ -55,6 +56,7 @@ typedef struct {
     unsigned smooth : 1;      /* IIP: interpolate the three colours, else the first one */
     unsigned textured : 1;    /* TME */
     unsigned blended : 1;     /* ABE */
+    unsigned depth_test : 1;  /* Z test */
 } eegs_tri_state_t;
 
 /* A frame starts here: the recorder's counters are per-frame and its open group must not survive
@@ -82,6 +84,7 @@ void eegs_triangle(const eegs_vertex_t v[3], eegs_tri_state_t st);
  * border is a GL_LINE_LOOP, so the line path is not a future convenience -- it is on screen. */
 void eegs_line(const eegs_vertex_t v[2], const eegs_tri_state_t st);
 void eegs_point(const eegs_vertex_t v[1], const eegs_tri_state_t st);
+void eegs_clear(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t rgba);
 
 /* A retained mesh, drawn as one strip: `rows` x `cols` mapped points in row order, walked in the
  * ribbon's zigzag, for a total of `(rows-1)*cols*2` vertices and that many minus two triangles.
@@ -175,5 +178,45 @@ uint32_t eegs_tex_missing(void);
  * verdict, and the `verts=`/`prims=` ratio that shows a re-lived one, are in doc/txt/PS2.txt.  Resets
  * with the frame, like the two above. */
 uint32_t eegs_prim_moves(void);
+
+/* LANE 19 rung 11: the frame's vertex-colour census, taken at the RGBAQ emit.  `changes` is how
+ * often a vertex arrived carrying a different colour from the one before it and `verts` how many
+ * vertices there were, so a frame that really draws a gradient and a wave lattice reports the two
+ * as the same order of size, and a frame whose vertices all carry one colour reports 0 changes with
+ * `first == last`.  The two words are the first and last colour seen, in the same
+ * r-in-bits-7:0 layout `eegs_vertex_t.rgba` uses.  Read these before touching the GS's shading
+ * state: they say whether the collapse is upstream of the stream or in the rasteriser. */
+uint32_t eegs_colour_changes(void);
+uint32_t eegs_colour_verts(void);
+uint32_t eegs_colour_first(void);
+uint32_t eegs_colour_last(void);
+
+/* Of the PRIM words the frame declared (which is what `eegs_prim_moves()` counts), how many set
+ * IIP -- the GS's Gouraud-interpolation bit -- and how many set TME.  Because the recorder programs
+ * PRIM once per group and never repeats it, these are the complete set of shading modes the frame
+ * asked the rasteriser for: `iip=0` alongside a varying `colchg=` is a flat page explained at the
+ * first place to look. */
+uint32_t eegs_prim_iip(void);
+uint32_t eegs_prim_tme(void);
+uint32_t eegs_prim_decl(void);
+
+/* LANE 19 rung 12b: the frame's wide triangles, selected by AREA rather than by colour, because the
+ * one layer whose flatness is the complaint is the only one whose triangles are big.  `wide=` counts
+ * every triangle of at least 32,768 doubled pixels and `wideflat=` the ones of those whose three
+ * vertices arrived carrying one colour, so `wideflat == wide` says no gradient left the EE at all.
+ * The `big_*` name the single widest: its doubled area, the three colours it was handed in the same
+ * r-in-bits-7:0 layout as `eegs_vertex_t.rgba`, and the IIP it asked for.  Three different colours
+ * with `sm=1` and a flat page on the screen is a GS shading question; one colour in all three is an
+ * EE one, and the two have opposite remedies. */
+uint32_t eegs_wide_tri(void);
+uint32_t eegs_wide_flat(void);
+uint32_t eegs_big_area(void);
+uint32_t eegs_big_c0(void);
+uint32_t eegs_big_c1(void);
+uint32_t eegs_big_c2(void);
+uint32_t eegs_big_smooth(void);
+
+/* Returns 1 if any primitive in the current frame requested depth testing. */
+int eegs_depth_test_active(void);
 
 #endif /* BTRON_GL_BACKEND_EEGS_H */

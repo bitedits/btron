@@ -17,7 +17,11 @@
 extern "C" {
 #endif
 
+#if defined(BTRON_PS2_TARGET)
+#define TAD_MAX_SPANS   128
+#else
 #define TAD_MAX_SPANS   1024
+#endif
 #define TAD_MAX_LINKS   128
 #define TAD_MAX_TITLE   128
 #define TAD_MAX_PATH    256

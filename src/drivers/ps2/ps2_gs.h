@@ -71,6 +71,7 @@ uint64_t ps2_gs_peek64(uint32_t addr);
  * (24.8 fixed), the one this port names -- with TEST.ZTEN clear and ZMSK set it is never read or
  * written, but the register still has to hold a format the hardware accepts. */
 #define GS_PSMZ32               0x03
+#define GS_PSMZ16               0x02
 
 /* Public API */
 void ps2_gs_init(uint32_t width, uint32_t height);

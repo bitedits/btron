@@ -189,9 +189,9 @@ static void env_stream(void)
     eq("tag data half", qw[0], 0x1000000000008009ULL);
     eq("tag regs half", qw[1], 0x000000000000000EULL);
 
-    /* QW1 -- XYOFFSET_1 (0x18).  12.4 at the 2048 page origin plus the window: 0x8000 + 12*16
-     * = 0x80C0 in X, 0x8000 + 20*16 = 0x8140 in Y, Y at bit 32. */
-    eq("xyoffset value", qw[2], 0x00008140000080C0ULL);
+    /* QW1 -- XYOFFSET_1 (0x18).  12.4 at the 2048 page origin minus the window: 0x8000 - 12*16
+     * = 0x7F40 in X, 0x8000 - 20*16 = 0x7EC0 in Y, Y at bit 32. */
+    eq("xyoffset value", qw[2], 0x00007EC000007F40ULL);
     eq("xyoffset reg", qw[3], 0x18ULL);
 
     /* QW2 -- SCISSOR_1 (0x40).  Eleven-bit plain pixels: 12, 788<<16, 20<<32, 556<<48. */

@@ -566,11 +566,11 @@ if [ -n "$OBJDUMP64" ]; then
     # what makes a window here an instruction word rather than a coincidence.  The size test
     # is the other half: it fails loudly if the section is ever renamed, which is exactly the
     # way a whole-file scan's silence used to hide a typo.
-    ELF_TEXT="$($READELF --hex-dump=.text $ELF | awk '/^  0x/{print $2$3$4$5$6$7$8$9}' | tr -d '\n')"
+    ELF_WORDS="$($READELF --hex-dump=.text $ELF | awk '/^  0x/{for (i = 2; i <= 9; i++) if (length($i) == 8) print $i}')"
     # The variable references survive to eval time -- a 830 KB section is a 1.7 MB hex string
     # and pasting it into the command text would make every failure print it.
-    assert_check "The illegal COP1 encodings are absent from .text byte-for-byte (.text is ${#ELF_TEXT} hex chars)" \
-        "[ \${#ELF_TEXT} -ge 1000000 ] && ! (grep -qE '([048c]d[0-9a-f]{2}0046|31000246)' <<<\"\$ELF_TEXT\")"
+    assert_check "The illegal COP1 encodings are absent from .text byte-for-byte (.text is ${#ELF_WORDS} hex chars)" \
+        "[ \${#ELF_WORDS} -ge 1000000 ] && ! (grep -qE '^([048c]d[0-9a-f]{2}0046|31000246)$' <<<\"\$ELF_WORDS\")"
     # The unordered compare family as a *class* rather than as one literal, because the class
     # is the law and the literal was the gap: the row above names `31000246`, which is
     # `c.un.s $f0,$f2` with the operand pairing the self-test happened to hand-write, and a

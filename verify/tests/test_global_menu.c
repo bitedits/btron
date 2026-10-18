@@ -49,6 +49,7 @@ WND* open_chokanji_kconv_window(void)       { return NULL; }
 WND* open_chokanji_xfconv_window(void)      { return NULL; }
 WND* open_chokanji_unpack_window(void)      { return NULL; }
 WND* open_quake_window(void)                { return NULL; }
+WND* open_msx_window(void)                  { return NULL; }
 WND* open_lilcu64_demo_window(void)         { return NULL; }
 WND* open_glgears_window(void)              { return NULL; }
 WND* open_xmb_window(void)                  { return NULL; }

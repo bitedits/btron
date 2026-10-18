@@ -35,6 +35,27 @@
  * structure that actually preserves order -- a FIFO with one transfer in flight -- instead of
  * against a stub that counted calls.
  *
+ * LANE 19 rung 12v changed the SHAPE of a frame, and every count in this file is derived from it, so
+ * it is stated here rather than left to the rows.  The recorder now writes the primitive descriptor as
+ * its own one-register AD group in front of every vertex chain.  The reason is measured, not assumed:
+ * 12u put four ways of programming PRIM on the machine and only the AD write drew a triangle -- a GIF
+ * tag's PRIM field does not reach the register when that tag sets PRE, and every recorder tag does --
+ * so before the fix every chain in a real frame drew under the last descriptor an AD write left there,
+ * which is SPRITE from the depth clear, and the screen showed rectangles where gears should be.  What
+ * that costs this suite:
+ *
+ *   - a chain is TWO groups, so N chains put 1 + 2N packets on the bus (the environment first);
+ *   - a per-triangle quadword total is the chain plus its PRIM write, not the chain alone;
+ *   - the pair is the new order law: a chain must follow its own descriptor, so the suite checks the
+ *     AD write and the chain agree about the primitive and are staged adjacent, in that order;
+ *   - the invariance lanes are untouched by it, because they fold vertex groups only -- but an AD
+ *     group carries no position, so a frame whose geometry shifted now matches on its descriptor
+ *     groups while its chains differ, and `at=` names odd indices.
+ *
+ * The words of the AD group itself are gated by verify/tests/test_ps2_gs_rec.c's test_prim_write();
+ * this suite does not restate them.  What it owns is that the present puts them on the bus in the
+ * order the recorder closed them, and what that costs in groups, quadwords and capacity.
+ *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
 
@@ -69,6 +90,11 @@ const gs_tex_t *gs_tex_find(const void *plane)
     return (const gs_tex_t *)0;
 }
 
+uint32_t gs_tex_zbuf_byte(void)
+{
+    return (GS_VRAM_BYTES - 122u * GS_PAGE_FRAME);
+}
+
 
 static int s_checks, s_failures;
 
@@ -99,7 +125,8 @@ static void eqw(const char *what, uint64_t got, uint64_t want)
  * holds each transfer for a poll, which is the case the ring was built for -- and the row that
  * needs it is test_begin_reaps_the_last_frames_stream(): the present returns with groups still on
  * the bus, and only begin() is allowed to wait for them. */
-#define KEEP 4u
+#define KEEP 8u   /* 12v puts two packets per chain: two triangles are five on the bus, and the
+                   * fidelity check below compares four of them, so four kept was no longer enough */
 static uint64_t s_keep[KEEP][GS_REC_QW_CAP * 2u];
 static uint32_t s_keep_n[KEEP];
 static uint32_t s_calls, s_bus_qw;
@@ -163,6 +190,15 @@ int ps2_gs_draw_dual_env_apply(const gs_draw_env *ctx1, const gs_draw_env *ctx2)
 }
 
 
+/* ── The frame shape every count below is derived from ───────────────────────────────
+ * LANE 19 rung 12v: one vertex chain is two groups -- its own AD write of PRIM, then the REGLIST.
+ * Stated as macros so a row that breaks when the shape changes says "a chain costs N groups", which is
+ * a fact about the bus, instead of a bare number that the next rung has to re-derive by hand. */
+#define PRIM_QW    GS_REC_AD_QWC(1u)                            /* tag + one register = 2 qw */
+#define CHAIN_QW   gs_group_qw(3u, GS_REC_NREG_UNTEX)            /* one untextured triangle */
+#define TRI_GROUPS 2u                                            /* a chain and its descriptor */
+#define TRI_QW     (PRIM_QW + CHAIN_QW)                           /* what one triangle costs */
+
 /* ── Drawing ─────────────────────────────────────────────────────────────────────── */
 
 /* The XMB's own client rect, at the size doc/txt/PS2.txt measures: 768x500 at (16, 40). */
@@ -175,6 +211,7 @@ static void vtx(eegs_vertex_t *v, int32_t x_px, int32_t y_px)
 {
     v->x_px = x_px;
     v->y_px = y_px;
+    v->z = 0u;
     v->s = 0.0f;
     v->t = 0.0f;
     v->rgba = 0xFF332244u;
@@ -191,6 +228,7 @@ static void tri(int32_t x_px, int32_t y_px, unsigned smooth)
     st.smooth = smooth;
     st.textured = 0u;
     st.blended = 0u;
+    st.depth_test = 0u;
     eegs_triangle(v, st);
 }
 
@@ -217,6 +255,7 @@ static void tri_rgba(int32_t x_px, int32_t y_px, unsigned smooth, uint32_t rgba)
     st.smooth = smooth;
     st.textured = 0u;
     st.blended = 0u;
+    st.depth_test = 0u;
     eegs_triangle(v, st);
 }
 
@@ -232,14 +271,28 @@ static void test_env_then_primitives(void)
     eegs_present_end();
     sent = eegs_present_send(&k_client);
 
-    check("one triangle, two sends: the environment and then its group", s_calls == 2u);
-    check("and send() counts the staged group, not the environment", sent == 1);
-    if (s_calls < 2u) return;
+    check("one triangle, three sends: the environment, its descriptor, then its chain",
+          s_calls == 1u + TRI_GROUPS);
+    check("and send() counts the staged groups, not the environment", sent == (int)TRI_GROUPS);
+    if (s_calls < 1u + TRI_GROUPS) return;
 
     check("the first is the environment packet", s_keep_n[0] == gs_draw_env_qwc());
     eqw("its tag loops the nine registers", gs_qw(s_keep[0], 0u) & 0x7FFFu, GS_ENV_NREG);
-    check("the second is one triangle's group", s_keep_n[1] == gs_group_qw(3u));
-    eqw("whose tag loops three vertices", gs_qw(s_keep[1], 0u) & 0x7FFFu, 3u);
+    /* 12v: what comes next is not the vertices.  The chain's primitive goes out as a one-register AD
+     * group of its own, and this is the order the fix lives or dies by -- a descriptor the present
+     * staged AFTER its chain would leave the chain drawing under the previous state, which is the
+     * bug, re-ordered rather than unfixed. */
+    check("the second is that PRIM write: tag plus one register", s_keep_n[1] == PRIM_QW);
+    eqw("its format is PACKED, so the write is one whole quadword", gs_flg_of(s_keep[1]), GS_FLG_PACKED);
+    eqw("one loop", gs_nloop_of(s_keep[1]), 1u);
+    eqw("one register in the list", gs_nreg_of(s_keep[1]), 1u);
+    eqw("and nothing draws under it: PRE clear", gs_pre_of(s_keep[1]), 0u);
+    check("the third is one triangle's chain", s_keep_n[2] == CHAIN_QW);
+    eqw("whose tag loops three vertices", gs_nloop_of(s_keep[2]), 3u);
+    /* The pair has to agree, or the GS draws one primitive and records another: the AD word is what
+     * reaches the register (12u's answer), and the tag field is what the group claims. */
+    eqw("descriptor and chain name the same primitive",
+        gs_qw(s_keep[1], 1u) & 0x7FFu, gs_prim_of(s_keep[2]));
 }
 
 /* The nine writes, in the order ps2_gs_env.h states as part of the design. */
@@ -327,8 +380,9 @@ static void test_staging_copies(void)
     eegs_frame_begin(direct_sink, NULL);
     draw_two_groups();
     eegs_frame_end();
-    check("the reference frame has two groups", s_dir_i == 2u);
-    if (s_dir_i < 2u) return;
+    check("the reference frame has four groups: two descriptors and two chains",
+          s_dir_i == 2u * TRI_GROUPS);
+    if (s_dir_i < 2u * TRI_GROUPS) return;
 
     dma_reset();
     eegs_present_begin();
@@ -336,20 +390,27 @@ static void test_staging_copies(void)
     eegs_present_end();
     eegs_present_send(&k_client);
 
-    /* env, then the two vertex groups */
-    check("the staged frame put three packets on the bus", s_calls == 3u);
-    if (s_calls < 3u) return;
-    for (g = 0u; g < 2u; g++) {
+    /* env, then descriptor/chain for each triangle -- the sink order is the recorder's close order,
+     * which is what the pairs below are comparing. */
+    check("the staged frame put five packets on the bus", s_calls == 1u + 2u * TRI_GROUPS);
+    if (s_calls < 1u + 2u * TRI_GROUPS) return;
+    for (g = 0u; g < 2u * TRI_GROUPS; g++) {
         char label[64];
         snprintf(label, sizeof(label), "staged group %u is the recorded one, word for word", g);
         check(label, s_keep_n[1u + g] == s_dir_n[g] &&
                      memcmp(s_keep[1u + g], s_dir[g], GS_QW_BYTES(s_dir_n[g])) == 0);
     }
-    /* The two groups have to differ from each other or the comparison above could be satisfied by
-     * a buffer that was copied twice from the same place -- which is the defect. */
-    check("and the two groups are distinguishable",
-          s_dir_n[0] != s_dir_n[1] ||
-          memcmp(s_dir[0], s_dir[1], GS_QW_BYTES(s_dir_n[0])) != 0);
+    /* The groups have to differ from each other or the comparison above could be satisfied by
+     * a buffer that was copied twice from the same place -- which is the defect.  12v puts two pairs
+     * in the frame, so both halves of the pair are checked against their other instance: the two
+     * descriptors differ because the smoothing alternates, and the two chains because the vertices
+     * do. */
+    check("and the two descriptors are distinguishable",
+          s_dir_n[0] != s_dir_n[2] ||
+          memcmp(s_dir[0], s_dir[2], GS_QW_BYTES(s_dir_n[0])) != 0);
+    check("the two chains likewise",
+          s_dir_n[1] != s_dir_n[3] ||
+          memcmp(s_dir[1], s_dir[3], GS_QW_BYTES(s_dir_n[1])) != 0);
 }
 
 /* ── 3. nothing to send ──────────────────────────────────────────────────────────── */
@@ -377,9 +438,9 @@ static void test_empty_frames(void)
     eegs_present_begin();
     tri(100, 200, 1u);
     eegs_present_end();
-    check("a real frame does go out", eegs_present_send(&k_client) == 1);
+    check("a real frame does go out", eegs_present_send(&k_client) == (int)TRI_GROUPS);
     check("and the next send has nothing left", eegs_present_send(&k_client) == 0);
-    check("one environment and one group in total", s_calls == 2u);
+    check("one environment and one chain's two groups in total", s_calls == 1u + TRI_GROUPS);
 
     /* And a frame nobody sent is discarded by the next begin(), not presented later: the present
      * loop takes the layer only when the composite re-recorded it, so a leftover would draw an
@@ -391,8 +452,8 @@ static void test_empty_frames(void)
     eegs_present_begin();
     tri(150, 250, 1u);
     eegs_present_end();
-    check("the second frame alone is what goes out", eegs_present_send(&k_client) == 1);
-    check("two sends, not four", s_calls == 2u);
+    check("the second frame alone is what goes out", eegs_present_send(&k_client) == (int)TRI_GROUPS);
+    check("three sends, not six", s_calls == 1u + TRI_GROUPS);
 }
 
 /* ── 4. the two capacities ───────────────────────────────────────────────────────── */
@@ -404,9 +465,10 @@ static void test_stage_capacity(void)
     int sent;
 
     /* Enough same-state geometry to fill the staging buffer past its cap, counted from the cap
-     * rather than from a constant that happens to exceed it today: a packed triangle is 12
-     * quadwords, so one triangle per quadword of cap is twelve full stages of geometry.  Raising
-     * EEGS_STAGE_QW_CAP cannot turn this row into a silent pass that way. */
+     * rather than from a constant that happens to exceed it today: a packed triangle is six quadwords
+     * since 12v -- its four-quadword chain plus its two-quadword descriptor, and four before the
+     * descriptor was written -- so one triangle per quadword of cap is six full stages of geometry.
+     * Raising EEGS_STAGE_QW_CAP cannot turn this row into a silent pass that way. */
     const uint32_t tris = EEGS_STAGE_QW_CAP;
     dma_reset();
     eegs_present_begin();
@@ -431,7 +493,7 @@ static void test_stage_capacity(void)
     eegs_present_send(&k_client);
     eegs_present_get_stats(&st);
     eqw("the drop counter is reset by begin()", st.dropped, 0u);
-    eqw("and a whole frame is measured as its groups", st.qw, gs_group_qw(3u));
+    eqw("and a whole frame is measured as its groups", st.qw, TRI_QW);
 }
 
 static void test_group_capacity(void)
@@ -439,20 +501,22 @@ static void test_group_capacity(void)
     eegs_present_stats st;
     uint32_t i;
     int sent;
-    const uint32_t tris = EEGS_MAX_GROUPS + 44u;
+    /* A chain costs two groups since 12v, its descriptor and its vertices, so half the table is
+     * geometry: this is the number of chains that overruns it, stated in the unit that overruns. */
+    const uint32_t chains = EEGS_MAX_GROUPS / TRI_GROUPS + 44u;
 
-    /* One group per triangle, by alternating the PRIM state every time: the vertex-count cap can
+    /* One chain per triangle, by alternating the PRIM state every time: the vertex-count cap can
      * only be reached by groups, and this is the shape that reaches it first. */
     dma_reset();
     eegs_present_begin();
-    for (i = 0u; i < tris; i++) tri((int32_t)i, 20, (i & 1u) != 0u ? 1u : 0u);
+    for (i = 0u; i < chains; i++) tri((int32_t)i, 20, (i & 1u) != 0u ? 1u : 0u);
     eegs_present_end();
     sent = eegs_present_send(&k_client);
     eegs_present_get_stats(&st);
 
     eqw("exactly the table's worth of groups survives", st.groups, EEGS_MAX_GROUPS);
     eqw("and every one of them is sent", (uint64_t)sent, EEGS_MAX_GROUPS);
-    eqw("the rest are counted, not lost", st.dropped, tris - EEGS_MAX_GROUPS);
+    eqw("the rest are counted, not lost", st.dropped, chains * TRI_GROUPS - EEGS_MAX_GROUPS);
     check("the whole frame is under the quadword cap", st.qw < EEGS_STAGE_QW_CAP);
 }
 
@@ -474,6 +538,12 @@ static void test_stats(void)
     eqw("texture switches", st.tex_switches, 0u);
     eqw("textured primitives with no plane", st.tex_missing, 0u);
     eqw("recorder refusals", st.unsplittable, 0u);
+    /* 12v's column, and the law it exists to count: one write of PRIM per chain, so a frame's
+     * `prim_writes` IS its chain count and every other group in `groups` moves state instead of
+     * drawing.  Two chains here, no switch, so the groups are exactly the writes plus the chains. */
+    eqw("one PRIM write per chain", st.prim_writes, 2u);
+    eqw("and the frame's groups are those writes and their chains", st.groups, 2u * TRI_GROUPS);
+    eqw("its quadwords a descriptor and a chain per triangle", st.qw, 2u * TRI_QW);
 }
 
 /* ── 6. the yield: begin() is where the previous frame's stream finishes ─────────────
@@ -496,21 +566,21 @@ static void test_begin_reaps_the_last_frames_stream(void)
     eegs_present_end();
     eegs_present_send(&k_client);
 
-    eqw("the frame put all three transfers on the bus", s_calls, 3u);
+    eqw("the frame put all five transfers on the bus", s_calls, 1u + 2u * TRI_GROUPS);
     check("and none of them had finished when the present returned", ps2_gif_pending() > 0u);
 
     /* The yield, and the buffer-lifetime law that makes it a wait rather than a poll. */
     eegs_present_begin();
     eqw("begin() left nothing outstanding", ps2_gif_pending(), 0u);
-    eqw("the held frame is the same three transfers, not six", s_calls, 3u);
+    eqw("the held frame is the same five transfers, not ten", s_calls, 1u + 2u * TRI_GROUPS);
 
     /* The next frame starts clean, which is the part a ring that leaked a descriptor would fail:
      * its groups would go out behind a previous window's primitives. */
     draw_two_groups();
     eegs_present_end();
     eegs_present_send(&k_client);
-    eqw("the following frame is its own three transfers", s_calls, 6u);
-    check("and they are the only ones outstanding", ps2_gif_pending() <= 3u);
+    eqw("the following frame is its own five transfers", s_calls, 2u * (1u + 2u * TRI_GROUPS));
+    check("and they are the only ones outstanding", ps2_gif_pending() <= 1u + 2u * TRI_GROUPS);
 }
 
 /* ── 7. LANE 12h's invariance instrument ─────────────────────────────────────────────
@@ -526,7 +596,7 @@ static void test_begin_reaps_the_last_frames_stream(void)
        `at=`;
      - a moved vertex reports its own group only, by index, and the whole length of it;
      - a changed colour with the geometry untouched is still a difference, which is the assertion
-       that the hash folds the group's four registers rather than the drawing kick alone;
+       that the hash folds the group's registers rather than the drawing kick alone;
      - a frame that gained or lost a group puts the unmatched groups in `tail=` on BOTH sides, and
        compares only the aligned prefix -- the positional rule a replay is bound by;
      - a frame that staged nothing does not consume its predecessor, because the comparison is
@@ -595,7 +665,7 @@ static void test_ident_invariant(void)
     eqw("and every quadword with it", b.same_qw, b.qw);
     eqw("nothing differed", b.diff_groups, 0u);
     eqw("nothing was left over", b.tail_groups, 0u);
-    eqw("the predecessor's group count is on the row", b.ident_groups_prev, 2u);
+    eqw("the predecessor's group count is on the row", b.ident_groups_prev, 2u * TRI_GROUPS);
     check("and the difference list is empty", eegs_present_ident_at()[0] == '\0');
 }
 
@@ -607,12 +677,16 @@ static void test_ident_moved_vertex(void)
     frame_of(draw_two_groups, NULL);
     frame_of(draw_two_groups_moved, &b);
 
-    eqw("one group differs", b.diff_groups, 1u);
-    eqw("the other is untouched", b.same_groups, 1u);
-    eqw("it is the first one", b.diff_first, 0u);
-    eqw("and only the first", b.diff_last, 0u);
-    eqw("a differing group counts its whole length", b.diff_qw, gs_group_qw(3u));
-    check("at= names its index", strcmp(eegs_present_ident_at(), "0") == 0);
+    /* The chain differs; its descriptor does not, because 12v's write carries the primitive and no
+     * position.  So a moved vertex is ONE differing group in a frame of four, at the odd index the
+     * pairing puts the chain at -- and that is what a replay has to respect: re-sending the whole
+     * frame's worth of groups because one mesh moved would be paying for the descriptors too. */
+    eqw("one chain differs", b.diff_groups, 1u);
+    eqw("the other three groups are untouched", b.same_groups, 3u);
+    eqw("it is the first chain", b.diff_first, 1u);
+    eqw("and only the first", b.diff_last, 1u);
+    eqw("a differing group counts its whole length", b.diff_qw, CHAIN_QW);
+    check("at= names its index", strcmp(eegs_present_ident_at(), "1") == 0);
 }
 
 static void test_ident_colour_only(void)
@@ -624,24 +698,27 @@ static void test_ident_colour_only(void)
     frame_of(draw_colour_b, &b);
 
     eqw("a colour bit with the geometry still identical is a difference", b.diff_groups, 1u);
-    eqw("nothing reads as identical", b.same_groups, 0u);
-    eqw("and the quadwords of that group are all charged to it", b.diff_qw, gs_group_qw(3u));
+    /* The frame is two groups now, and the one that does not hold the colour -- the descriptor --
+     * reads identical.  A row that says `diff=1` with `groups=2` is a re-shade, not a re-mesh. */
+    eqw("the descriptor is the one thing that reads identical", b.same_groups, 1u);
+    eqw("and the quadwords of that group are all charged to it", b.diff_qw, CHAIN_QW);
 }
 
 static void test_ident_positional_tail(void)
 {
     eegs_present_stats b;
 
-    /* Gained a group: the aligned prefix still matches, the extra one is a tail. */
+    /* Gained a chain: the aligned prefix still matches, the extra one is a tail -- and a chain is two
+     * groups, so the tail is two of them, not one. */
     dma_reset();
     frame_of(draw_two_groups, NULL);
     s_n_tris = 2u; s_n_moved = 0u;
     frame_of(draw_n_groups, NULL);
     s_n_tris = 3u; s_n_moved = 0u;
     frame_of(draw_n_groups, &b);
-    eqw("the two aligned groups match", b.same_groups, 2u);
-    eqw("the third is a tail, not a match", b.tail_groups, 1u);
-    eqw("and its quadwords are counted", b.tail_qw, gs_group_qw(3u));
+    eqw("the two aligned chains match", b.same_groups, 2u * TRI_GROUPS);
+    eqw("the third chain is a tail, not a match", b.tail_groups, TRI_GROUPS);
+    eqw("and its quadwords are counted", b.tail_qw, TRI_QW);
 
     /* Lost one: the tail is on the other side and must still be reported, because a replay of a
      * span that is not there is exactly the mistake the positional rule exists to catch. */
@@ -649,17 +726,20 @@ static void test_ident_positional_tail(void)
     frame_of(draw_n_groups, NULL);
     s_n_tris = 2u; s_n_moved = 0u;
     frame_of(draw_n_groups, &b);
-    eqw("a frame that lost a group reports its tail too", b.tail_groups, 1u);
-    eqw("and compares only the aligned prefix", b.same_groups + b.diff_groups, 2u);
+    eqw("a frame that lost a chain reports its tail too", b.tail_groups, TRI_GROUPS);
+    eqw("and compares only the aligned prefix", b.same_groups + b.diff_groups, 2u * TRI_GROUPS);
 
-    /* An inserted group shifts everything after it, so the shift reads as differences rather than
-     * as a match: that is the cost a replay pays, and it is not allowed to look free. */
+    /* An inserted chain shifts everything after it, so the shift reads as differences rather than
+     * as a match: that is the cost a replay pays, and it is not allowed to look free.  12v puts one
+     * exception in the row, and it is an honest one -- a descriptor names a primitive and no position,
+     * so the two frames' first and third groups (TRI flat, then TRI+IIP) sit at the same indices and
+     * match, while both chains differ.  The chains are the geometry, and the geometry is refused. */
     s_n_tris = 2u; s_n_moved = 0u;
     frame_of(draw_n_groups, NULL);
     frame_of(draw_shifted_right, &b);
-    eqw("a span that moved index is not credited as identical", b.same_groups, 0u);
-    eqw("both aligned groups differ", b.diff_groups, 2u);
-    eqw("and the group only this frame has is the tail", b.tail_groups, 1u);
+    eqw("no shifted chain is credited as identical", b.diff_groups, 2u);
+    eqw("only the two positionless descriptors match", b.same_groups, 2u);
+    eqw("and the chains only this frame has are the tail", b.tail_groups, TRI_GROUPS);
 }
 
 static void test_ident_empty_frame_keeps_predecessor(void)
@@ -676,7 +756,7 @@ static void test_ident_empty_frame_keeps_predecessor(void)
     check("a frame that staged nothing sends nothing", sent == 0);
 
     frame_of(draw_two_groups, &b);
-    eqw("the next frame still compares with the one before the gap", b.same_groups, 2u);
+    eqw("the next frame still compares with the one before the gap", b.same_groups, 2u * TRI_GROUPS);
     eqw("nothing became a tail", b.tail_groups, 0u);
 }
 
@@ -690,13 +770,16 @@ static void test_ident_at_list(void)
     s_n_moved = 10u;
     frame_of(draw_n_groups, &b);
 
-    eqw("ten of the twelve groups differ", b.diff_groups, 10u);
-    eqw("two match", b.same_groups, 2u);
-    check("at= names the first eight and counts the rest",
-          strcmp(eegs_present_ident_at(), "0,1,2,3,4,5,6,7+2") == 0);
+    /* Twenty-four groups, of which only the ten moved CHAINS differ: 12v's twelve descriptors carry
+     * no position, so they match at their own indices, and the two unmoved chains match too.  That is
+     * why `at=` is odd indices all the way down and why the count the row names is chains, not groups. */
+    eqw("ten of the twelve chains differ", b.diff_groups, 10u);
+    eqw("the other fourteen groups match", b.same_groups, 14u);
+    check("at= names the first eight chains and counts the rest",
+          strcmp(eegs_present_ident_at(), "1,3,5,7,9,11,13,15+2") == 0);
     eqw("the remainder is its own column", b.diff_more, 2u);
-    eqw("first is the first difference", b.diff_first, 0u);
-    eqw("last is the ninth", b.diff_last, 9u);
+    eqw("first is the first chain", b.diff_first, 1u);
+    eqw("last is the ninth chain", b.diff_last, 19u);
 }
 
 static void test_staged_group_count(void)
@@ -704,12 +787,14 @@ static void test_staged_group_count(void)
     dma_reset();
     eegs_present_begin();
     eqw("a fresh frame has staged nothing", eegs_present_groups_staged(), 0u);
+    /* 12v's cost, stated as a count: the chain is still open, but the descriptor that opens it has
+     * already gone out, so an "open" frame is never empty at the seam again. */
     tri(10, 20, 1u);
-    eqw("an open group is not staged yet", eegs_present_groups_staged(), 0u);
+    eqw("an open chain has already staged its descriptor", eegs_present_groups_staged(), 1u);
     tri(30, 40, 0u);
-    eqw("the state change closed the first", eegs_present_groups_staged(), 1u);
+    eqw("the state change closed the first chain", eegs_present_groups_staged(), 3u);
     eegs_present_end();
-    eqw("and end() closes the last", eegs_present_groups_staged(), 2u);
+    eqw("and end() closes the last", eegs_present_groups_staged(), 4u);
 }
 
 /* Same coordinates, same colour, a different smoothing bit: only the group's PRIM words move.  PRIM
@@ -719,9 +804,10 @@ static void test_staged_group_count(void)
 static void draw_prim_a(void) { tri(10, 20, 1u); }
 static void draw_prim_b(void) { tri(10, 20, 0u); }
 
-/* One texture switch between two triangles, i.e. vertex group, AD group, vertex group.  The switch
- * is `eegs_texture()`'s own three-register AD group, so the frame has a group with no four-register
- * body in it -- the case the lane comparison has to exclude rather than guess about. */
+/* One texture switch between two triangles: five groups now -- descriptor, chain, the switch's own AD
+ * group, descriptor, chain.  The switch is `eegs_texture()`'s three-register AD write, so the frame has
+ * a group with no four-register body in it and no primitive in its tag either: the case the lane
+ * comparison has to exclude rather than guess about. */
 static void draw_with_switch(void)
 {
     gs_tex_t tex;
@@ -807,22 +893,27 @@ static void test_ident_lanes(void)
     eqw("and the shape with them", b.ident_shape, 1u);
 
     /* Only PRIM moved: the whole-group hash sees it and no lane does. */
+    /* Only PRIM moved, and 12v put it in two places: the AD word the GS actually latches and the
+     * chain's own tag field.  Both differ, so the frame reports two differing groups for one changed
+     * ask -- and the lanes still call the vertices invariant, because the mesh did not move. */
     dma_reset();
     frame_of(draw_prim_a, NULL);
     frame_of(draw_prim_b, &b);
-    eqw("a moved primitive descriptor is a difference", b.diff_groups, 1u);
-    eqw("while all three lanes call the group invariant", b.ident_xyz, 1u);
+    eqw("a moved primitive descriptor is a difference in both its copies", b.diff_groups, 2u);
+    eqw("while the chain's lanes call the group invariant", b.ident_xyz, 1u);
     eqw("the colour lane included", b.ident_rgb, 1u);
     eqw("and the texel lane", b.ident_st, 1u);
     eqw("and the shape lane", b.ident_shape, 1u);
 
     /* An AD group folds no lane, so three identical groups give two lane credits -- and `v=` is the
      * column that lets the reader see that, rather than infer it from `texsw=`. */
+    /* The switch adds a third AD group, and 12v adds one per chain: five groups, of which two are
+     * vertices.  `v=` is the column that lets a reader see that rather than infer it from `texsw=`. */
     dma_reset();
     frame_of(draw_with_switch, NULL);
     frame_of(draw_with_switch, &b);
-    eqw("the switched frame repeats itself wholly", b.same_groups, 3u);
-    eqw("it is three groups: two vertex and one AD", b.diff_groups, 0u);
+    eqw("the switched frame repeats itself wholly", b.same_groups, 2u * TRI_GROUPS + 1u);
+    eqw("it is five groups: two chains and three AD writes", b.diff_groups, 0u);
     eqw("and the frame says so", b.ident_vertex_groups, 2u);
     eqw("and each lane counts only the two vertex groups", b.ident_xyz, 2u);
     eqw("the colour lane likewise", b.ident_rgb, 2u);

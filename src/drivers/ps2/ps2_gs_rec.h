@@ -8,27 +8,56 @@
  * increment 3 is the group state machine -- an open primitive, a running NLOOP, and the rule
  * for what to do when the buffer is full.
  *
- * The group's REGS list is PRIM, RGBAQ, ST, XYZ2, and it is a dense `FLG=REGLIST` group, so a vertex
- * is TWO GIF quadwords -- 32 bytes -- because a REGLIST group packs each 64-bit register next to the
- * one the list names after it instead of giving each one a quadword of its own.  PRIM is
- * repeated for every vertex rather than sent once because the GS decrements PRIM's texture,
- * blend and fog flags as each primitive completes (under PRMODE.MODE/OFFSET), so a strip that
- * set them once loses them from its second triangle on; re-sending them is what a UI that wants
- * every triangle textured, blended and fog-free asks for.  The cheaper alternative -- one
- * PRMODE write and three registers a vertex -- is recorded as a follow-up in doc/txt/PS2.txt and
- * waits on a field table this port can gate.
+ * The group's REGS list is TWO registers -- RGBAQ then XYZ2 -- when the primitive is untextured and
+ * THREE -- RGBAQ, ST, XYZ2 -- when it is textured, and the group is a dense `FLG=REGLIST`, so a
+ * register costs its own 64 bits: a vertex is one quadword or one and a half, not the two this file
+ * used to write.  PRIM is not in the list at all.  The tag carries it with PRE set AND every group is
+ * preceded by an AD write of the same word, because LANE 19 rung 12u measured that the tag's field
+ * alone buys nothing on this GS.
  *
- * The shape this replaced was `FLG=PACKED` with `PRE=1` and one sparse quadword per register -- four
- * per vertex, twice the bytes -- and LANE 19 rung 5 measured it on this GS drawing NOTHING: a
- * multi-register PACKED group never kicks, whatever its primitive comes from, while the identical
- * four registers densely packed filled their box to the pixel (ps2_gs_poster.h carries the census
- * rows).  So these vertex groups were the inert shape, which is the standing candidate explanation
- * for the eegs XMB's "frame only, empty inside".  Whether the picture now arrives is the run that
- * follows this edit -- the census can say whether a recorded-shape packet lands, and only the
- * screen can say whether a frame does -- not something this paragraph may assert.
+ * This is the shape LANE 19 measured, one variable at a time, on this GS and not in a manual.  A
+ * triangle whose three corners carry three different colours has to shade, and the recorder's
+ * four-register list came out of the census as ONE FLAT COLOUR -- the first vertex's letter filled
+ * the box -- while three hand-built shapes came out shading.  Rungs 12c/12d/12e ran six boxes in one
+ * certified band (the magenta control returned 1024/1024, so the census was reading the page the
+ * stream had really written) and the rows that decided this paragraph were:
  *
- * XYZ2 comes last in every vertex because the drawing kick fires on it: colour and texture
- * coordinates have to be in the GS before the vertex that uses them is decoded.
+ *   A/B recorder, PRE=1 NREG4 {NOP,RGBAQ,ST,XYZ2} ....... painted=960/945, other=0 -> FLAT R / FLAT B
+ *   C       AD(PRIM,RGBAQ) + PRE=0 NREG2 {RGBAQ,XYZ2} .. other=840 -> INTERPOLATES
+ *   D       no AD group,  PRE=1 NREG2 {RGBAQ,XYZ2} ..... other=609 -> INTERPOLATES
+ *   E       AD(PRIM,RGBAQ) + PRE=0 NREG3 {RGBAQ,ST,XYZ2} + pad ... other=609 -> INTERPOLATES
+ *   F       no AD group,  PRE=1 NREG3 {RGBAQ,ST,XYZ2} + pad ..... other=441 -> INTERPOLATES
+ *
+ * Those rows said four things, and rung 12u re-read the second of them.  Of the variables that run
+ * isolated in that grid: an odd NREG with a trailing pad half-quadword is survivable (E, F), an ST
+ * slot in the chain is what a textured stream wants rather than suffers (E, F), the four-register
+ * list is what killed the gradient (A, B), and -- this is the claim 12u falsified -- *PRE=1 with PRIM
+ * in the tag is not the problem* (D, F).  Boxes D and F are not that claim's falsification, because
+ * in that grid they are not alone: box C's AD preamble writes PRIM=TRI with IIP set two packets
+ * earlier in the same transfer, and a register is state, so D and F drew with C's primitive and
+ * shaded with C's IIP.  Rung 12u sent D's captured group with nothing in front of it, on a band
+ * cleared to the canvas first, and the answer came back different:
+ *
+ *   V0 the group as captured, PRE=1 .......... painted=1, bbox x580-580 -> one pixel at the apex
+ *   V1 the group with PRE cleared ............ painted=1, bbox x580-580 -> the tag field rules nothing
+ *   V2 AD(PRIM=TRI,IIP=1) then the group ..... painted=610, field=609, bbox x539-620 -> TRIANGLE
+ *   V3 AD(PRIM=TRI,IIP=0) then the group ..... painted=610, field=0,   bbox x539-620 -> TRIANGLE
+ *
+ * So the AD write is what programs the primitive, and the two writes that differ in IIP alone are
+ * what decides whether the GS interpolates.  A recorder group that never writes PRIM therefore draws
+ * with whatever the last AD packet left there -- in this port the frame's own depth clear
+ * (eegs_present.c) ends on PRIM=SPRITE, so three vertices of a "triangle" become one quad and a
+ * leftover kick, which is the flat rectangles-and-dots page the operator sees.  The recorder's fix is
+ * V2's shape: gs_rec_prim()'s word goes out as an AD write in front of every vertex group, and the
+ * tag keeps naming the same word under PRE=1 so a machine that does read the field agrees with the
+ * one that does not.
+ *
+ * The old claim this header used to carry was that PRIM has to be repeated for every vertex because
+ * the GS decrements PRIM's texture, blend and fog flags as each primitive completes (PRMODE.MODE/
+ * OFFSET).  That is still refuted -- 12u's V2 is box D's captured group, three loops of the
+ * two-register untextured chain, behind ONE prim write, and all three loops came out interpolated --
+ * and what replaces the claim is not a cheaper packet but a cheaper *place* for the word: the write
+ * is once per group, not once per vertex, and not once per frame either.
  *
  * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
  *
@@ -40,33 +69,41 @@
 
 #include <stdint.h>
 
-/* Quadwords per vertex: the four registers of the group's REGS list, two of them to a quadword,
- * because that is what `FLG=REGLIST` means and what LANE 19 rung 5 measured as the shape this GS
- * rasterises.  The division is exact only while the register count is even, which it is by
- * construction -- and `make test-ps2-gs-rec` asserts it, because `(GS_REC_REGS_N % 2u)` is not a
- * preprocessor expression at all (`4u` is not a pp-number), so no `#if` can check it. */
-#define GS_REC_REGS_N 4u
-#define GS_REC_QW_PER_VERT (GS_REC_REGS_N / 2u)
+/* Registers per vertex, by the primitive's own texture bit: two untextured (RGBAQ, XYZ2) and three
+ * textured (RGBAQ, ST, XYZ2).  Both counts are what LANE 19 rung 12e measured as shading; the four
+ * this file used to name -- a leading NOP slot plus PRIM's old per-vertex seat -- is what measured
+ * flat.  GS_REC_REGS_MAX sizes the recorder's per-vertex register set and is the longest of the two,
+ * because a re-emitted strip continuation has to reproduce the colour and texture coordinate it
+ * first carried regardless of which list the open group is using.
+ *
+ * There is deliberately no `GS_REC_REGS_N` any more.  It was a compile-time constant for a stream
+ * whose register count varies with the primitive, and every consumer that trusted it -- the stage
+ * decoder, the group-view helper, three host suites -- had to be found and made to read the count
+ * out of the tag instead.  Deleting the macro is how the build finds them; a vertex counted by a
+ * constant that one group in ten contradicts is a malformed packet with a green test line under it. */
+#define GS_REC_REGS_MAX   3u
+#define GS_REC_NREG_TEX   3u
+#define GS_REC_NREG_UNTEX 2u
 
 /* Quadwords in a group of `n` AD register writes: one tag plus n data, because the general law is
  * one tag plus NLOOP * NREG *registers*, and each register takes a quadword of its own when FLG is
  * PACKED -- which is the AD form, always NREG=1.  `send_trx_setup_at()` in ps2_gs.c proves the shape
  * on the machine -- a tag and four registers as five quadwords with NLOOP=4 -- so a count that
  * instead gave each register two quadwords would hand channel 2 a QWC larger than the packet and the
- * GIF would decode the overflow as more of it.  A REGLIST group is the same law with the registers
- * packed two to a quadword, which is why a vertex group's count is GS_REC_QW_PER_VERT per loop and
- * not this one. */
+ * GIF would decode the overflow as more of it.  A vertex group is the same law with the registers
+ * packed end to end two to a quadword, which is why its count comes from its own NREG and not from
+ * this macro -- and why an odd one needs the pad half-quadword gs_rec_end() appends. */
 #define GS_REC_AD_QWC(n) (1u + (n))
 
 /* The stream buffer, in quadwords: 16 bytes each.  A group that would not fit is split at the
  * nearest boundary that keeps every primitive whole, and the vertices a strip needs to continue
  * are re-emitted, so this size is a latency knob -- how many DMA starts a frame costs -- and not
  * a limit on what an application may draw.  4,096 quadwords is 64 KB of .bss.  The measured XMB
- * frame this was chosen against was ~13,700 quadwords and therefore cost four starts; at two
- * quadwords a vertex rather than four the same vertex count is ~6,900, which is two starts -- that
- * halving is arithmetic from the stride and not a re-measurement, so the next bench run owns the
- * number in the [GSTS] row.  Overridable so the host gate can exercise a split without writing
- * twenty thousand vertices. */
+ * frame this was chosen against was ~13,700 quadwords and therefore cost four starts at the sparse
+ * shape's four quadwords a vertex; the dense two-register chain this file emits now costs one, and
+ * the textured one one and a half.  Those are arithmetic from the stride and not re-measurements, so
+ * the next bench run owns the [GSTS] row's number.  Overridable so the host gate can exercise a
+ * split without writing twenty thousand vertices. */
 #ifndef GS_REC_QW_CAP
 #define GS_REC_QW_CAP 4096u
 #endif
@@ -82,7 +119,10 @@ void gs_rec_init(gs_rec_sink sink, void *user);
 
 /* Which primitive the following vertices make, as the word gs_pack_prim() builds (op, IIP,
  * TME, ABE, context).  Any group still open is closed and sent first, because a GIF tag's
- * REGS list and PRIM belong to one primitive type. */
+ * REGS list and PRIM belong to one primitive type.  The word itself reaches the GS in front of
+ * the next vertex group, as an AD register write (see the header comment: rung 12u measured
+ * that the tag's own PRIM field is not what programs it on this machine), so declaring a
+ * primitive that never gets a vertex costs nothing on the bus. */
 void gs_rec_prim(uint64_t prim);
 
 /* The colour and the texture coordinate the next vertex takes.  Q is the multiplicative
@@ -116,10 +156,14 @@ int gs_rec_ad(const uint64_t *data, const uint32_t *gp_offs, uint32_t n);
 
 /* Counters for the bench: DMA starts made, vertices taken, and the boundary rule refused a
  * split (which must read 0 -- it means a primitive shape arrived that cannot be continued
- * across a tag, and the only honest answer to that is a bigger buffer). */
+ * across a tag, and the only honest answer to that is a bigger buffer).  `gs_rec_prim_writes()`
+ * is the subset of those starts that program a vertex group's primitive: one per vertex group
+ * sent, so `sends - prim_writes - texture_switches` is the frame's vertex-group count and the
+ * row that pairs them is what prices rung 12u's fix. */
 uint32_t gs_rec_sends(void);
 uint32_t gs_rec_verts(void);
 uint32_t gs_rec_unsplittable(void);
+uint32_t gs_rec_prim_writes(void);
 
 /* The rectangle the frame's FIRST vertex group provably reaches, in the same local pixels
  * `gs_rec_vertex()` is handed: its top-left corner is XYOFFSET's page point, so (0,0) is the client

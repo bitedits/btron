@@ -376,6 +376,20 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
     if (strcmp(cmd, "chmod")  == 0) { clu_chmod  (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "touch")  == 0) { clu_touch  (arg, out_fn, user_data); return; }
     if (strcmp(cmd, "chtime") == 0) { clu_chtime (arg, out_fn, user_data); return; }
+
+#if defined(BTRON_PS2_TARGET)
+    /* The GS's own readout, and it is in the Terminal rather than only at Stage 1 on purpose:
+     * the frame rows it arms are printed by a task-driven pass, which means an app frame, which
+     * means the desktop has to be up and the XMB animating.  Stage 1 has no such frame.  The
+     * symbol is defined in src/cores/core_ps2.c and declared here at the call site, so no other
+     * target compiles a reference to a driver that is not in its link.
+     * Its output goes to the SIO console the [XMBT]/[GSTS] rows already use, not to this window. */
+    if (strcmp(cmd, "gsstat") == 0) {
+        extern void ps2_shell_gsstat(void);
+        ps2_shell_gsstat();
+        return;
+    }
+#endif
     if (strcmp(cmd, "cd")     == 0) {
         clu_cd(arg, out_fn, user_data);
         /* Update gterm prompt after CWD change */

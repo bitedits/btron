@@ -81,8 +81,69 @@ static void gl_add_select1(GLint z1, GLint z2, GLint z3) {
 #else
 #define gl_add_select1(a, b, c) /*a comment*/
 #endif
+
+#if defined(BTRON_PS2_TARGET)
+#include "../backend_eegs.h"
+#include "../../drivers/ps2/ps2_gs_pack.h"   /* gs_float_scale_pow2(), the ST field's unit */
+
+#define GS_TEX_S_SHIFT (ZB_POINT_S_FRAC_BITS + 1)
+#define GS_TEX_T_SHIFT (ZB_POINT_T_FRAC_BITS + 1)
+
+static void gs_vertex(eegs_vertex_t *out, const ZBufferPoint *p,
+                      const ZBufferPoint *flat, int textured)
+{
+	const ZBufferPoint *col = (flat != NULL) ? flat : p;
+	GLContext *c = gl_get_context();
+	const int depth_test = (c != NULL && c->zb != NULL && c->zb->depth_test != 0);
+
+	out->x_px = p->x;
+	out->y_px = p->y;
+	out->z = depth_test ? ((uint32_t)p->z << 2) : 0u;
+	out->rgba = (((unsigned)col->r >> 16) & 0xFFu) |
+	            (((((unsigned)col->g >> 16) & 0xFFu)) << 8) |
+	            (((((unsigned)col->b >> 16) & 0xFFu)) << 16) |
+	            (((((unsigned)col->a >> 16) & 0xFFu)) << 24);
+	out->s = textured ? gs_float_scale_pow2((float)p->s, GS_TEX_S_SHIFT) : 0.0f;
+	out->t = textured ? gs_float_scale_pow2((float)p->t, GS_TEX_T_SHIFT) : 0.0f;
+}
+
+static eegs_tri_state_t gs_state(int smooth, int textured, int blended, int depth_test)
+{
+	eegs_tri_state_t st;
+
+	st.smooth = smooth ? 1u : 0u;
+	st.textured = textured ? 1u : 0u;
+	st.blended = blended ? 1u : 0u;
+	st.depth_test = depth_test ? 1u : 0u;
+	return st;
+}
+
+static int gs_blended(const GLContext *c)
+{
+#if TGL_FEATURE_BLEND == 1
+	return (c->zb->enable_blend != 0);
+#else
+	(void)c;
+	return 0;
+#endif
+}
+#endif
+
 void gl_draw_point(GLVertex* p0) {
 	GLContext* c = gl_get_context();
+#if defined(BTRON_PS2_TARGET)
+	if (gl_active_backend() == GL_BACKEND_EEGS) {
+		if (p0->clip_code == 0) {
+			const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
+			const int blended = gs_blended(c);
+			eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+			eegs_vertex_t v[1];
+			gs_vertex(&v[0], &p0->zp, NULL, 0);
+			eegs_point(v, st);
+		}
+		return;
+	}
+#endif
 	if (p0->clip_code == 0) {
 #if TGL_FEATURE_ALT_RENDERMODES == 1
 		if (c->render_mode == GL_SELECT) {
@@ -149,6 +210,18 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 	cc2 = p2->clip_code;
 
 	if ((cc1 | cc2) == 0) {
+#if defined(BTRON_PS2_TARGET)
+		if (gl_active_backend() == GL_BACKEND_EEGS) {
+			const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
+			const int blended = gs_blended(c);
+			eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+			eegs_vertex_t v[2];
+			gs_vertex(&v[0], &p1->zp, NULL, 0);
+			gs_vertex(&v[1], &p2->zp, NULL, 0);
+			eegs_line(v, st);
+			return;
+		}
+#endif
 #if TGL_FEATURE_ALT_RENDERMODES == 1
 		if (c->render_mode == GL_SELECT) {
 			gl_add_select1(p1->zp.z, p2->zp.z, p2->zp.z);
@@ -183,6 +256,18 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 			GLinterpolate(&q2, p1, p2, tmax);
 			tgl_vertex_to_viewport(&q1);
 			tgl_vertex_to_viewport(&q2);
+#if defined(BTRON_PS2_TARGET)
+			if (gl_active_backend() == GL_BACKEND_EEGS) {
+				const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
+				const int blended = gs_blended(c);
+				eegs_tri_state_t st = gs_state(0, 0, blended, depth_test);
+				eegs_vertex_t v[2];
+				gs_vertex(&v[0], &q1.zp, NULL, 0);
+				gs_vertex(&v[1], &q2.zp, NULL, 0);
+				eegs_line(v, st);
+				return;
+			}
+#endif
 #if TGL_FEATURE_ALT_RENDERMODES == 1
 			if (c->render_mode == GL_SELECT) {
 				gl_add_select1(q1.zp.z, q2.zp.z, q2.zp.z);
@@ -615,90 +700,11 @@ static void tgl_count_fill(const ZBufferPoint *a, const ZBufferPoint *b, const Z
 }
 
 #if defined(BTRON_PS2_TARGET)
-/* ── The Graphics Synthesizer takes the fill ──────────────────────────────────────────
- *
- * Row 5, step 5a of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  The three calls
- * below are the whole of what the GS replaces: the span loops.  Everything above them -- the
- * matrix stack, the lighting, the clipping, the texture state, the display lists -- stays
- * TinyGL's, which is why the seam is here rather than a second `gl_ops_t`, and why nothing is
- * re-projected: `zp.x`/`zp.y` are the integers the viewport map already produced, and they are
- * the same integers the software fill walks, so the GS layer and the canvas layer cannot disagree
- * about where a pixel is.
- *
- * The check is a switch and not a build change -- one condition per entry point, so the shipped
- * path costs a comparison that the branch predictor never has to get wrong.  From 5c it is live:
- * `gl_init()` installs the TinyGL pipeline under the name GL_BACKEND_EEGS, and only this
- * condition decides whether the span loops run. */
-#include "../backend_eegs.h"
-#include "../../drivers/ps2/ps2_gs_pack.h"   /* gs_float_scale_pow2(), the ST field's unit */
-
-/* One texel index is (ZB_POINT_*_FRAC_BITS + 1) bits of `zp.s`/`zp.t`, and the upload puts half a
- * texel of offset in so that a coordinate names a texel's centre rather than its edge
- * (texture.c's sscale/soff).  The GS's ST takes a float texel coordinate, so this is the fixed
- * point divided by its own scale -- a power of two, so exact, and gs_float_scale_pow2() does it on
- * the exponent field rather than by a multiply, because a multiply here is a soft-float libcall
- * and this line runs once per texture coordinate of every vertex the layer draws. */
-#define GS_TEX_S_SHIFT (ZB_POINT_S_FRAC_BITS + 1)
-#define GS_TEX_T_SHIFT (ZB_POINT_T_FRAC_BITS + 1)
-
-/* One vertex, from the record the span loops would have walked.  `flat` is non-null when the
- * primitive is flat-shaded and names the vertex whose colour the whole triangle takes: p2, the
- * last one, which is what ZB_fillTriangleFlat reads (ztriangle.c) and what an IIP-clear GS
- * primitive draws, since it takes its colour off the first RGBAQ of the group it is given.
- * `textured` gates the s/t read, because zp.s/zp.t are only written when a texture is enabled --
- * stale otherwise, and a stale texel coordinate is a texel read from somewhere in the atlas. */
-static void gs_vertex(eegs_vertex_t *out, const ZBufferPoint *p,
-                      const ZBufferPoint *flat, int textured)
-{
-	const ZBufferPoint *col = (flat != NULL) ? flat : p;
-
-	/* The pixels pass through.  They did not use to: this line used to read `(float)p->x`, and
-	 * the recorder then read `(int32_t)(px * 16.0f)` out of the float it was handed, so a whole
-	 * integer made a round trip through binary32 -- four libcalls a vertex on this CPU, 29 cycles
-	 * each way -- to arrive at the number it started from and a shift.  `ZBufferPoint` is the
-	 * viewport map's own output and its x and y are GLint, so there is no fraction anywhere on
-	 * this path for the float to have been carrying. */
-	out->x_px = p->x;
-	out->y_px = p->y;
-	out->rgba = (((unsigned)col->r >> 16) & 0xFFu) |
-	            (((((unsigned)col->g >> 16) & 0xFFu)) << 8) |
-	            (((((unsigned)col->b >> 16) & 0xFFu)) << 16) |
-	            (((((unsigned)col->a >> 16) & 0xFFu)) << 24);
-	/* The texel coordinates are the exception, and they stay floats: the ST field is IEEE-754 and
-	 * the GS interpolates it as one, so the conversion is what the hardware asks for.  Only the
-	 * scale comes out, and it was a power of two all along. */
-	out->s = textured ? gs_float_scale_pow2((float)p->s, GS_TEX_S_SHIFT) : 0.0f;
-	out->t = textured ? gs_float_scale_pow2((float)p->t, GS_TEX_T_SHIFT) : 0.0f;
-}
-
-static eegs_tri_state_t gs_state(int smooth, int textured, int blended)
-{
-	eegs_tri_state_t st;
-
-	st.smooth = smooth ? 1u : 0u;
-	st.textured = textured ? 1u : 0u;
-	st.blended = blended ? 1u : 0u;
-	return st;
-}
-
-/* The line and point paths sample no texture in the software rasteriser (ZB_line and ZB_plot take
- * a colour and a depth), so they are recorded untextured whatever the texture state is: the GS is
- * asked to draw what the CPU would have drawn, not what the application asked GL for.  They do
- * honour the blend state, so ABE follows it. */
-static int gs_blended(const GLContext *c)
-{
-#if TGL_FEATURE_BLEND == 1
-	return (c->zb->enable_blend != 0);
-#else
-	(void)c;
-	return 0;                    /* the arms below take the plain path whatever the state */
-#endif
-}
-
 static void gs_edges(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 {
 	const int smooth = (c->current_shade_model == GL_SMOOTH);
-	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c));
+	const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
+	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c), depth_test);
 	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
 	eegs_vertex_t v[2];
 
@@ -722,7 +728,8 @@ static void gs_edges(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 static void gs_points(GLContext *c, GLVertex *p0, GLVertex *p1, GLVertex *p2)
 {
 	const int smooth = (c->current_shade_model == GL_SMOOTH);
-	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c));
+	const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
+	const eegs_tri_state_t st = gs_state(smooth, 0, gs_blended(c), depth_test);
 	const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
 	eegs_vertex_t v[1];
 
@@ -772,8 +779,9 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	if (gl_active_backend() == GL_BACKEND_EEGS) {
 		const int textured = (im != NULL);
 		const int smooth = (c->current_shade_model == GL_SMOOTH);
+		const int depth_test = (c->zb != NULL && c->zb->depth_test != 0);
 		const ZBufferPoint *flat = smooth ? NULL : &p2->zp;
-		eegs_tri_state_t st = gs_state(smooth, textured, fill_blended);
+		eegs_tri_state_t st = gs_state(smooth, textured, fill_blended, depth_test);
 		eegs_vertex_t v[3];
 
 		/* 5b: the plane this triangle samples, if its bytes ever got a VRAM address.  Pointing the

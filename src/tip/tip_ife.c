@@ -678,8 +678,11 @@ void tip_render_candidate_window(GDEV *dev, H caret_x, H caret_y) {
     drw_tc_string(dev, win_x + 8, list_y + 5, "1-9 Select   Esc Cancel", COLOR_GRAY, 0x00000000);
 }
 
-/* ── BTRON3 SPEC 3.20 Section 3.7 Syscall Implementation ── */
+#if defined(BTRON_PS2_TARGET)
+#define MAX_TIP_PORTS 2
+#else
 #define MAX_TIP_PORTS 16
+#endif
 static TIP_CONTEXT g_tip_ports[MAX_TIP_PORTS];
 static BOOL g_port_used[MAX_TIP_PORTS] = { FALSE };
 

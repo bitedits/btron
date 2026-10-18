@@ -239,7 +239,7 @@ void glInit(void* zbuffer1) {
 	c->current_color.X = 1.0;
 	c->current_color.Y = 1.0;
 	c->current_color.Z = 1.0;
-	c->current_color.W = 0.0;
+	c->current_color.W = 1.0;
 
 	c->current_normal.X = 1.0;
 	c->current_normal.Y = 0.0;

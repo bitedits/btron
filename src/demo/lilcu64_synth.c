@@ -456,9 +456,10 @@ void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
 
 int lilcu64_synth_pump_virtio(size_t frames) {
     static volatile int s_pumping = 0;
-    if (__sync_lock_test_and_set(&s_pumping, 1)) {
-        return 0; /* Already pumping on another thread */
+    if (s_pumping) {
+        return 0; /* Already pumping */
     }
+    s_pumping = 1;
 
     if (!virtio_sound_is_ready()) {
         /* Attempt to open VirtIO sound if not yet ready */
@@ -468,7 +469,7 @@ int lilcu64_synth_pump_virtio(size_t frames) {
             }
         }
         if (!virtio_sound_is_ready()) {
-            __sync_lock_release(&s_pumping);
+            s_pumping = 0;
             return -1;
         }
     }
@@ -478,7 +479,7 @@ int lilcu64_synth_pump_virtio(size_t frames) {
     const uint32_t TARGET_BYTES = 17640;
     uint32_t queued = virtio_sound_get_queued_bytes();
     if (queued >= TARGET_BYTES) {
-        __sync_lock_release(&s_pumping);
+        s_pumping = 0;
         return 0;
     }
 
@@ -498,7 +499,7 @@ int lilcu64_synth_pump_virtio(size_t frames) {
         remaining -= chunk;
     }
 
-    __sync_lock_release(&s_pumping);
+    s_pumping = 0;
     return 0;
 }
 
@@ -554,7 +555,7 @@ void lilcu64_synth_play_track(int track_num) {
     s_track_step = 0;
     s_muted = false;
     /* Tell audio thread to reschedule the score on next render block */
-    __sync_fetch_and_add(&s_track_gen, 1);
+    s_track_gen++;
 }
 
 void lilcu64_synth_stop_track(void) {
@@ -566,7 +567,7 @@ void lilcu64_synth_stop_track(void) {
         s_voices[i].active = false;
     }
     /* Tell audio thread to clear WA nodes too */
-    __sync_fetch_and_add(&s_track_gen, 1);
+    s_track_gen++;
 }
 
 void lilcu64_synth_toggle_mute(void) {

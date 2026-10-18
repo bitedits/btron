@@ -6,19 +6,20 @@
  * every expectation was written from the GS field tables before the code ran.
  *
  * What is under test here is not the encodings -- `gs_pack_giftag`, `gs_pack_xyz2` and the rest
- * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the six things
+ * have their own hand literals in test_ps2_gs_pack.c and test_ps2_gs_rec.c -- but the nine things
  * only the raster stage can get wrong:
  *
  *   1. which PRIM word a triangle asks for, i.e. op 3 with IIP/TME/ABE following the GL state and
- *      the texture context always 1 (every literal below is written as op + flags by hand);
+ *      the texture context always 0, the register set the environment actually programs (every
+ *      literal below is written as op + flags by hand);
  *   2. that a device-space vertex is passed through and never re-derived, because the y direction,
  *      the viewport map and the window's origin are already in the numbers the span loops walked;
  *   3. that a repeated state does not close the group -- the law that keeps a ribbon's 1,828
  *      triangles in one packet instead of 1,828 packets of three vertices;
- *   4. that a state change does, because every vertex of the open group carries the group's one
- *      latched PRIM word -- a second state needs a second group's second word.  The GIF tag itself
- *      names no primitive at all (see the dense tag below), so this boundary is the recorder's
- *      contract rather than the GIF's requirement;
+ *   4. that a state change does, because the group's PRIM word and its REGS list are one tag, and a
+ *      second state needs a second group's second tag.  The tag's PRIM field is what this stage asks
+ *      for; whether the GS reads it there is item 9's question, and the answer is that it does not --
+ *      so the same word travels a second time, as a register, in the descriptor that opens the chain;
  *   5. from 5b, the texture switch: which group a plane change becomes, what order its three
  *      registers travel in, that a repeated plane costs nothing, and that a textured primitive
  *      with no plane of its own loses `TME` rather than sampling the page the stream left behind;
@@ -41,11 +42,28 @@
  *      decision: one switch for a whole run, and a key the registry does not know demotes to the
  *      flat draw the walk folds to, counted in `texmiss` rather than drawn from somebody else's page.
  *
+ *   9. from LANE 19 rung 12v, PRIM as a REGISTER.  Rung 12u measured on the machine that a group tag's
+ *      PRIM field does not program the GS: a captured triangle replayed alone laid one pixel, and laid
+ *      610 the moment an AD write of the same word went in front of it.  The recorder now sends that
+ *      write -- PACKED, NLOOP=1, NREG=1, one quadword of value and one of `GS_GP_PRIM` -- from
+ *      `open_group()`, so the stream this stage emits is a sequence of PAIRS and every count below is
+ *      `2 * vertex groups + switches`.  Two consequences are gated here rather than mentioned: a
+ *      capture index is no longer a vertex group, so every read goes through `VG()`/`VN()`, which
+ *      select by the tag's own FLG, and `groups_are()` asserts the pair (its shape, and that the word
+ *      it writes is the word the chain's tag names) for every complete frame; and the descriptor
+ *      leaves with the group's FIRST VERTEX, so "nothing has crossed the bus yet" now means "no vertex
+ *      group has", which is what `test_grid_strip_group_bytes()` and `test_frame_boundary()` say.
+ *      What the pair does NOT change is the vertex group's own budget: the AD write goes out through
+ *      the same sink with the cursor at zero, so a group still cuts at 18 textured vertices and a
+ *      3x3 mesh is still one 13-quadword chain.
+ *
  * The buffer is 32 quadwords (the test's own #define, matching increment 4's gate), which is what
- * makes the last check also prove that a group cut by capacity never lands mid-triangle.  32 is the
- * dense successor to this file's old 64: the recorder's headroom and its stride halved together, so
- * a group still holds 12 vertices before it splits and every vertex-level expectation below is
- * unchanged -- only the quadwords per group and the tag words are.
+ * makes the last check also prove that a group cut by capacity never lands mid-triangle.  The unit
+ * that decides where the cut falls is the recorder's: at 32 quadwords = 64 register halves, a textured
+ * vertex costs 3 halves and is offered 4 for its pad and headroom, so a TRI list -- which may only be
+ * cut at a multiple of three -- reaches 18 vertices before it cuts, and 36 vertices is TWO groups and
+ * not three.  Every vertex-level expectation below is that arithmetic; only the quadwords per group
+ * and the tag words change when the list is.
  *
  * The quadwords are read through gs_group_view.h, the same view test_ps2_gs_rec.c uses: a GIF
  * quadword is 128 bits and every register this stage writes is 64 of them, so a captured group is
@@ -53,7 +71,9 @@
  * `FLG=REGLIST`, each of those pairs carries TWO registers of the group's REGS list, which is why
  * the register reads below go through `gs_vq()` and not through a word index.  One statement of that
  * unit rather than two is deliberate -- see that header's comment on how the half-width layout got
- * through both gates.
+ * through both gates.  What a vertex costs in those pairs is not one number any more either: since
+ * LANE 19 rung 12f a group's REGS list is its primitive's, two registers untextured and three
+ * textured, so every size below is read as `gs_group_qw(nloop, nreg)` with the nreg the group names.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -69,10 +89,12 @@
 #include "../../src/gl/backend_eegs.c"
 #include "gs_group_view.h"
 
-/* LANE 12f's batch entry submits a whole mesh in one call, so one frame of it is many groups: a
- * 5x4 grid at this capacity is three vertex groups, and the list path that must decode to the same
- * thirty triangles is eight.  40 is above either with room for the AD group a textured case puts
- * first.
+/* LANE 12f's batch entry submits a whole mesh in one call, so one frame of it is many groups: an
+ * untextured vertex costs one quadword, so a group reaches 25 of them before the recorder offers a
+ * boundary, and the 5x4 grid is two groups where the list that must decode to the same thirty
+ * triangles is four.  Since LANE 19 rung 12v every one of those groups crosses the bus beside a
+ * descriptor of its own, so the widest case here is the list's eight vertex groups in sixteen
+ * captures; 40 is above that with room for the AD switch a textured case puts first.
  *
  * A dropped capture used to be invisible: `capture()` returned without recording, and a comparison
  * of two decoded streams would then have been comparing whatever fitted.  `s_cap_drops` makes that
@@ -98,13 +120,124 @@ static void capture(void *user, const uint64_t *qw, uint32_t qwc)
 /* 5b's rule is that a textured primitive with no plane of its own gets `TME` cleared, so a case
  * that keeps its textured hand literals has to name a plane first -- and naming one puts a switch
  * group at the front of the stream, because an AD group crosses the bus the moment it is written
- * while the vertices after it accumulate.  s_vg is where this frame's *vertex* groups start: 1
- * after start_plane(), 0 after start(), which is the whole difference between the two. */
+ * while the vertices after it accumulate.  `s_vg` is how many of those switches this frame names:
+ * 1 after start_plane(), 0 after start(), which is the whole difference between the two.
+ *
+ * LANE 19 rung 12v put a SECOND kind of AD group in this stream, and it is not a leading one: a
+ * packed one-register write of PRIM goes out in front of EVERY vertex group, because rung 12u
+ * measured on the machine that a group tag's PRIM field does not program the GS's PRIM register.
+ * So `s_cap` is no longer "the switch, then the vertex groups" -- it alternates descriptor, chain,
+ * descriptor, chain, and a capture index is no longer a way of naming a vertex group.  Reading one
+ * as if it were is what every failure in this gate's first 12v run was: the descriptor's tag has no
+ * PRIM field, so `gs_prim_of()` answers 0, and it names no register, so `gs_vq()` answers its
+ * all-ones sentinel.
+ *
+ * The accessors below therefore select by the tag's own FLG -- the same way test_ps2_gs_rec.c reads
+ * the stream since the first AD group landed -- and the pair is not an index convention but a law,
+ * asserted for every complete frame by `groups_are()`: `s_cap_i == switches + 2 * vertex groups`. */
 static gs_tex_t s_plane;
 static int s_vg;
 
-#define VG(k)  (s_cap[s_vg + (k)])
-#define VN(k)  (s_cap_n[s_vg + (k)])
+static int group_is_vertex(int k)
+{
+    return k >= 0 && (uint32_t)k < (uint32_t)s_cap_i && gs_flg_of(s_cap[k]) == GS_FLG_REGLIST;
+}
+
+static uint32_t vgroups(void)
+{
+    uint32_t i, n = 0u;
+    for (i = 0u; i < (uint32_t)s_cap_i; i++) if (group_is_vertex((int)i)) n++;
+    return n;
+}
+
+/* Every capture that is not a vertex group: the PRIM descriptors and the texture switches, which are
+ * one shape -- PACKED, one REGS nibble of AD -- and differ only in how many registers they carry. */
+static uint32_t adgroups(void)
+{
+    uint32_t i, n = 0u;
+    for (i = 0u; i < (uint32_t)s_cap_i; i++) if (!group_is_vertex((int)i)) n++;
+    return n;
+}
+
+static int vg_at(int i)
+{
+    int k, seen = 0;
+    for (k = 0; k < s_cap_i; k++) {
+        if (!group_is_vertex(k)) continue;
+        if (seen++ == i) return k;
+    }
+    return -1;
+}
+
+static int ad_at(int i)
+{
+    int k, seen = 0;
+    for (k = 0; k < s_cap_i; k++) {
+        if (group_is_vertex(k)) continue;
+        if (seen++ == i) return k;
+    }
+    return -1;
+}
+
+/* The descriptor that opened vertex group `i` is the capture immediately before it -- that is the
+ * alternation, and `groups_are()` is the place that proves it rather than leaning on it. */
+static int pd_at(int i)
+{
+    int k = vg_at(i);
+    return k <= 0 ? -1 : k - 1;
+}
+
+/* Out of range answers the capture array's own zeroed slot 0 and a zero count, so a case that forgot
+ * to check its group count fails a hand literal instead of reading past the buffer. */
+static uint64_t *vg(int i)  { const int k = vg_at(i); return k < 0 ? s_cap[0] : s_cap[k]; }
+static uint32_t vg_n(int i) { const int k = vg_at(i); return k < 0 ? 0u : s_cap_n[k]; }
+static uint64_t *adg(int i) { const int k = ad_at(i); return k < 0 ? s_cap[0] : s_cap[k]; }
+static uint64_t *pd(int i)  { const int k = pd_at(i); return k < 0 ? s_cap[0] : s_cap[k]; }
+static uint32_t pd_n(int i) { const int k = pd_at(i); return k < 0 ? 0u : s_cap_n[k]; }
+
+/* An AD group's data quadword carries the register's value in its LOW half and the register's GP
+ * offset in its high half, so the PRIM word a descriptor writes is one whole quadword. */
+static uint64_t pd_prim(int i) { return gs_qw(pd(i), 1u); }
+
+#define VG(k)   vg(k)
+#define VN(k)   vg_n(k)
+#define PD(k)   pd(k)
+#define PDN(k)  pd_n(k)
+
+/* The pair law, asserted over a whole frame rather than assumed by an index: `nsw` texture switches
+ * and `nv` descriptor/chain pairs, nothing else in the capture.  For each pair the descriptor is
+ * checked as a group in its own right -- PACKED, one loop, NREG 1, its single REGS nibble AD, EOP set,
+ * PRE clear, one tag quadword plus one register quadword, and its data word's GP offset is
+ * `GS_GP_PRIM` -- and then against the chain it introduces: the 11 low bits of the word it writes are
+ * the PRIM field of that chain's tag, which is the one fact the GS cannot survive a disagreement
+ * about.  The recorder writes the two out of the same `s_prim`, so this is not a claim that they were
+ * kept in step by hand; it is the claim that nothing between `open_group()` and the sink re-derived
+ * one of them.
+ *
+ * A frame that is mid-flight is NOT this shape -- a descriptor whose vertices are still accumulating
+ * is one AD group and no chain -- and the two cases that read the stream before `eegs_frame_end()`
+ * say so in their own rows instead of reaching for this helper. */
+static int groups_are(uint32_t nv, uint32_t nsw)
+{
+    uint32_t i;
+
+    if ((uint32_t)s_cap_i != nsw + 2u * nv) return 0;
+    if (vgroups() != nv || adgroups() != nsw + nv) return 0;
+    if (gs_rec_prim_writes() != nv) return 0;
+    if (gs_rec_sends() != (uint32_t)s_cap_i + (uint32_t)s_cap_drops) return 0;
+    for (i = 0u; i < nv; i++) {
+        const uint64_t *d = PD((int)i);
+
+        if (group_is_vertex(pd_at((int)i))) return 0;
+        if (gs_flg_of(d) != GS_FLG_PACKED || gs_nreg_of(d) != 1u ||
+            gs_regs_of(d) != (uint64_t)GS_NIB_AD) return 0;
+        if (gs_nloop_of(d) != 1u || gs_eop_of(d) != 1u || gs_pre_of(d) != 0u) return 0;
+        if (PDN((int)i) != GS_REC_AD_QWC(1u)) return 0;
+        if (gs_upper_of(d, 1u) != (uint64_t)GS_GP_PRIM) return 0;
+        if ((pd_prim((int)i) & 0x7FFu) != gs_prim_of(VG((int)i))) return 0;
+    }
+    return 1;
+}
 
 static void start(void)
 {
@@ -123,17 +256,17 @@ static void start_plane(void)
     s_vg = 1;
 }
 
-static const eegs_tri_state_t k_stb  = { 1, 1, 1 };   /* smooth, textured, blended */
-static const eegs_tri_state_t k_flat_tex = { 0, 1, 1 };
-static const eegs_tri_state_t k_smooth_bare = { 1, 0, 0 };
-static const eegs_tri_state_t k_blend_only = { 0, 0, 1 };
+static const eegs_tri_state_t k_stb  = { 1, 1, 1, 0 };   /* smooth, textured, blended */
+static const eegs_tri_state_t k_flat_tex = { 0, 1, 1, 0 };
+static const eegs_tri_state_t k_smooth_bare = { 1, 0, 0, 0 };
+static const eegs_tri_state_t k_blend_only = { 0, 0, 1, 0 };
 
 /* What the XMB ribbon's triangles look like to this stage: Gouraud because GL_SMOOTH is the default
  * and `xmb.c` never calls glShadeModel, blended because the ribbon sets `glBlendFunc(GL_DST_COLOR,
  * GL_ONE)`, untextured because it calls `glDisable(GL_TEXTURE_2D)` first.  The batch's own state
  * comes from the map's two flags rather than from a struct, and the two have to agree -- which is
  * what the strip-vs-list comparison below is for. */
-static const eegs_tri_state_t k_grid_st = { 1, 0, 1 };
+static const eegs_tri_state_t k_grid_st = { 1, 0, 1, 0 };
 
 /* The register set every PRIM word in this gate carries, named ONCE because it is the bit LANE 19
  * rung 6 found wrong on the machine.  gs_pack_prim's field list is OP[2:0] IIP[3] TME[4] FGE[5]
@@ -156,23 +289,32 @@ static const uint64_t k_prim_line     = 1u + 64u + K_CTX;
 static const uint64_t k_prim_line_smooth = 1u + 8u + K_CTX;   /* LINE, untextured, unblended */
 static const uint64_t k_prim_point    = 0u + K_CTX;
 
-/* The tag around EVERY vertex group this stage writes, derived here from the field table rather than
- * trusted from the encoder: NLOOP[14:0], EOP[15] = 0x8000, PRE[46] = 0, PRIM[57:47] = 0,
- * FLG[59:58] = 1 -- a 1 in the low bit of digit 14, i.e. 0x0400_0000_0000_0000 -- and NREG[63:60] = 4
- * at 0x4000_0000_0000_0000.  It is ONE word for a TRI, a strip, a line and a point, because under
- * `FLG=REGLIST` the primitive travels as the loop's own first register and the tag carries none. */
-static const uint64_t k_tag_dense = 0x4400000000008000ULL;
+/* A textured group's tag, by hand: NREG 3 for {RGBAQ, ST, XYZ2}.  Every field is the GIFTAG table
+ * itself -- NLOOP[14:0], EOP at 15, PRE at 46, PRIM[57:47], FLG 1 at 58, NREG 3 at 60 -- and only the
+ * primitive differs between the groups below, because PRE carries it once per packet instead of once
+ * per vertex. */
+static inline uint64_t eegs_tag(uint32_t nloop, uint64_t prim)
+{
+    return 0x3400400000008000ULL | ((prim & 0x7FFULL) << 47) | (uint64_t)nloop;
+}
 
-/* The shape this replaced, kept as the control it is: the same NREG 4 and EOP, with FLG 0 (PACKED),
- * PRE set at 46 and the textured smooth blended TRI's PRIM word in [57:47] -- BUILT from
- * `k_prim_tri_stb` rather than frozen as a second copy of the encoding, so this control follows the
- * CTXT law instead of quietly keeping an old one.  0x5B has its bits 0,1,3,4,6, which land on
- * 47,48,50,51,53: digit 11 is C (PRE's 4 plus op's bit 47), digit 12 is D (1+4+8), digit 13 is 2,
- * and digit 14 is 0 -- nothing of the primitive reaches bit 56 any more, because that bit WAS CTXT.
- * The word is therefore 0x402D_C000_0000_8000 and its XOR with the dense tag is
- * 0x042D_C000_0000_0000: bit 58 plus bit 46 plus those five PRIM bits and nothing else.  LANE 19 rung
- * 5 put these four registers in front of this tag and the census counted zero pixels, at either value
- * of PRE; rung 6 found the sixth bit, CTXT's own, was counting for nothing. */
+/* The same word for an untextured group, whose list is the two-register {RGBAQ, XYZ2} chain: digit 15
+ * reads 2.  This is the shape LANE 19 rung 12e's boxes D and F measured as INTERPOLATING, and the
+ * four-register list it replaced -- with its leading NOP slot and the ST a primitive with TME cleared
+ * never samples -- is what measured as ONE FLAT COLOUR. */
+static inline uint64_t eegs_tag_flat(uint32_t nloop, uint64_t prim)
+{
+    return 0x2400400000008000ULL | ((prim & 0x7FFULL) << 47) | (uint64_t)nloop;
+}
+
+/* The shape this replaced, kept as the control it is: NREG 4 and EOP, with FLG 0 (PACKED), PRE set at
+ * 46 and the textured smooth blended TRI's PRIM word in [57:47] -- BUILT from `k_prim_tri_stb` rather
+ * than frozen as a second copy of the encoding, so this control follows the CTXT law instead of
+ * quietly keeping an old one.  Its XOR with a shipping tag therefore names only the two fields the
+ * fix touched: NREG's nibble (4 against 3 textured, 4 against 2 untextured) and FLG's bit 58, because
+ * PRE and PRIM are the same words in both.  LANE 19 rung 5 put the four registers in front of this
+ * tag and the census counted zero pixels, at either value of PRE; rung 12e found the four-register
+ * list itself was what drew one flat colour, and boxes D and F shipped the shorter chains that shade. */
 static const uint64_t k_tag_retired_tri_stb =
     (4ULL << 60) | (k_prim_tri_stb << 47) | (1ULL << 46) | 0x8000ULL;
 
@@ -215,6 +357,7 @@ static eegs_vertex_t vert(int32_t x_px, int32_t y_px, float s, float t, uint32_t
 
     v.x_px = x_px;
     v.y_px = y_px;
+    v.z = 0u;
     v.s = s;
     v.t = t;
     v.rgba = rgba;
@@ -254,9 +397,12 @@ const gs_tex_t *gs_tex_find(const void *plane)
     return plane == s_tex_key ? &s_plane : (const gs_tex_t *)0;
 }
 
-/* One triangle, its seven quadwords spelled out: the tag, then two quadwords per vertex carrying
- * the four registers of the REGS list two to a quadword -- PRIM with RGBAQ, then ST with the XYZ2
- * that kicks the draw. */
+/* One triangle, its six quadwords spelled out: the tag, then the three-register chain {RGBAQ, ST,
+ * XYZ2} packed end to end, which makes a vertex one and a half quadwords and leaves the group owing a
+ * pad half -- 11 halves of header and data, sent as 6 quadwords.  Since LANE 19 rung 12v that chain
+ * travels with a companion: a two-quadword AD group in front of it that WRITES the PRIM the tag only
+ * mentions, so the frame the GS sees is eight quadwords over two packets, and the words below are
+ * still the chain's own. */
 static void test_one_triangle(void)
 {
     uint64_t *w;
@@ -271,40 +417,41 @@ static void test_one_triangle(void)
     eegs_triangle(v, k_stb);
     eegs_frame_end();
 
-    check_word("a smooth textured blended TRI asks for PRIM 0x5B", gs_vq(VG(0), 1u, 0u),
+    check_word("a smooth textured blended TRI asks for PRIM 0x5B", gs_prim_of(VG(0)),
                k_prim_tri_stb);
-    check("one triangle is one vertex group: a tag plus six data quadwords",
-          s_cap_i == 1 + s_vg && VN(0) == gs_group_qw(3u) && VN(0) == 7u);
+    check("one triangle is one vertex group and one descriptor: a tag plus nine registers and "
+          "their pad, preceded by the AD write that puts their PRIM on the machine",
+          groups_are(1u, (uint32_t)s_vg) && VN(0) == gs_group_qw(3u, GS_REC_NREG_TEX) && VN(0) == 6u);
     check("three vertices, one triangle", eegs_verts() == 3u && eegs_prims() == 1u);
-    if (s_cap_i < 1 + s_vg) return;
+    if (vgroups() < 1u) return;
     w = VG(0);
+    check_word("and the descriptor in front of that chain writes the same PRIM, whole",
+               pd_prim(0), k_prim_tri_stb);
 
-    check_word("the group's tag: NLOOP 3, FLG=REGLIST, and no PRIM field",
-               gs_qw(w, 0u), gs_pack_giftag(3u, 1u, 0u, 0u, GS_FLG_REGLIST, 4u));
-    check("and that tag is the hand literal, not only the encoder's word",
-          gs_qw(w, 0u) == (k_tag_dense | 3u));
-    check_word("CONTROL that word against the retired PACKED tag: FLG, PRIM and PRE, nothing else",
-               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 3u), 0x042DC00000000000ULL);
-    check_word("REGS: PRIM, RGBAQ, ST, XYZ2, in the tag's upper half",
-               gs_regs_of(w), 0x5210ULL);
+    check_word("the group's tag: NLOOP 3, FLG=REGLIST, NREG 3, PRIM in tag",
+               gs_qw(w, 0u), eegs_tag(3u, k_prim_tri_stb));
+    check_word("CONTROL that word against the retired PACKED tag: NREG and FLG differ",
+               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 3u), 0x7400000000000000ULL);
+    check_word("REGS: RGBAQ, ST, XYZ2, in the tag's upper half",
+               gs_regs_of(w), 0x521ULL);
 
     /* rgba 0xFF332244 is a=0xFF b=0x33 g=0x22 r=0x44, so the byte order the GS wants --
      * R[7:0] G[15:8] B[23:16] A[31:24] -- is 0xFF332244 unchanged, with Q = 1.0f above it. */
     check_word("vertex 1 RGBAQ unpacks the packed colour low byte first",
-               gs_vq(w, 1u, 1u), 0x3F800000FF332244ULL);
-    check_word("vertex 1 ST, 0,0", gs_vq(w, 1u, 2u), 0x0000000000000000ULL);
+               gs_vq(w, 1u, GS_NIB_RGBAQ), 0x3F800000FF332244ULL);
+    check_word("vertex 1 ST, 0,0", gs_vq(w, 1u, GS_NIB_ST), 0x0000000000000000ULL);
     check_word("vertex 1 XYZ2: the window's own top-left, in 12.4",
-               gs_vq(w, 1u, 3u), 0x0000000080008000ULL);
+               gs_vq(w, 1u, GS_NIB_XYZ2), 0x0000000080008000ULL);
 
     /* The pass-through law, at the far corner of the measured 768x500 client: 767 px is 12,272
      * sixteenths and 12,272 + 32,768 = 45,040 = 0xAFF0; 499 px is 7,984 + 32,768 = 40,752 =
      * 0x9F30.  XYZ2 is X[15:0] then Y[31:16]. */
     check_word("vertex 2 XYZ2: 767,499 passed through, not re-projected",
-               gs_vq(w, 2u, 3u), 0x000000009F30AFF0ULL);
+               gs_vq(w, 2u, GS_NIB_XYZ2), 0x000000009F30AFF0ULL);
     check_word("vertex 2 RGBAQ: all four bytes zero is a=0, not a=255",
-               gs_vq(w, 2u, 1u), 0x3F80000000000000ULL);
+               gs_vq(w, 2u, GS_NIB_RGBAQ), 0x3F80000000000000ULL);
     check_word("vertex 2 ST: s = 1.0f low, t = 2.0f high",
-               gs_vq(w, 2u, 2u), 0x400000003F800000ULL);
+               gs_vq(w, 2u, GS_NIB_ST), 0x400000003F800000ULL);
     /* 250 px is 4,000 sixteenths + 32,768 = 36,768 = 0x8FA0, and 20 px is 320 + 32,768 = 0x8140.
      * This case used to be 20.09375 px, whose 321.5 sixteenths the recorder truncated to 321, and it
      * is retired rather than marked passing: under LANE 12a no caller can hand this layer a
@@ -313,22 +460,26 @@ static void test_one_triangle(void)
      * checks that a clipped vertex's whole-pixel value is the one the map produced.  That is a real
      * gap opened by this change, and it is named here rather than papered over. */
     check_word("vertex 3 XYZ2: whole pixels, scaled and folded onto the page",
-               gs_vq(w, 3u, 3u), 0x000000008FA08140ULL);
-    check_word("vertex 3 RGBAQ: opaque white", gs_vq(w, 3u, 1u), 0x3F800000FFFFFFFFULL);
+               gs_vq(w, 3u, GS_NIB_XYZ2), 0x000000008FA08140ULL);
+    check_word("vertex 3 RGBAQ: opaque white",
+               gs_vq(w, 3u, GS_NIB_RGBAQ), 0x3F800000FFFFFFFFULL);
 
     /* The unit, one more time from this stage's side, and now reading in the direction the format
-     * runs: of this group's six data quadwords every HIGH half is a register of the loop -- RGBAQ,
-     * XYZ2, RGBAQ, XYZ2, RGBAQ, XYZ2 -- and none of them is padding.  Under the retired PACKED stride
-     * all twelve of those halves were zero, which is the shape rung 5 measured as inert.  The one
-     * legitimately zero register in this group, vertex 1's ST of (0,0), sits in a LOW half, where a
-     * "no half is zero" census would have called it padding. */
+     * runs: of this group's ten data halves, eight are registers of the loop and exactly two are not
+     * ink -- vertex 1's ST of (0,0), which is a register that legitimately holds zero, and the pad the
+     * eleventh half of an odd chain becomes.  Under the retired PACKED stride every second half of
+     * every vertex was padding, which is the shape rung 5 measured as inert; under the four-register
+     * dense list that replaced it the same census counted the NOP twice. */
     badpad = 0;
-    for (k = 1u; k < VN(0); k++) {
-        if (gs_upper_of(w, k) == 0u) badpad++;
+    for (k = 2u; k < VN(0) * 2u; k++) {
+        if (gs_half(w, k / 2u, k % 2u) == 0u) badpad++;
     }
-    check("and all six data quadwords carry two registers each, none padded", badpad == 0);
-    check_word("vertex 1's zero ST is quadword 2's low half, not an empty half",
-               gs_half(w, 2u, 0u), 0u);
+    check("ten data halves, two of them zero: vertex 1's ST and the odd chain's pad",
+          badpad == 2 && VN(0) == 6u);
+    check_word("vertex 1's zero ST is quadword 1's high half, a register and not a gap",
+               gs_upper_of(w, 1u), 0u);
+    check_word("and the group's last half is the pad close_group() wrote",
+               gs_upper_of(w, 5u), 0u);
 }
 
 /* The law with the most at stake: three triangles that want the same state are ONE group of nine
@@ -348,13 +499,15 @@ static void test_state_reuse(void)
     }
     eegs_frame_end();
 
-    check("three same-state triangles are one send after the switch",
-          s_cap_i == 1 + s_vg && gs_rec_sends() == 1u + s_vg);
+    check("three same-state triangles are still ONE vertex group after the switch, and the frame "
+          "is its switch, its one descriptor and that group -- three sends, not one per triangle",
+          groups_are(1u, (uint32_t)s_vg));
     check("nine vertices, three triangles", eegs_verts() == 9u && eegs_prims() == 3u);
-    if (s_cap_i < 1 + s_vg) return;
+    if (vgroups() < 1u) return;
     check("NLOOP 9, so the group holds all three whole",
           (gs_qw(VG(0), 0u) & 0x7FFFu) == 9u);
-    check("1 + 2*9 = 19 quadwords", VN(0) == gs_group_qw(9u) && VN(0) == 19u);
+    check("2 + 3*9 = 29 halves, padded to 15 quadwords",
+          VN(0) == gs_group_qw(9u, GS_REC_NREG_TEX) && VN(0) == 15u);
 
     /* LANE 12e's park, read off the group this frame built: a triangle is three vertices, so
      * `verts` is exactly 3 x `prims`, and the OP the group's PRIM carries is the list's 3, not the
@@ -364,13 +517,13 @@ static void test_state_reuse(void)
     check("the park holds: verts is 3 x prims, so no vertex was ever continued",
           eegs_verts() == 3u * eegs_prims());
     check_word("and this stage's group carries OP 3, the triangle list",
-               gs_vq(VG(0), 1u, 0u) & 7u, 3u);
+               gs_op_of(VG(0)), 3u);
 }
 
-/* A state change is a group boundary by construction, and the PRIM word that follows it must be
- * the new one: every vertex carries the group's latched state in its own first register, and the tag
- * carries none -- so the two groups' tags here are the same word, and what makes them different
- * packets is the register at the head of each of their loops. */
+/* A state change is a group boundary by construction: the tag carries the primitive once, with PRE
+ * set, so a second state cannot ride a group whose tag names the first one.  What makes the two
+ * groups different packets is that tag word and nothing else -- the REGS list is the same three
+ * registers, because both states here sample the same plane. */
 static void test_state_change_closes(void)
 {
     eegs_vertex_t v[3];
@@ -383,28 +536,34 @@ static void test_state_change_closes(void)
     eegs_triangle(v, k_flat_tex);
     eegs_frame_end();
 
-    check("a flat triangle after a smooth one is two vertex groups", s_cap_i == 2 + s_vg);
-    if (s_cap_i < 2 + s_vg) return;
-    check_word("the first group's PRIM keeps IIP", gs_vq(VG(0), 1u, 0u), k_prim_tri_stb);
-    check_word("the second's drops it: 0x5B without the 8", gs_vq(VG(1), 1u, 0u),
+    check("a flat triangle after a smooth one is two vertex groups, each with its own descriptor",
+          groups_are(2u, (uint32_t)s_vg));
+    if (vgroups() < 2u) return;
+    check_word("the first group's PRIM keeps IIP", gs_prim_of(VG(0)), k_prim_tri_stb);
+    check_word("the second's drops it: 0x5B without the 8", gs_prim_of(VG(1)),
                k_prim_tri_flat);
-    check_word("and its tag is the identical dense word, NLOOP 3, state in its loops",
-               gs_qw(VG(1), 0u), gs_pack_giftag(3u, 1u, 0u, 0u, GS_FLG_REGLIST, 4u));
-    check("so the two groups' tags are the same 64 bits, and only their PRIM registers differ",
-          gs_qw(VG(0), 0u) == gs_qw(VG(1), 0u) &&
-          gs_vq(VG(0), 1u, 0u) != gs_vq(VG(1), 1u, 0u));
+    check_word("and its tag carries its PRIM, NLOOP 3",
+               gs_qw(VG(1), 0u), eegs_tag(3u, k_prim_tri_flat));
+    check("so the two groups carry their distinct PRIM words",
+          gs_prim_of(VG(0)) != gs_prim_of(VG(1)));
+    check("and the descriptors are written per group, not cached per frame: the second one tells "
+          "the machine 0x53 after the first told it 0x5B",
+          pd_prim(0) == k_prim_tri_stb && pd_prim(1) == k_prim_tri_flat);
     check("so a state change costs one group, not one vertex group per triangle",
-          VN(0) == gs_group_qw(3u) && VN(1) == gs_group_qw(3u));
+          VN(0) == gs_group_qw(3u, GS_REC_NREG_TEX) && VN(1) == gs_group_qw(3u, GS_REC_NREG_TEX));
 
     start_plane();
     eegs_triangle(v, k_stb);
     eegs_point(&v[0], k_stb);
     eegs_frame_end();
-    check("a point after a triangle closes too, and is its own op", s_cap_i == 2 + s_vg);
-    if (s_cap_i < 2 + s_vg) return;
+    check("a point after a triangle closes too, and is its own op",
+          groups_are(2u, (uint32_t)s_vg));
+    if (vgroups() < 2u) return;
     check_word("POINT with the same flags: 0 + 8 + 16 + 64",
-               gs_vq(VG(1), 1u, 0u), k_prim_point | 8u | 16u | 64u);
+               gs_prim_of(VG(1)), k_prim_point | 8u | 16u | 64u);
     check("the point group has one vertex", (gs_qw(VG(1), 0u) & 0x7FFFu) == 1u);
+    check_word("and the point's own descriptor, not the triangle's, precedes it",
+               pd_prim(1), k_prim_point | 8u | 16u | 64u);
 }
 
 /* The XMB's message-box border is a GL_LINE_LOOP, so the line path is on screen from the first
@@ -422,33 +581,38 @@ static void test_lines(void)
     }
     eegs_frame_end();
 
-    check("four segments of the same state are one group", s_cap_i == 1);
-    if (s_cap_i < 1) return;
+    check("four segments of the same state are one group", groups_are(1u, 0u));
+    if (vgroups() < 1u) return;
     check("eight vertices = four segments",
-          (gs_qw(s_cap[0], 0u) & 0x7FFFu) == 8u && eegs_verts() == 8u);
+          (gs_qw(VG(0), 0u) & 0x7FFFu) == 8u && eegs_verts() == 8u);
     check_word("LINE, untextured, unblended, smooth: 1 + 8",
-               gs_vq(s_cap[0], 1u, 0u), k_prim_line_smooth);
+               gs_prim_of(VG(0)), k_prim_line_smooth);
     check("and a counted primitive is counted whether or not it is a triangle",
           eegs_prims() == 4u);
-    check("one tag plus eight two-quadword vertices = 17 quadwords",
-          s_cap_n[0] == gs_group_qw(8u) && s_cap_n[0] == 17u);
+    check("one tag plus eight one-quadword untextured vertices = 9 quadwords",
+          VN(0) == gs_group_qw(8u, GS_REC_NREG_UNTEX) && VN(0) == 9u);
 
     start();
     v[0] = vert(0, 0, 0.0f, 0.0f, 0xFF332244u);
     v[1] = vert(0, 10, 0.0f, 0.0f, 0xFF332244u);
     eegs_line(v, k_blend_only);
     eegs_frame_end();
-    if (s_cap_i < 1) return;
-    check_word("the same op with only ABE set: 1 + 64", gs_vq(s_cap[0], 1u, 0u),
+    if (vgroups() < 1u) return;
+    check_word("the same op with only ABE set: 1 + 64", gs_prim_of(VG(0)),
                k_prim_line);
-    check("and a segment is a tag plus two two-quadword vertices",
-          eegs_verts() == 2u && s_cap_n[0] == gs_group_qw(2u) && s_cap_n[0] == 5u);
+    check_word("written to the machine by the group's own descriptor",
+               pd_prim(0), k_prim_line);
+    check("and a segment is a tag plus two one-quadword untextured vertices",
+          eegs_verts() == 2u && VN(0) == gs_group_qw(2u, GS_REC_NREG_UNTEX) &&
+          VN(0) == 3u);
 }
 
 /* Capacity at this layer's granularity: a group cut must not land between the first and second
  * vertex of a triangle, or the GS draws a two-vertex primitive and steals the third from the next
- * group.  At 32 quadwords the recorder's list rule cuts at 12 vertices, which is a whole number of
- * triangles; 12 triangles is 36 vertices, so three groups of 12 and one send per group. */
+ * group.  At 32 quadwords = 64 register halves a textured vertex is charged four of them (three for
+ * its chain, one for the pad an odd chain owes), so the list rule -- which may only cut at a multiple
+ * of three -- offers its first boundary at the 19th vertex and cuts there: 18 vertices, 2 + 54 halves
+ * = 28 quadwords.  12 triangles is 36 vertices, so two groups of 18 and one send per group. */
 static void test_cut_is_always_whole_triangles(void)
 {
     eegs_vertex_t v[3];
@@ -467,20 +631,20 @@ static void test_cut_is_always_whole_triangles(void)
     }
     eegs_frame_end();
 
-    check("36 vertices at this capacity is three sends",
-          s_cap_i == 3 + s_vg && gs_rec_sends() == 3u + s_vg);
+    check("36 vertices at this capacity is two vertex groups, and two sends more than the pre-12v "
+          "shape because each one now carries its own PRIM",
+          groups_are(2u, (uint32_t)s_vg));
     check("nothing was refused", gs_rec_unsplittable() == 0u);
-    for (i = s_vg; i < s_cap_i; i++) {
+    for (i = 0; i < (int)vgroups(); i++) {
         char label[64];
-        unsigned long n = (unsigned long)(gs_qw(s_cap[i], 0u) & 0x7FFFu);
-        sprintf(label, "vertex group %d's NLOOP %lu is a whole number of triangles",
-                i - s_vg, n);
+        unsigned long n = (unsigned long)gs_nloop_of(VG(i));
+        sprintf(label, "vertex group %d's NLOOP %lu is a whole number of triangles", i, n);
         check(label, n % 3u == 0u && n > 0u);
-        sprintf(label, "and vertex group %d is that many x 2 plus a tag", i - s_vg);
-        check(label, s_cap_n[i] == gs_group_qw((uint32_t)n));
+        sprintf(label, "and vertex group %d is %lu three-register vertices plus a tag", i, n);
+        check(label, VN(i) == gs_group_qw((uint32_t)n, GS_REC_NREG_TEX));
     }
-    check("12 + 12 + 12 = 36", eegs_verts() == 36u);
-    check("25 quadwords per group at this capacity", VN(0) == 25u);
+    check("18 + 18 = 36", eegs_verts() == 36u);
+    check("28 quadwords per group at this capacity", VN(0) == 28u && VN(1) == 28u);
 }
 
 /* The frame boundary: a group left open by an unfinished primitive must not be carried into the
@@ -497,34 +661,40 @@ static void test_frame_boundary(void)
     v[2] = vert(0, 1, 0.0f, 0.0f, 0xFFu);
 
     /* 5b's half of the boundary law, which is also ps2_gs_tex.h's second: the words that exist
-     * cross the bus when they are written, while the vertices that use them accumulate. */
+     * cross the bus when they are written, while the vertices that use them accumulate.  LANE 19
+     * rung 12v adds a third state in between, and this is the case that names it: a group's PRIM
+     * descriptor leaves WITH ITS FIRST VERTEX, because `open_group()` writes it, so a frame can have
+     * put a register group on the bus and still hold every pixel back. */
     eegs_texture(&a);
-    check("the switch group leaves before the frame ends", s_cap_i == 1);
+    check("the switch group leaves before the frame ends", s_cap_i == 1 && adgroups() == 1u);
     eegs_triangle(v, k_stb);
-    check("and no vertex group has", s_cap_i == 1);
+    check("and no vertex group has -- though the group's PRIM has gone out with its first vertex",
+          s_cap_i == 2 && vgroups() == 0u && gs_rec_prim_writes() == 1u);
     eegs_frame_end();
-    check("the vertex group is sent when the frame ends", s_cap_i == 2);
-    if (s_cap_i < 2) return;
-    check_word("so the frame opens with the AD tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
-    check_word("and the triangle that follows is the textured one the plane makes legal",
-               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+    check("the vertex group is sent when the frame ends", s_cap_i == 3);
+    if (vgroups() < 1u) return;
+    check_word("so the frame opens with the AD tag", gs_qw(adg(0), 0u), k_tag_ad3);
+    check_word("and the triangle that follows it is the textured one the plane makes legal",
+               gs_prim_of(VG(0)), k_prim_tri_stb);
 
     /* A new frame has no plane either: the environment packet that ends a frame writes `TEX0` for
      * the window's default, so the last frame's page is not live state to inherit.  Asking for a
      * texture before naming a plane therefore costs a cleared `TME` and a count, not a sample of
      * whatever the previous frame left there. */
     start();
-    check("a new frame starts with no counters and no open group",
+    check("a new frame starts with no counters, no open group and nothing on the bus",
           eegs_prims() == 0u && eegs_verts() == 0u && gs_rec_sends() == 0u && s_cap_i == 0);
     check("its texture counters start empty too",
           eegs_tex_switches() == 0u && eegs_tex_missing() == 0u);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
-    check("a textured triangle with no plane of this frame's is recorded without TME",
-          s_cap_i == 1 && eegs_tex_missing() == 1u);
-    if (s_cap_i < 1) return;
+    check("a textured triangle with no plane of this frame's is recorded without TME, and still "
+          "pays its own descriptor",
+          groups_are(1u, 0u) && eegs_tex_missing() == 1u);
+    if (vgroups() < 1u) return;
     check_word("and the state it carries is the untextured one",
-               gs_vq(s_cap[0], 1u, 0u), k_prim_tri_untex);
+               gs_prim_of(VG(0)), k_prim_tri_untex);
+    check_word("the state its descriptor wrote, too", pd_prim(0), k_prim_tri_untex);
 
     /* The state the recorder lost with the group has to be re-sent too: a frame that names a plane
      * and then draws pays one switch group and one vertex group, even when the previous frame used
@@ -533,11 +703,12 @@ static void test_frame_boundary(void)
     eegs_texture(&a);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
-    check("so the second frame pays its own switch group", s_cap_i == 2);
-    if (s_cap_i < 2) return;
-    check_word("and the group it opens with is the AD tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
+    check("so the second frame pays its own switch group, and its group pays its own descriptor",
+          groups_are(1u, 1u));
+    if (vgroups() < 1u) return;
+    check_word("and the group it opens with is the AD tag", gs_qw(adg(0), 0u), k_tag_ad3);
     check_word("with the state the re-named plane makes legal",
-               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+               gs_prim_of(VG(0)), k_prim_tri_stb);
     check("and one switch counted, not the frame's whole triangle count",
           eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
 }
@@ -564,20 +735,22 @@ static void test_texture_switch(void)
     eegs_triangle(v, k_stb);
     eegs_frame_end();
 
-    check("the switch is a group before the vertices it applies to", s_cap_i == 2);
-    if (s_cap_i < 2) return;
-    check_word("its tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
-    check_word("its one REGS nibble is AD", gs_regs_of(s_cap[0]), 0x0Eu);
+    check("the switch is a group before the vertices it applies to, and they are preceded in turn "
+          "by their own PRIM descriptor",
+          groups_are(1u, 1u) && s_cap_i == 3);
+    if (vgroups() < 1u) return;
+    check_word("its tag", gs_qw(adg(0), 0u), k_tag_ad3);
+    check_word("its one REGS nibble is AD", gs_regs_of(adg(0)), 0x0Eu);
     check("so it is one tag plus three register quadwords",
           s_cap_n[0] == GS_REC_AD_QWC(3u) && s_cap_n[0] == 4u);
-    check_word("CLAMP first", gs_qw(s_cap[0], 1u), a.clamp);
-    check_word("  at GP offset 0x08", gs_upper_of(s_cap[0], 1u), 0x08u);
-    check_word("TEX0 second", gs_qw(s_cap[0], 2u), a.tex0);
-    check_word("  at GP offset 0x06", gs_upper_of(s_cap[0], 2u), 0x06u);
-    check_word("TEX1 third", gs_qw(s_cap[0], 3u), a.tex1);
-    check_word("  at GP offset 0x14", gs_upper_of(s_cap[0], 3u), 0x14u);
+    check_word("CLAMP first", gs_qw(adg(0), 1u), a.clamp);
+    check_word("  at GP offset 0x08", gs_upper_of(adg(0), 1u), 0x08u);
+    check_word("TEX0 second", gs_qw(adg(0), 2u), a.tex0);
+    check_word("  at GP offset 0x06", gs_upper_of(adg(0), 2u), 0x06u);
+    check_word("TEX1 third", gs_qw(adg(0), 3u), a.tex1);
+    check_word("  at GP offset 0x14", gs_upper_of(adg(0), 3u), 0x14u);
     check_word("and the group after it is the textured primitive",
-               gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
+               gs_prim_of(VG(0)), k_prim_tri_stb);
     check("one plane change is one switch counted", eegs_tex_switches() == 1u);
     check("and no primitive lost a texture", eegs_tex_missing() == 0u);
 
@@ -594,11 +767,12 @@ static void test_texture_switch(void)
     v[2] = vert(128, 64, 128.0f, 64.0f, 0xFFFFFFFFu);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
-    check("a repeated plane pays nothing: one switch group and one vertex group",
-          s_cap_i == 2);
-    if (s_cap_i < 2) return;
-    check("and the two triangles are one group of six vertices, thirteen quadwords",
-          gs_nloop_of(s_cap[1]) == 6u && s_cap_n[1] == gs_group_qw(6u) && s_cap_n[1] == 13u);
+    check("a repeated plane pays nothing: one switch group, one descriptor, one vertex group",
+          groups_are(1u, 1u));
+    if (vgroups() < 1u) return;
+    check("and the two triangles are one group of six vertices, twenty halves = 10 quadwords",
+          gs_nloop_of(VG(0)) == 6u &&
+          VN(0) == gs_group_qw(6u, GS_REC_NREG_TEX) && VN(0) == 10u);
     check("counted once", eegs_tex_switches() == 1u);
 
     /* Pointing at nothing sends nothing -- an untextured primitive reads no texture whatever TEX0
@@ -610,11 +784,12 @@ static void test_texture_switch(void)
     eegs_texture(NULL);
     eegs_triangle(v, k_stb);
     eegs_frame_end();
-    check("no group for the plane of none, but the open group splits on the PRIM",
-          s_cap_i == 3);
-    if (s_cap_i < 3) return;
-    check_word("the triangle before it kept TME", gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
-    check_word("and the one after it lost it", gs_vq(s_cap[2], 1u, 0u), k_prim_tri_untex);
+    check("no group for the plane of none, but the open group splits on the PRIM -- and a split "
+          "group is a split descriptor too",
+          groups_are(2u, 1u));
+    if (vgroups() < 2u) return;
+    check_word("the triangle before it kept TME", gs_prim_of(VG(0)), k_prim_tri_stb);
+    check_word("and the one after it lost it", gs_prim_of(VG(1)), k_prim_tri_untex);
     check("still one switch emitted", eegs_tex_switches() == 1u);
     check("and the textured primitive with no plane is counted, not drawn from a stale page",
           eegs_tex_missing() == 1u);
@@ -632,7 +807,8 @@ static void test_texture_switch(void)
  * short list, so a comparison can never pass on a partial decode.
  *
  * What is compared is the triangle ORDER and each triangle's three CORNERS, where a corner is its
- * whole payload -- colour, texture coordinate and position together, one quadword each.  What is
+ * whole payload -- colour, texture coordinate and position, each read by its REGS-list nibble rather
+ * than by a position that only one of the two lists has.  What is
  * deliberately not compared is the order the three corners are NAMED in within one triangle: that is
  * the winding, and `vertex.c`'s `cnt & 1` exists to fix it for a rasteriser that culls.  This stream
  * culls nothing, and because a corner carries its own colour with its own position, permuting the
@@ -657,30 +833,34 @@ typedef struct {
 
 static tgl_grid_pt_t s_pts[GRID_MAX_PTS];
 
-/* The AD group draws nothing, so it contributes no triangle; every other group this stage writes is a
- * dense `FLG=REGLIST` vertex group whose data quadwords are TWO PER VERTEX, the REGS list packed end
- * to end.  That is also where the primitive has to be read FROM: a dense group's tag leaves its PRIM
- * field clear, because the primitive travels as the first register of every loop instead -- `gs_op_of
- * (g)` on such a group answers "POINT", which is 0 and is the field's empty value, not a fact about
- * the drawing.  The shape guard is the same law seen from the other side: a group that names four
- * registers and does not pack them is the retired sparse shape, and a decoder that read its second
- * register out of the third one's place would decode a stream the GS never rasterised. */
+/* The AD groups draw nothing, so they contribute no triangle -- and since LANE 19 rung 12v there are
+ * two of them in a frame, the texture switches' three-register group and every vertex group's
+ * one-register PRIM descriptor, so the skip is by the tag's own FLG and not by the register count.
+ * Every other group this stage writes is a dense `FLG=REGLIST` vertex group whose registers are the
+ * primitive's own list packed end to end -- RGBAQ and XYZ2 untextured, RGBAQ, ST and XYZ2 textured.
+ * The primitive is read from the TAG, because PRE carries it once per packet: `gs_op_of(g)` is the
+ * group's op, and there is no per-vertex PRIM register left to read it from.  The shape guard is the
+ * same law seen from the other side: a group whose NREG is neither of the two this recorder writes,
+ * or whose FLG is not the dense one, is not a group this decoder can index -- reading a
+ * three-register loop at a four-register stride names the next vertex's colour where this one's
+ * coordinate lives. */
 static int decode_stream(dec_tri_t *dst, int dst_max)
 {
     int n = 0, gi, k;
 
     for (gi = 0; gi < s_cap_i; gi++) {
         const uint64_t *g = s_cap[gi];
-        uint32_t nloop, step, v, op;
+        uint32_t nloop, nreg, step, v, op;
 
-        if (gs_regs_of(g) == 0x0Eu) continue;
-        if (gs_nreg_of(g) != GS_REC_REGS_N) return -1;
+        if (!group_is_vertex(gi)) continue;
+        nreg = gs_nreg_of(g);
+        if (nreg != GS_REC_NREG_TEX && nreg != GS_REC_NREG_UNTEX) return -1;
         if (gs_flg_of(g) != GS_FLG_REGLIST) return -1;
 
         nloop = gs_nloop_of(g);
-        if (s_cap_n[gi] != gs_group_qw(nloop)) return -1;    /* the size law is part of the decode */
+        if (s_cap_n[gi] != gs_group_qw(nloop, nreg)) return -1; /* the size law is part of the decode */
 
-        op = (uint32_t)(gs_vq(g, 1u, 0u) & 7u);
+        op = gs_op_of(g);
         if (op == GS_OP_TRI)            step = 3u;
         else if (op == GS_OP_TRISTP)    step = 1u;
         else return -1;
@@ -692,9 +872,9 @@ static int decode_stream(dec_tri_t *dst, int dst_max)
             t = &dst[n];
             for (k = 0; k < 3; k++) {
                 const uint32_t vi = v + (uint32_t)k;
-                t->c[k].rgbaq = gs_vq(g, vi, 1u);
-                t->c[k].st    = gs_vq(g, vi, 2u);
-                t->c[k].xyz2  = gs_vq(g, vi, 3u);
+                t->c[k].rgbaq = gs_vq(g, vi, GS_NIB_RGBAQ);
+                t->c[k].st    = gs_vq(g, vi, GS_NIB_ST);
+                t->c[k].xyz2  = gs_vq(g, vi, GS_NIB_XYZ2);
             }
             n++;
         }
@@ -857,7 +1037,8 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check("the only exit left is the argument one, and it says so",
           eegs_grid_why() == TGL_GRID_REFUSE_ARG);
 
-    /* The batch: one PRIM for the whole mesh. */
+    /* The batch: one PRIM per group for the whole mesh -- and per group means 12v's descriptor too,
+     * which is why `groups_are()` below reads twice the pre-12v capture count. */
     start();
     submitted = eegs_grid_strip(&m, s_pts, rows, cols);
     eegs_frame_end();
@@ -865,7 +1046,10 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
     sprintf(label, "%dx%d: the batch submitted (rows-1)*cols*2 vertices", rows, cols);
     check(label, submitted == (rows - 1) * cols * 2);
-    strip_groups = s_cap_i;
+    strip_groups = (int)vgroups();
+    sprintf(label, "%dx%d: the batch's %d vertex group%s each carry their own descriptor",
+            rows, cols, strip_groups, strip_groups == 1 ? "" : "s");
+    check(label, groups_are((uint32_t)strip_groups, 0u));
     strip_verts = eegs_verts();
     strip_prims = eegs_prims();
     na = decode_stream(A, TRI_MAX);
@@ -876,10 +1060,9 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check(label, na == submitted - 2);
     sprintf(label, "%dx%d: and the stage counted the same number", rows, cols);
     check(label, strip_prims == (uint32_t)(submitted - 2));
-    check("the batch's groups all open their loops with the strip's OP 4 -- in the register, because "
-          "a dense tag names no primitive",
-          (gs_vq(VG(0), 1u, 0u) & 7u) == GS_OP_TRISTP &&
-          (gs_vq(VG(strip_groups - 1), 1u, 0u) & 7u) == GS_OP_TRISTP);
+    check("the batch's groups all carry the strip's OP 4 in their tags",
+          gs_op_of(VG(0)) == GS_OP_TRISTP &&
+          gs_op_of(VG(strip_groups - 1)) == GS_OP_TRISTP);
 
     /* The shipped path, same grid, same submission order. */
     start();
@@ -890,7 +1073,10 @@ static void test_grid_strip_matches_list(int rows, int cols)
     eegs_frame_end();
     check("nothing was dropped by the capture", s_cap_drops == 0);
     check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
-    list_groups = s_cap_i;
+    list_groups = (int)vgroups();
+    sprintf(label, "%dx%d: the list's %d vertex group%s each carry their own descriptor too",
+            rows, cols, list_groups, list_groups == 1 ? "" : "s");
+    check(label, groups_are((uint32_t)list_groups, 0u));
     list_verts = eegs_verts();
     list_prims = eegs_prims();
     nb = decode_stream(B, TRI_MAX);
@@ -913,10 +1099,11 @@ static void test_grid_strip_matches_list(int rows, int cols)
                    (unsigned long long)tb->c[i].xyz2, (unsigned long long)tb->c[i].rgbaq);
         }
     }
-    printf("  %dx%d: batch %d group%s / %u vertices for %d triangles,"
-           " list %d group%s / %u vertices\n",
-           rows, cols, strip_groups, strip_groups == 1 ? "" : "s", strip_verts, na,
-           list_groups, list_groups == 1 ? "" : "s", list_verts);
+    printf("  %dx%d: batch %d vertex group%s (%d packets with their descriptors) / %u vertices"
+           " for %d triangles; list %d vertex group%s (%d packets) / %u vertices\n",
+           rows, cols, strip_groups, strip_groups == 1 ? "" : "s", 2 * strip_groups,
+           strip_verts, na,
+           list_groups, list_groups == 1 ? "" : "s", 2 * list_groups, list_verts);
 
     /* The two counters LANE 12f exists to move. */
     sprintf(label, "%dx%d: the batch pays %d vertex groups where the list pays %d",
@@ -940,25 +1127,25 @@ static void test_grid_strip_matches_list(int rows, int cols)
     check(label, nc == na && tri_seqs_equal(A, na, C, nc) != 0);
 }
 
-/* A smooth, untextured, blended TRISTP: op 4 + IIP 8 + ABE 64 = 76 = 0x4C.  Under the dense shape
- * that word is the FIRST REGISTER of every loop, not a tag field: the group's tag leaves
- * PRIM[57:47] clear, sets FLG[59:58]=1 and is otherwise the same NREG 4 / EOP word every other vertex
- * group here carries -- 0x44000000_00008000 | NLOOP, one word for the strip and the list and the line.
+/* A smooth, untextured, blended TRISTP: op 4 + IIP 8 + ABE 64 = 76 = 0x4C.  That word travels in the
+ * TAG, at PRIM[57:47] with PRE[46] set, once for the whole group -- the register list this primitive
+ * gets is the two-register untextured one, so the tag's NREG nibble is 2 and the group's own word is
+ * `eegs_tag_flat()`: 0x2400_4000_0000_8000 | PRIM<<47 | NLOOP.
  * The retired PACKED form is kept below as its control, built from the same field table and this same
- * word: 0x4C at [57:47] with PRE[46] set, EOP[15] set and NREG[63:60]=4 -- digit 11 holds PRE alone
- * (4) because op 4 has no bit 0, digit 12 holds IIP's bit 50 and op's bit 49 (6), digit 13 holds
- * ABE's bit 53 (2), and digit 14 holds nothing of it now that CTXT is 0.  So the control is
- * 0x4026_4000_0000_8000 and its XOR with the dense tag is 0x0426_4000_0000_0000: the dense tag's own
- * bit 58, bit 46, and those three PRIM bits, which is the whole of what changed. */
+ * PRIM word: 0x4C at [57:47] with PRE[46] set, EOP[15] set and NREG[63:60]=4.  Its XOR with the
+ * shipping tag is therefore the two fields the fix touched and nothing else -- the NREG nibble, 4
+ * against 2, and FLG's bit 58: 0x6400_0000_0000_0000. */
 static const uint64_t k_prim_stp_sb  = 4u + 8u + 64u + K_CTX;
 static const uint64_t k_tag_retired_stp_sb =
     (4ULL << 60) | (k_prim_stp_sb << 47) | (1ULL << 46) | 0x8000ULL;
 static const uint64_t k_prim_stp_unblended = 4u + 8u + K_CTX;   /* 0x0C */
 
-/* The 3x3 mesh's ONE group, 25 quadwords, spelled out of the field tables by hand: twelve vertices
- * in the zigzag's own order, 0,3,1,4,2,5 then the turn-around's repeat of 5 and 8,4,7,3,6.  Each
- * point is (x, y) = (col, row) px, so XYZ2 is (0x8000 + 16*row)<<16 | (0x8000 + 16*col) with Z 0
- * above bit 32, and RGBAQ is 0x3F800000 above the grey the mesh was filled with. */
+/* The 3x3 mesh's ONE group, 13 quadwords, spelled out of the field tables by hand: twelve vertices
+ * of two registers apiece, packed end to end behind the tag pair -- 2 + 24 halves, an even chain that
+ * owes no pad.  The vertices are in the zigzag's own order, 0,3,1,4,2,5 then the turn-around's repeat
+ * of 5 and 8,4,7,3,6.  Each point is (x, y) = (col, row) px, so XYZ2 is (0x8000 + 16*row)<<16 |
+ * (0x8000 + 16*col) with Z 0 above bit 32, and RGBAQ is 0x3F800000 above the grey the mesh was filled
+ * with. */
 static const uint64_t k_grid3_rgbaq[12] = {
     0x3F800000FF000001ULL,   /* p0 */
     0x3F800000FF000004ULL,   /* p3 */
@@ -998,59 +1185,68 @@ static void test_grid_strip_group_bytes(void)
 
     fill_grid(3, 3);
     start();
-    check("the 3x3 mesh submits twelve vertices and crosses no bus while it accumulates",
-          eegs_grid_strip(&m, s_pts, 3, 3) == 12 && s_cap_i == 0);
+    check("the 3x3 mesh submits twelve vertices and no VERTEX group crosses while it accumulates",
+          eegs_grid_strip(&m, s_pts, 3, 3) == 12 && vgroups() == 0u);
+    check("the one thing that did cross is the group's PRIM, written with its first vertex",
+          s_cap_i == 1 && gs_rec_prim_writes() == 1u && !group_is_vertex(0));
     eegs_frame_end();
 
-    check("the capture saw one group and dropped nothing", s_cap_i == 1 && s_cap_drops == 0);
-    if (s_cap_i < 1) return;
+    check("the capture saw one vertex group and its descriptor, and dropped nothing",
+          groups_are(1u, 0u) && s_cap_drops == 0);
+    if (vgroups() < 1u) return;
     w = VG(0);
-    check("one tag plus twelve two-quadword vertices = 25 quadwords", VN(0) == 25u);
+    check("one tag plus twelve one-quadword untextured vertices = 13 quadwords",
+          VN(0) == gs_group_qw(12u, GS_REC_NREG_UNTEX) && VN(0) == 13u);
     check("NLOOP 12", gs_nloop_of(w) == 12u);
-    check_word("the group's tag, word for word", gs_qw(w, 0u), k_tag_dense | 12u);
-    check_word("CONTROL: the retired PACKED tag, same NLOOP -- FLG, PRE and the strip's own PRIM bits, "
-               "and nothing else",
-               gs_qw(w, 0u) ^ (k_tag_retired_stp_sb | 12u), 0x0426400000000000ULL);
-    check_word("REGS: PRIM, RGBAQ, ST, XYZ2", gs_regs_of(w), 0x5210ULL);
+    check_word("the group's tag, word for word", gs_qw(w, 0u), eegs_tag_flat(12u, k_prim_stp_sb));
+    check_word("CONTROL: the retired PACKED tag, same NLOOP: NREG and FLG differ",
+               gs_qw(w, 0u) ^ (k_tag_retired_stp_sb | 12u), 0x6400000000000000ULL);
+    check_word("REGS: RGBAQ, XYZ2 (untextured)", gs_regs_of(w), 0x51ULL);
+    check_word("group PRIM in tag", gs_prim_of(w), k_prim_stp_sb);
+    check_word("and the AD write that introduces this group sends the same word as a register",
+               pd_prim(0), k_prim_stp_sb);
+    check("and the tag names two registers, not four", gs_nreg_of(w) == GS_REC_NREG_UNTEX);
 
     for (k = 0; k < 12; k++) {
         const uint32_t v = (uint32_t)k + 1u;
         char label[96];
 
-        sprintf(label, "vertex %d's PRIM is the strip's 0x4C", k);
-        check_word(label, gs_vq(w, v, 0u), k_prim_stp_sb);
         sprintf(label, "vertex %d's RGBAQ", k);
-        check_word(label, gs_vq(w, v, 1u), k_grid3_rgbaq[k]);
-        sprintf(label, "vertex %d's ST is the untextured 0", k);
-        check_word(label, gs_vq(w, v, 2u), 0ULL);
+        check_word(label, gs_vq(w, v, GS_NIB_RGBAQ), k_grid3_rgbaq[k]);
         sprintf(label, "vertex %d's XYZ2", k);
-        check_word(label, gs_vq(w, v, 3u), k_grid3_xyz2[k]);
+        check_word(label, gs_vq(w, v, GS_NIB_XYZ2), k_grid3_xyz2[k]);
     }
+    /* The register this list does not name reads back as all-ones, which no ST ever is: the decoder
+     * that asked an untextured group for its texture coordinate has to fail its own check rather than
+     * print a zero it mistook for a default. */
+    check_word("asking this group for an ST answers NO SUCH REGISTER",
+               gs_vq(w, 1u, GS_NIB_ST), ~0ULL);
 
-    /* The stride, censused rather than assumed: 24 data quadwords therefore 48 register halves, and
-     * the only zero halves anywhere in the group are the twelve ST registers this mesh never samples.
-     * The retired sparse shape padded every second half of the vertex's quadwords AND gave the empty ST
-     * a quadword of its own, so the same census there counted 24 + 12 zeros in 48 halves.  A vertex
-     * that costs four quadwords cannot hide inside this number. */
+    /* The stride, censused rather than assumed: 24 data halves, and every one of them is a register
+     * this mesh draws with.  The retired sparse shape padded every second half of the vertex's
+     * quadwords AND gave an ST this primitive does not name a slot of its own, so the same census
+     * there counted 24 zero halves in 48.  A vertex that costs two quadwords cannot hide inside this
+     * number, and neither can one that costs a half it never writes. */
     zero_halves = 0;
     for (q = 1u; q < VN(0); q++) {
         if (gs_half(w, q, 0u) == 0u) zero_halves++;
         if (gs_half(w, q, 1u) == 0u) zero_halves++;
     }
-    check("48 data halves, exactly 12 of them the empty ST registers",
-          VN(0) == 25u && zero_halves == 12);
+    check("24 data halves and no zero among them", VN(0) == 13u && zero_halves == 0u);
 
     /* The two state bits that are the batch's own decisions: the blend flag comes from the map, and
      * the texture flag is cleared whatever the map says, because a mapped mesh samples nothing.  Both
-     * are read from the loop's PRIM register, because in this shape the tag names no primitive at all.
+     * are read from the tag's PRIM field, which is where PRE carries them once per packet; clearing
+     * TME is also what chose the two-register list this group carries.
      */
     start();
     m.blended = 0u;
     eegs_grid_strip(&m, s_pts, 3, 3);
     eegs_frame_end();
-    if (s_cap_i < 1) return;
-    check_word("an unblended map gives PRIM 0x0C", gs_vq(VG(0), 1u, 0u), k_prim_stp_unblended);
-    check("and TME stays cleared", (gs_vq(VG(0), 1u, 0u) & 16u) == 0u);
+    if (vgroups() < 1u) return;
+    check_word("an unblended map gives PRIM 0x0C", gs_prim_of(VG(0)), k_prim_stp_unblended);
+    check("and TME stays cleared", (gs_prim_of(VG(0)) & 16u) == 0u);
+    check("the mesh still pays exactly one descriptor for one group", groups_are(1u, 0u));
 }
 
 /* The walk's first ribbon triangle runs on a stream that has just been pointed at nothing, and so
@@ -1072,10 +1268,11 @@ static void test_grid_strip_drops_the_plane(void)
           eegs_grid_strip(&m, s_pts, 3, 3) == 12);
     eegs_frame_end();
 
-    check("switch group, the textured group, then the strip's own group", s_cap_i == 3);
-    if (s_cap_i < 3) return;
-    check_word("the textured group kept TME", gs_vq(s_cap[1], 1u, 0u), k_prim_tri_stb);
-    check_word("the strip's group does not", gs_vq(s_cap[2], 1u, 0u), k_prim_stp_sb);
+    check("switch group, then the textured group and its descriptor, then the strip's own pair",
+          groups_are(2u, 1u));
+    if (vgroups() < 2u) return;
+    check_word("the textured group kept TME", gs_prim_of(VG(0)), k_prim_tri_stb);
+    check_word("the strip's group does not", gs_prim_of(VG(1)), k_prim_stp_sb);
     check("the plane was already none, so the batch cost no second switch",
           eegs_tex_switches() == 1u && eegs_tex_missing() == 0u);
 }
@@ -1196,9 +1393,10 @@ static void test_grid_strip_range_gate(void)
     eegs_frame_end();
     check("counted as slow, with no batch",
           eegs_grid_batch() == 0u && eegs_grid_slow() == 1u);
-    check("the refusal recorded nothing: the frame is the one triangle's group and no more",
-          s_cap_i == 1 && s_cap_drops == 0);
-    if (s_cap_i >= 1) {
+    check("the refusal recorded nothing: the frame is the one triangle's group, its descriptor, "
+          "and no more",
+          groups_are(1u, 0u) && s_cap_drops == 0);
+    if (vgroups() >= 1u) {
         w = VG(0);
         check("that group is still the triangle's three vertices, not three plus a strip",
               gs_nloop_of(w) == 3u);
@@ -1374,14 +1572,15 @@ static void test_tex_quads_matches_list(void)
     tgl_tex_map_t m = tex_map(s_tex_key);
     static dec_tri_t A[TRI_MAX], B[TRI_MAX], C[TRI_MAX];
     uint64_t *w;
-    int na, nb, nc, bad, submitted, batch_groups, list_groups;
+    int na, nb, nc, bad, submitted, batch_groups, list_groups, batch_pkts, list_pkts;
     uint32_t batch_verts, list_verts;
 
     fill_quads(2);
 
-    /* The batch: one AD switch for the whole run, then ONE vertex group -- twelve emitted vertices
-     * for four triangles, because `eegs_triangle()` pays three corners per primitive and the quad's
-     * shared diagonal is named twice, exactly as the walk names it. */
+    /* The batch: one AD switch for the whole run, then ONE vertex group and the descriptor that
+    names its primitive -- twelve emitted vertices for four triangles, because `eegs_triangle()` pays
+    three corners per primitive and the quad's shared diagonal is named twice, exactly as the walk
+    names it. */
     start();
     submitted = eegs_tex_quads(&m, s_qpts, 2);
     eegs_frame_end();
@@ -1389,8 +1588,10 @@ static void test_tex_quads_matches_list(void)
           submitted == 4);
     check("nothing was dropped by the capture", s_cap_drops == 0);
     check("nothing was refused by the recorder", gs_rec_unsplittable() == 0);
-    check("one switch group, then one vertex group for the whole run", s_cap_i == 2);
-    batch_groups = s_cap_i;
+    check("one switch group, then one descriptor and one vertex group for the whole run",
+          groups_are(1u, 1u));
+    batch_groups = (int)vgroups();
+    batch_pkts = s_cap_i;
     batch_verts = eegs_verts();
     check("twelve vertices, four triangles on the stage's own counters",
           eegs_verts() == 12u && eegs_prims() == 4u);
@@ -1399,37 +1600,39 @@ static void test_tex_quads_matches_list(void)
     check("batch=1 slow=0 over=0, and no refusal named",
           eegs_grid_batch() == 1u && eegs_grid_slow() == 0u &&
           eegs_grid_over() == 0u && eegs_grid_why() == TGL_GRID_REFUSE_NONE);
-    if (s_cap_i < 2) return;
+    if (vgroups() < 1u) return;
 
-    check_word("the switch carries the AD trio's own tag", gs_qw(s_cap[0], 0u), k_tag_ad3);
-    check_word("and its REGS nibble is AD", gs_regs_of(s_cap[0]), 0x0Eu);
-    check_word("CLAMP first, the registry entry's word", gs_qw(s_cap[0], 1u), s_plane.clamp);
-    check_word("TEX0 second", gs_qw(s_cap[0], 2u), s_plane.tex0);
-    check_word("TEX1 third", gs_qw(s_cap[0], 3u), s_plane.tex1);
+    check_word("the switch carries the AD trio's own tag", gs_qw(adg(0), 0u), k_tag_ad3);
+    check_word("and its REGS nibble is AD", gs_regs_of(adg(0)), 0x0Eu);
+    check_word("CLAMP first, the registry entry's word", gs_qw(adg(0), 1u), s_plane.clamp);
+    check_word("TEX0 second", gs_qw(adg(0), 2u), s_plane.tex0);
+    check_word("TEX1 third", gs_qw(adg(0), 3u), s_plane.tex1);
 
-    w = VG(1);
-    check("NLOOP 12, and the group's size is its law: one tag plus twelve two-quadword vertices",
-          gs_nloop_of(w) == 12u && VN(1) == gs_group_qw(12u) && VN(1) == 25u);
-    check_word("the group's tag is the one dense word -- this stage's TRI, strip, line and point all "
-               "carry it, with only NLOOP differing",
-               gs_qw(w, 0u), k_tag_dense | 12u);
+    w = VG(0);
+    check("NLOOP 12, and the group's size is its law: a tag plus twelve three-register vertices",
+          gs_nloop_of(w) == 12u && VN(0) == gs_group_qw(12u, GS_REC_NREG_TEX) && VN(0) == 19u);
+    check_word("the group's tag carries its PRIM, NLOOP 12",
+               gs_qw(w, 0u), eegs_tag(12u, k_prim_tri_stb));
     check_word("CONTROL: the retired PACKED tag for the same textured TRI",
-               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 12u), 0x042DC00000000000ULL);
-    check_word("vertex 1 PRIM", gs_vq(w, 1u, 0u), k_prim_tri_stb);
+               gs_qw(w, 0u) ^ (k_tag_retired_tri_stb | 12u), 0x7400000000000000ULL);
+    check_word("group PRIM in tag", gs_prim_of(w), k_prim_tri_stb);
+    check_word("and the descriptor in front of this chain wrote that word",
+               pd_prim(0), k_prim_tri_stb);
     check_word("vertex 1 RGBAQ: quad 0's first corner, grey 1, Q = 1.0f",
-               gs_vq(w, 1u, 1u), 0x3F800000FF000001ULL);
+               gs_vq(w, 1u, GS_NIB_RGBAQ), 0x3F800000FF000001ULL);
     /* The ST register, spelled by hand the way the field table says: 0.25f = 2^-2 is 0x3E800000 at
      * [31:0] and 0.125f = 2^-3 is 0x3E000000 at [63:32].  This word is the thing the grey strip
      * gate could never check -- it writes 0 there whatever the map says. */
     check_word("vertex 1 ST: s = 0.25 low, t = 0.125 high",
-               gs_vq(w, 1u, 2u), 0x3E0000003E800000ULL);
-    check_word("vertex 1 XYZ2: (0,0) px", gs_vq(w, 1u, 3u), 0x0000000080008000ULL);
+               gs_vq(w, 1u, GS_NIB_ST), 0x3E0000003E800000ULL);
+    check_word("vertex 1 XYZ2: (0,0) px", gs_vq(w, 1u, GS_NIB_XYZ2), 0x0000000080008000ULL);
     /* 0.75f = 1.5 x 2^-1 = 0x3F400000 and 0.375f = 1.5 x 2^-2 = 0x3EC00000: mantissas that are not
      * bare exponents, so the full 32-bit pattern of both halves is checked, not only the sign. */
-    check_word("vertex 2 ST: s = 0.75, t = 0.375", gs_vq(w, 2u, 2u), 0x3EC000003F400000ULL);
+    check_word("vertex 2 ST: s = 0.75, t = 0.375",
+               gs_vq(w, 2u, GS_NIB_ST), 0x3EC000003F400000ULL);
     check_word("vertex 7 RGBAQ: quad 1's first corner, grey 5",
-               gs_vq(w, 7u, 1u), 0x3F800000FF000005ULL);
-    check_word("vertex 7 XYZ2: x = 2 px", gs_vq(w, 7u, 3u), 0x0000000080008020ULL);
+               gs_vq(w, 7u, GS_NIB_RGBAQ), 0x3F800000FF000005ULL);
+    check_word("vertex 7 XYZ2: x = 2 px", gs_vq(w, 7u, GS_NIB_XYZ2), 0x0000000080008020ULL);
 
     na = decode_stream(A, TRI_MAX);
     check("the batch's stream decodes to its four triangles", na == 4);
@@ -1441,7 +1644,8 @@ static void test_tex_quads_matches_list(void)
     eegs_frame_end();
     check("nothing dropped, nothing refused on the list's stream either",
           s_cap_drops == 0 && gs_rec_unsplittable() == 0);
-    list_groups = s_cap_i;
+    list_groups = (int)vgroups();
+    list_pkts = s_cap_i;
     list_verts = eegs_verts();
     nb = decode_stream(B, TRI_MAX);
     check("the list decodes to the same count", nb == na);
@@ -1464,9 +1668,9 @@ static void test_tex_quads_matches_list(void)
                    (unsigned long long)tb->c[i].st);
         }
     }
-    printf("  2-quad batch: %d groups / %u vertices for %d triangles;"
-           " list: %d groups / %u vertices\n",
-           batch_groups, batch_verts, na, list_groups, list_verts);
+    printf("  2-quad batch: %d vertex group / %d packets, %u vertices for %d triangles;"
+           " list: %d vertex group / %d packets, %u vertices\n",
+           batch_groups, batch_pkts, batch_verts, na, list_groups, list_pkts, list_verts);
 
     /* The control: the other diagonal of the same quad.  Same four corners, same four colours, a
      * different mesh -- if THAT decoded equal, the gate above would be comparing vertex sets rather
@@ -1488,9 +1692,11 @@ static void test_tex_quads_matches_list(void)
         eegs_tex_quads(&mf, s_qpts, 2);
     }
     eegs_frame_end();
-    if (s_cap_i >= 2) {
+    if (vgroups() >= 1u) {
         check_word("flat and unblended gives PRIM 0x13, TME intact",
-                   gs_vq(VG(1), 1u, 0u), k_prim_tex_plain);
+                   gs_prim_of(VG(0)), k_prim_tex_plain);
+        check("and the run is still one switch, one descriptor and one group",
+              groups_are(1u, 1u));
     }
 }
 
@@ -1566,9 +1772,10 @@ static void test_tex_quad_gates(void)
     check("counted slow, batched nothing",
           eegs_grid_batch() == 0u && eegs_grid_slow() == 1u);
     eegs_frame_end();
-    check("the refusal recorded nothing: the frame is the one triangle's group and no more",
-          s_cap_i == 1 && s_cap_drops == 0);
-    if (s_cap_i >= 1) {
+    check("the refusal recorded nothing: the frame is the one triangle's group, its descriptor, "
+          "and no more",
+          groups_are(1u, 0u) && s_cap_drops == 0);
+    if (vgroups() >= 1u) {
         w = VG(0);
         check("and that group is still the triangle's three vertices", gs_nloop_of(w) == 3u);
     }
@@ -1592,11 +1799,11 @@ static void test_tex_quad_gates(void)
               eegs_tex_quads(&md, s_qpts, 2) == 4);
     }
     eegs_frame_end();
-    check("it costs no AD group at all: one vertex group, zero switches",
-          s_cap_i == 1 && eegs_tex_switches() == 0u);
-    if (s_cap_i >= 1) {
+    check("it costs no SWITCH group at all: one vertex group, its one descriptor, zero switches",
+          groups_are(1u, 0u) && eegs_tex_switches() == 0u);
+    if (vgroups() >= 1u) {
         check_word("and the primitives came out flat: 0x4B, TME cleared",
-                   gs_vq(VG(0), 1u, 0u), k_prim_tri_untex);
+                   gs_prim_of(VG(0)), k_prim_tri_untex);
     }
     check("four triangles, four misses -- the column the bench reads as texmiss",
           eegs_tex_missing() == 4u);
@@ -1629,14 +1836,14 @@ static void test_tex_quad_gates(void)
 static void test_dual_context_interleaving(void)
 {
     static const eegs_vertex_t v[3] = {
-        { 10, 10, 0.0f, 0.0f, 0xFFFFFFFFu },
-        { 20, 10, 0.0f, 0.0f, 0xFFFFFFFFu },
-        { 15, 20, 0.0f, 0.0f, 0xFFFFFFFFu }
+        { 10, 10, 0u, 0.0f, 0.0f, 0xFFFFFFFFu },
+        { 20, 10, 0u, 0.0f, 0.0f, 0xFFFFFFFFu },
+        { 15, 20, 0u, 0.0f, 0.0f, 0xFFFFFFFFu }
     };
     /* Opaque: blended = 0 */
-    eegs_tri_state_t st_opaque = { 1, 0, 0 };
+    eegs_tri_state_t st_opaque = { 1, 0, 0, 0 };
     /* Translucent: blended = 1 */
-    eegs_tri_state_t st_blend  = { 1, 0, 1 };
+    eegs_tri_state_t st_blend  = { 1, 0, 1, 0 };
 
     eegs_enable_dual_context(1);
     check("dual context enabled", eegs_is_dual_context() == 1);
@@ -1648,13 +1855,16 @@ static void test_dual_context_interleaving(void)
     eegs_triangle(v, st_blend);
     eegs_frame_end();
 
-    /* Two groups must be captured because PRIM changed between Context 1 and Context 2 */
-    check("dual context interleaving produced 2 groups", s_cap_i == 2);
-    if (s_cap_i >= 2) {
-        uint64_t prim_op = gs_vq(VG(0), 1u, 0u);
-        uint64_t prim_bl = gs_vq(VG(1), 1u, 0u);
+    /* Two groups must be captured because PRIM changed between Context 1 and Context 2 -- and with
+     * it the descriptor, because the context bit lives in the register the GS has to be told. */
+    check("dual context interleaving produced 2 vertex groups", groups_are(2u, 0u));
+    if (vgroups() >= 2u) {
+        uint64_t prim_op = gs_prim_of(VG(0));
+        uint64_t prim_bl = gs_prim_of(VG(1));
         check("group 0 PRIM CTXT bit is 0 (Context 1)", (prim_op & (1ULL << 9)) == 0);
         check("group 1 PRIM CTXT bit is 1 (Context 2)", (prim_bl & (1ULL << 9)) != 0);
+        check("and the second context is the one its own descriptor writes",
+              (pd_prim(1) & (1ULL << 9)) != 0 && (pd_prim(0) & (1ULL << 9)) == 0);
     }
 
     eegs_enable_dual_context(0);

@@ -82,25 +82,32 @@ void ZB_resize(ZBuffer* zb, void* frame_buffer, GLint xsize, GLint ysize) {
 	/* xsize must be a multiple of 4 */
 	xsize = xsize & ~3;
 
+	const int size_changed = (zb->xsize != xsize || zb->ysize != ysize);
+
 	zb->xsize = xsize;
 	zb->ysize = ysize;
 	zb->linesize = (xsize * PSZB);
 
 	size = zb->xsize * zb->ysize * sizeof(GLushort);
 
-	gl_free(zb->zbuf);
-	zb->zbuf = gl_malloc(size);
-	if (zb->zbuf == NULL)
-		exit(1);
-	if (zb->frame_buffer_allocated)
-		gl_free(zb->pbuf);
+	if (size_changed || zb->zbuf == NULL) {
+		if (zb->zbuf) gl_free(zb->zbuf);
+		zb->zbuf = gl_malloc(size);
+		if (zb->zbuf == NULL)
+			exit(1);
+	}
 
 	if (frame_buffer == NULL) {
-		zb->pbuf = gl_malloc(zb->ysize * zb->linesize);
-		if (!zb->pbuf)
-			exit(1);
-		zb->frame_buffer_allocated = 1;
+		if (size_changed || zb->pbuf == NULL || !zb->frame_buffer_allocated) {
+			if (zb->frame_buffer_allocated && zb->pbuf) gl_free(zb->pbuf);
+			zb->pbuf = gl_malloc(zb->ysize * zb->linesize);
+			if (!zb->pbuf)
+				exit(1);
+			zb->frame_buffer_allocated = 1;
+		}
 	} else {
+		if (zb->frame_buffer_allocated && zb->pbuf)
+			gl_free(zb->pbuf);
 		zb->pbuf = frame_buffer;
 		zb->frame_buffer_allocated = 0;
 	}

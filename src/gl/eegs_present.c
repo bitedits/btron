@@ -17,6 +17,7 @@
 #include "../drivers/ps2/ps2_gs_env.h"
 #include "../drivers/ps2/ps2_gs_pack.h"
 #include "../drivers/ps2/ps2_gs_rec.h"
+#include "../drivers/ps2/ps2_gs_tex.h"
 #include "../drivers/ps2/ps2_gs_vram.h"
 
 /* The shipped XMB frame measures 7,434 vertices and 51 groups, which is 7,434 x 4 + 51 = 29,787
@@ -81,22 +82,24 @@ static eegs_present_stats s_stats;
  * The per-group tuple is {hash low, hash high, qwc, the per-register lane hashes, the group's
  * kind}.  `qwc` is carried for the COLUMNS and not for the detection: `same=`/`diff=`/`tail=` are
  * reported in quadwords, and this is the field they are summed from.  A vertex-count change is
- * already caught by the words themselves -- the group then folds one more PAIR of quadwords, since a
- * vertex is two of them, and its tag's NLOOP field moves with it -- which is what the controls
+ * already caught by the words themselves -- the group then folds one more register, which under
+ * LANE 19 rung 12f is a whole quadword for an untextured vertex and a half of one for a textured --
+ * and its tag's NLOOP field moves with it -- which is what the controls
  * measured by deleting both of the length terms and losing no check at all.
  *
  * The lanes exist because `diff=` cannot say WHAT moved, and the answers send the next rung to
  * different files: a group whose XYZ2 registers are byte-identical while its RGBAQ moved is a mesh
  * whose geometry is the same every frame and only its shade changes, which wants a colour map, while
  * a moving XYZ2 is the vertex transform being re-solved.  A vertex group is a dense REGLIST, so its
- * four registers -- PRIM, RGBAQ, ST, XYZ2 in that REGS order -- occupy TWO quadwords per vertex from
- * quadword 1 on (the tag's quadword carries the REGS list in its high half), two registers to a
- * quadword, low half first; each lane therefore folds every SECOND register of the group from there,
- * which is one half of one quadword, not a whole quadword.  PRIM and
+ * registers -- RGBAQ then XYZ2, plus ST between them when the primitive is textured -- pack end to end
+ * from half 2 on (the tag's quadword carries the REGS list in its high half), and a register can
+ * straddle a quadword boundary; each lane therefore folds the halves the group's OWN NREG says hold
+ * it, dispatching on the nibble the REGS list names rather than on a position this file could keep up
+ * to date only by luck.  PRIM and
  * the tag are in none of the lanes and
  * only in the whole-group hash, which is why a group can count in all three lanes and still be
  * `diff=` -- that combination says the primitive descriptor moved, not the picture.  An AD group (a
- * texture switch) has no such four-register body, so it is marked by kind and counted in no lane;
+ * texture switch) has no such register body, so it is marked by kind and counted in no lane;
  * `same=`/`diff=` count it like any other group. */
 #ifndef BTRON_PS2_GS_IDENT
 #define BTRON_PS2_GS_IDENT 0
@@ -286,20 +289,23 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
     uint32_t lshape = ID_SEED_SHAPE;
     uint32_t px = 0u, py = 0u, pz = 0u, first = 1u;
     /* The group's kind comes out of its own tag, because the sink is handed words and nothing else:
-     * a vertex group declares a four-register REGS list AND packs them, an AD group declares one
-     * register and does not, and NREG is bits [63:60] of the tag's low half while FLG is [59:58].
-     * Both fields are read because the lane mapping below is only true of a packed list: NREG alone
-     * would let a group that names four registers in four separate quadwords -- the shape LANE 19
-     * rung 5 retired -- fold its XYZ2 lane out of what is actually its ST.  Anything else folds no
-     * lane.  The report side re-checks this column, so the gate here is the redundant half of the
-     * pair -- measured, deleting it loses no check -- and it stays because folding words a group does
-     * not have is worse to reason about than folding nothing and letting one column say why. */
+     * a vertex group packs a multi-register REGS list and an AD group names one register and does
+     * not, so NREG is bits [63:60] of the tag's low half while FLG is [59:58], and the pair of them
+     * is the whole test.  Both fields are read because the lane mapping below is only true of a
+     * packed list: NREG alone would let a group that names three registers in three separate
+     * quadwords -- the shape LANE 19 rung 5 retired -- fold its XYZ2 lane out of what is actually its
+     * ST.  The register count itself is not compared against anything here, because since rung 12f
+     * the recorder's two lists are two and three wide and the mapping reads the count back off the
+     * tag.  Anything else folds no lane.  The report side re-checks this column, so the gate here is
+     * the redundant half of the pair -- measured, deleting it loses no check -- and it stays because
+     * folding words a group does not have is worse to reason about than folding nothing and letting
+     * one column say why. */
     const uint32_t nreg = (uint32_t)(qw[0] >> 60) & 0xFu;
     const uint32_t flg  = (uint32_t)(qw[0] >> 58) & 3u;
     uint32_t kind = 0u;
 
-    if (nreg == GS_REC_REGS_N && flg == GS_FLG_REGLIST) kind = ID_VERTEX;
-    else if (nreg == 1u) kind = ID_AD;
+    if (flg == GS_FLG_REGLIST && nreg >= GS_REC_NREG_UNTEX && nreg <= GS_REC_REGS_MAX) kind = ID_VERTEX;
+    else if (nreg == 1u && flg == GS_FLG_PACKED) kind = ID_AD;
 #endif
 
     (void)user;
@@ -315,26 +321,24 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
         s_stage[2u * s_used + i] = qw[i];
 #if BTRON_PS2_GS_IDENT
         ident_fold(&ha, &hb, qw[i]);
-        /* The tag occupies ONE quadword -- its own 64 bits with the REGS list in the half above them
-         * -- so the data body starts at quadword 1 and is TWO quadwords per vertex, GS_REC_REGS_N
-         * registers packed end to end in the REGS order PRIM, RGBAQ, ST, XYZ2.  PRIM folds into no
-         * lane: the whole-group hash owns it,
+        /* The tag occupies ONE quadword -- its own 64 bits with the REGS list in the half above
+         * them -- so the data body starts at half 2 and is NLOOP * NREG registers packed end to end,
+         * which is what a dense REGLIST means.  Under LANE 19 rung 12f that product is no longer a
+         * constant: an untextured group carries two registers a vertex and a textured one three, so
+         * which register a given half IS can only be answered by the group's own NREG and its own
+         * REGS list.  The dispatch below does exactly that, and a register the list does not name is
+         * a lane that folds nothing -- which is the honest reading, not a gap.  PRIM and the tag fold
+         * into no lane: the whole-group hash owns them,
          * which is what the book's residual reading is -- a group invariant in every lane yet
          * `diff=` had its PRIM, its tag or its loop count move. */
-        if (kind == ID_VERTEX && (i >> 1) >= 1u) {
-            /* The inverse of gs_vq()'s index: GS_REC_REGS_N / GS_REC_QW_PER_VERT registers ride in
-             * one quadword, low-numbered first in the low half, so quadword-offset k (past the tag)
-             * and half h name register (r*k + h) of the REGS list.  Written from the two counts and
-             * not from a literal 2 because the two moved together under rung 5's fix and a mapping
-             * that did not would fold every lane one register out of place. */
-            const uint32_t k = (i >> 1) - 1u;
-            const uint32_t reg = (((GS_REC_REGS_N / GS_REC_QW_PER_VERT) * k + (i & 1u))
-                                  % GS_REC_REGS_N);
+        if (kind == ID_VERTEX && i >= 2u) {
+            const uint32_t reg = (i - 2u) % nreg;
+            const uint32_t nib = (uint32_t)((qw[1u] >> (4u * reg)) & 0xFu);
 
-            switch (reg) {
-            case 1u: ident_fold1(&lrgb, qw[i]); break;   /* RGBAQ */
-            case 2u: ident_fold1(&lst,  qw[i]); break;   /* ST    */
-            case 3u:
+            switch (nib) {
+            case GS_NIB_RGBAQ: ident_fold1(&lrgb, qw[i]); break;
+            case GS_NIB_ST:    ident_fold1(&lst,  qw[i]); break;
+            case GS_NIB_XYZ2:
                 ident_fold1(&lxyz, qw[i]);
                 /* The shape lane reads XYZ2's own fields -- X[15:0], Y[31:16], Z[63:32] of the
                  * register (gs_pack_xyz2) -- and folds the DIFFERENCE from the previous
@@ -430,14 +434,20 @@ int eegs_present_send(const RECT *client)
     env.frame_psm    = GS_PSM_CT32;
     env.frame_fmsk   = 0u;
 
-    /* The depth buffer this port never uses.  TEST.ZTEN is clear and ZMSK is set, so the GS
-     * neither reads nor writes these bytes; what it does need is a register that names a page no
-     * other allocation owns, and the top page of VRAM is that page -- the texture cursor starts
-     * above the canvas and grows *up* from there, so it reaches page 511 only after it has taken
-     * every other byte in the chip. */
-    env.zbuf_byte    = GS_VRAM_BYTES - GS_PAGE_FRAME;
-    env.zbuf_psm     = GS_PSMZ32;
-    env.zbuf_zmsk    = 1u;
+    if (eegs_depth_test_active()) {
+        env.zbuf_byte    = gs_tex_zbuf_byte();
+        env.zbuf_psm     = GS_PSMZ16;
+        env.zbuf_zmsk    = 0u;
+    } else {
+        /* The depth buffer this port never uses.  TEST.ZTEN is clear and ZMSK is set, so the GS
+         * neither reads nor writes these bytes; what it does need is a register that names a page no
+         * other allocation owns, and the top page of VRAM is that page -- the texture cursor starts
+         * above the canvas and grows *up* from there, so it reaches page 511 only after it has taken
+         * every other byte in the chip. */
+        env.zbuf_byte    = GS_VRAM_BYTES - GS_PAGE_FRAME;
+        env.zbuf_psm     = GS_PSMZ32;
+        env.zbuf_zmsk    = 1u;
+    }
 
     /* The window's client rect, in both of the units the two registers want: XYOFFSET is the page
      * origin the vertices are relative to, so the app's (0,0) lands on the client's top-left, and
@@ -450,10 +460,14 @@ int eegs_present_send(const RECT *client)
     env.clip_x1 = (uint32_t)client->right - 1u;
     env.clip_y1 = (uint32_t)client->bottom - 1u;
 
-    /* No test of any kind: a 2D UI's order is its draw order, and an alpha test would throw away
-     * fragments the software path drew.  The blend is the source-over pair named in
-     * ps2_gs_pack.h, which is what ABE selects in the PRIM word. */
-    env.reg_test  = 0u;
+    if (eegs_depth_test_active()) {
+        /* ZTEN=1 (Z test enable), ZTMETH=2 (GREATER_EQUAL) */
+        env.reg_test  = gs_pack_test(0u, 0u, 0u, 0u, 0u, 0u, 1u, 2u);
+    } else {
+        /* No test of any kind: a 2D UI's order is its draw order, and an alpha test would throw away
+         * fragments the software path drew. */
+        env.reg_test  = 0u;
+    }
     env.reg_alpha = gs_pack_alpha(GS_BLEND_CS, GS_BLEND_CD, GS_ALPHA_AS, GS_BLEND_CD, 0u);
 
     /* The texture trio is zero here because this port never has one texture per frame: the XMB
@@ -463,6 +477,53 @@ int eegs_present_send(const RECT *client)
     env.reg_clamp = 0u;
     env.reg_tex0  = 0u;
     env.reg_tex1  = 0u;
+
+#ifndef UNCACHED
+#if defined(BTRON_PS2_TARGET)
+#define UNCACHED(p) ((void *)((uintptr_t)(p) | 0x20000000UL))
+#else
+#define UNCACHED(p) (p)
+#endif
+#endif
+
+    if (eegs_depth_test_active()) {
+        /* Emit a color-masked (FMSK=0xFFFFFFFF) sprite clear of the entire screen to Z=0 so the
+         * hardware depth buffer is clean before rendering this frame's 3D primitives. */
+        static uint64_t clr_pkt[18] __attribute__((aligned(16)));
+        uint64_t *cp = (uint64_t *)UNCACHED(clr_pkt);
+        uint32_t zba;
+        (void)gs_vram_fba(env.zbuf_byte, &zba);
+
+        *cp++ = gs_pack_giftag(8u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
+        *cp++ = gs_pack_regs((const uint32_t[]){ GS_NIB_AD }, 1u);
+
+        /* 1. XYOFFSET: screen origin (0, 0) */
+        *cp++ = gs_pack_xyoffset(GS_XYOFFSET_PAGE, GS_XYOFFSET_PAGE);
+        *cp++ = GS_GP_XYOFFSET_1;
+        /* 2. SCISSOR: whole screen */
+        *cp++ = gs_pack_scissor(0u, (uint32_t)PS2_SCREEN_WIDTH - 1u, 0u, 599u);
+        *cp++ = GS_GP_SCISSOR_1;
+        /* 3. FRAME: mask all color writes */
+        *cp++ = gs_pack_frame(0u, gs_vram_fbw((uint32_t)PS2_SCREEN_WIDTH), GS_PSM_CT32, 0xFFFFFFFFu);
+        *cp++ = GS_GP_FRAME_1;
+        /* 4. ZBUF: unmasked */
+        *cp++ = gs_pack_zbuf(zba, env.zbuf_psm, 0u);
+        *cp++ = GS_GP_ZBUF_1;
+        /* 5. TEST: ZTEN = 0 (always write Z) */
+        *cp++ = 0u;
+        *cp++ = GS_GP_TEST_1;
+        /* 6. PRIM: SPRITE */
+        *cp++ = gs_pack_prim(GS_OP_SPRITE, 0u, 0u, 0u, 0u, 0u);
+        *cp++ = GS_GP_PRIM;
+        /* 7. XYZ2: top-left (0, 0, Z=0) */
+        *cp++ = gs_pack_xyz2(gs_vertex_coord16(0), gs_vertex_coord16(0), 0u);
+        *cp++ = GS_GP_XYZ2;
+        /* 8. XYZ2: bottom-right (PS2_SCREEN_WIDTH, 600, Z=0) */
+        *cp++ = gs_pack_xyz2(gs_vertex_coord16(PS2_SCREEN_WIDTH), gs_vertex_coord16(600), 0u);
+        *cp++ = GS_GP_XYZ2;
+
+        if (ps2_gif_post(clr_pkt, 9u) != 0) return -1;
+    }
 
     if (eegs_is_dual_context()) {
         gs_draw_env env2 = env;
@@ -488,6 +549,7 @@ int eegs_present_send(const RECT *client)
      * up while an earlier one was lost, which is primitives out of draw order rather than a
      * missing tail; the lost groups are counted in the same `dropped` column the stage's own
      * overflow uses, because both mean a piece of the picture no screen has. */
+
     off = 0u;
     qw_sent = 0u;
     posted = 0u;
@@ -507,9 +569,24 @@ int eegs_present_send(const RECT *client)
     s_stats.prims = eegs_prims();
     s_stats.dropped = s_dropped;
     s_stats.unsplittable = gs_rec_unsplittable();
+    s_stats.prim_writes = gs_rec_prim_writes();
     s_stats.tex_switches = eegs_tex_switches();
     s_stats.tex_missing = eegs_tex_missing();
     s_stats.prim_moves = eegs_prim_moves();
+    s_stats.colour_changes = eegs_colour_changes();
+    s_stats.colour_verts = eegs_colour_verts();
+    s_stats.colour_first = eegs_colour_first();
+    s_stats.colour_last = eegs_colour_last();
+    s_stats.prim_iip = eegs_prim_iip();
+    s_stats.prim_tme = eegs_prim_tme();
+    s_stats.prim_decl = eegs_prim_decl();
+    s_stats.wide_tri = eegs_wide_tri();
+    s_stats.wide_flat = eegs_wide_flat();
+    s_stats.big_area = eegs_big_area();
+    s_stats.big_c0 = eegs_big_c0();
+    s_stats.big_c1 = eegs_big_c1();
+    s_stats.big_c2 = eegs_big_c2();
+    s_stats.big_smooth = eegs_big_smooth();
     /* LANE 12f rung (ii): retained meshes drawn as one strip, and meshes that asked and were
      * refused.  The two are read together -- `slow=` climbing on a fixed-size window says the gate
      * is turning work away that used to be fast, and `batch=` beside a sheet with an edge missing

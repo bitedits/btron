@@ -176,13 +176,14 @@ void tinygl_backend_init(int w, int h, void *pixel_buf) {
 }
 
 void tinygl_backend_resize(int w, int h, void *pixel_buf) {
-    const int fresh = (pixel_buf != s_pixel_buf) || (w != s_width) || (h != s_height);
     if (!s_zb) return;
+    const int fresh = (pixel_buf != s_pixel_buf) || (w != s_width) || (h != s_height);
+    if (!fresh) return;
     s_width     = w;
     s_height    = h;
     s_pixel_buf = pixel_buf;
     ZB_resize(s_zb, pixel_buf, w, h);
-    if (fresh) s_stamp_surface_alpha();
+    s_stamp_surface_alpha();
 }
 
 void tinygl_backend_shutdown(void) {

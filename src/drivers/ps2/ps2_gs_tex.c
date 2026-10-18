@@ -220,3 +220,10 @@ uint32_t gs_tex_compact(void)
     return gs_vram_compact(&s_vram);
 }
 
+uint32_t gs_tex_zbuf_byte(void)
+{
+    /* Dedicated 16-bit Z-buffer in upper VRAM (Page 390 = 3,194,880 B).
+     * 998,400 bytes (832*600*2) fits within the 132-page headroom above registered textures. */
+    return (GS_VRAM_BYTES - 122u * GS_PAGE_FRAME);
+}
+

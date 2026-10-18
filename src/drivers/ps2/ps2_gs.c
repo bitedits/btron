@@ -593,6 +593,19 @@ void ps2_gs_init(uint32_t width, uint32_t height)
     D_CTRL |= 1; /* DMAE = 1 */
     D2_CHCR = 0;
 
+    /* 4b. Initialize GS Primitive Mode Control & Color Clamp */
+    {
+        static uint64_t mode_pkt[3 * 2] __attribute__((aligned(16)));
+        uint64_t *p = (uint64_t *)UNCACHED(mode_pkt);
+        p[0] = gs_pack_giftag(2u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
+        p[1] = GS_NIB_AD;
+        p[2] = 1ULL; /* PRMODECONT: AC=1 (use PRIM register from GIFTAG) */
+        p[3] = GS_GP_PRMODECONT;
+        p[4] = 1ULL; /* COLCLAMP: enable clamping */
+        p[5] = GS_GP_COLCLAMP;
+        ps2_gs_gif_send(mode_pkt, 3);
+    }
+
     /* 5. The texture-plane registry, hung on this channel: one cursor for the canvas reservation
      * and every plane, and a sink so a plane crosses the moment its bytes exist rather than at
      * some later present that would already have sampled it. */

@@ -35,6 +35,14 @@ WND* open_drivesetup_window(void)   { s_drivesetup_opened++; return NULL; }
 WND* launch_beos_chat(void)         { s_chat_opened++; return NULL; }
 WND* open_clarity_window(void)      { s_clarity_opened++; return NULL; }
 WND* open_xmb_window(void)          { s_xmb_opened++; return NULL; }
+static int s_msx_opened = 0;
+static int s_quake_opened = 0;
+WND* open_msx_window(void)          { s_msx_opened++; return NULL; }
+WND* open_quake_window(int x, int y, int width, int height) {
+    (void)x; (void)y; (void)width; (void)height;
+    s_quake_opened++;
+    return NULL;
+}
 /* Inert: the two demo rows are launcher targets, not behaviour this test
  * asserts on, but tracker_execute_item() calls them under this build. */
 WND* open_glgears_window(void)      { return NULL; }
@@ -304,10 +312,14 @@ int main(void) {
     /* [TEST GROUP 10] Start menu as an application launcher */
     printf("\n[TEST GROUP 10] Start Menu Application Launching\n");
     tracker_open_menu();
-    H term_idx = tracker_find_item(TRACKER_CMD_TERMINAL);
-    H xmb_idx  = tracker_find_item(TRACKER_CMD_XMB);
-    TEST_ASSERT(term_idx >= 0, "端末 (Terminal) is present in the [BTRON] launcher");
-    TEST_ASSERT(xmb_idx >= 0,  "横断メディアメニュー (XMB) is present in the [BTRON] launcher");
+    H term_idx  = tracker_find_item(TRACKER_CMD_TERMINAL);
+    H xmb_idx   = tracker_find_item(TRACKER_CMD_XMB);
+    H msx_idx   = tracker_find_item(TRACKER_CMD_MSX);
+    H quake_idx = tracker_find_item(TRACKER_CMD_QUAKE);
+    TEST_ASSERT(term_idx >= 0,  "端末 (Terminal) is present in the [BTRON] launcher");
+    TEST_ASSERT(xmb_idx >= 0,   "横断メディアメニュー (XMB) is present in the [BTRON] launcher");
+    TEST_ASSERT(msx_idx >= 0,   "MSX ゲーム (B-MSX) is present in the [BTRON] launcher");
+    TEST_ASSERT(quake_idx >= 0, "Quake 3D (クエイク) is present in the [BTRON] launcher");
     TEST_ASSERT(st->item_count <= TRACKER_MAX_ITEMS, "Applications block does not overflow the item table");
 
     s_term_opened = 0;
@@ -322,6 +334,20 @@ int main(void) {
     if (xmb_idx >= 0) {
         TEST_ASSERT(tracker_click_item(xmb_idx) == TRUE, "XMB row is inside the open menu");
         TEST_ASSERT(s_xmb_opened == 1, "Clicking the XMB row opens the media bar");
+    }
+
+    tracker_open_menu();
+    s_msx_opened = 0;
+    if (msx_idx >= 0) {
+        TEST_ASSERT(tracker_click_item(msx_idx) == TRUE, "MSX row is inside the open menu");
+        TEST_ASSERT(s_msx_opened == 1, "Clicking the MSX row opens B-MSX emulator");
+    }
+
+    tracker_open_menu();
+    s_quake_opened = 0;
+    if (quake_idx >= 0) {
+        TEST_ASSERT(tracker_click_item(quake_idx) == TRUE, "Quake row is inside the open menu");
+        TEST_ASSERT(s_quake_opened == 1, "Clicking the Quake row opens Quake 3D");
     }
     tracker_close_menu();
     TEST_ASSERT(tracker_verify_invariants() == TRUE, "Invariants hold with the applications block present");

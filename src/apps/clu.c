@@ -1938,6 +1938,7 @@ __attribute__((weak)) WND *open_quake_window(int x, int y, int width, int height
 __attribute__((weak)) WND *open_xmb_window(void) { return NULL; }
 __attribute__((weak)) WND *open_glgears_window(void) { return NULL; }
 __attribute__((weak)) WND *open_lilcu64_demo_window(void) { return NULL; }
+__attribute__((weak)) WND *open_msx_window(void) { return NULL; }
 
 /* ── clu_quake ───────────────────────────────────────────────────── */
 void clu_quake(const char *args, ShellOutputFn out, void *ud)
@@ -1987,6 +1988,7 @@ static const CluApp s_clu_apps[] = {
     { "gears",   "GLGears (OpenGL ES 1.1 / TinyGL)",         open_glgears_window },
     { "lilcu",   "Lil Cu 64 Demoscene (Hopf field)",         open_lilcu64_demo_window },
     { "lilcu64", "Lil Cu 64 Demoscene (Hopf field)",         open_lilcu64_demo_window },
+    { "msx",     "B-MSX Game System (MSX Cartridge Player)", open_msx_window },
 };
 
 BOOL clu_launch_app(const char *verb, ShellOutputFn out, void *ud)

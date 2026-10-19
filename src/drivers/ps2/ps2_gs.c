@@ -508,10 +508,27 @@ gs_read_bus_err ps2_gs_vram_read_err(void)
     return s_read_bus_err;
 }
 
-int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
+/* The machine half, shared by every Local->Host read: build the block, hand it to VIF1 on channel 1,
+ * take the three receipts, reverse the FIFO and the GS bus, take the pixels, put the bus back.
+ *
+ * The register sequence below is the one LANE 19 rungs 2 and 3 measured on hardware and in the
+ * emulator, so this function is a MOVE of ps2_gs_vram_read()'s body rather than a rewrite of it:
+ * nothing about the order, the waits, or the restore changed when the display page stopped being its
+ * only customer.  What moved out are the two page-specific decisions -- which VRAM page to ask and
+ * whether the download needs expanding -- and both now arrive as arguments the caller owns:
+ *
+ *   `req` names the page, the pitch, the format and the rectangle.  A display census builds it from
+ *   gs_disp_shown(); a plane census builds it from the registry's own entry, which is why neither one
+ *   is a literal any more.
+ *
+ *   `bytes_pp` is the caller's page depth, deliberately NOT derived from `req->psm` here: the
+ *   in-place unpack below has to agree with the buffer the caller sized, and ps2_gs_vram_read() is the
+ *   function that decided, from gs_disp_page_t, that a 16-bit page is one.  A plane is CT32 at 4.
+ *
+ * Returns the quadwords the image leg transferred, or -1 with the reason in s_read_bus_err. */
+static int32_t gs_read_transfer(const gs_read_req *req, uint32_t *dst, uint32_t bytes_pp)
 {
     static uint64_t s_blk[GS_READ_BLOCK_U64] __attribute__((aligned(16)));
-    gs_read_req req;
     uint64_t *blk = (uint64_t *)UNCACHED(s_blk);
     uint32_t iqwc;
     uint32_t i;
@@ -523,7 +540,7 @@ int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
         s_read_bus_err = GS_READ_BUS_E_ARGS;
         return -1;
     }
-    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+    if (req->w == 0u || req->h == 0u) {
         s_read_bus_err = GS_READ_BUS_E_ARGS;
         return -1;
     }
@@ -539,33 +556,9 @@ int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
         return -1;
     }
 
-    /* The census is of the page the PCRTC is showing -- the same owner the writers go through, which
-     * is the point: a read asked against page 0 while the screen scans page 1 reports a page nobody
-     * painted.  The base, the width field and the format all come from that one description rather
-     * than three literals that happen to agree with it today. */
-    const gs_disp_page_t *shown = gs_disp_shown();
+    iqwc = gs_read_image_qwc(req->w, req->h, req->psm);
 
-    /* 32-bit and 16-bit pages both answer, because every caller reads a uint32_t image and rung 3
-     * gave this function the decode that makes one out of the other: the DMA below writes `w * h *
-     * 2` bytes into a buffer its caller sized at `w * h * 4`, and gs_unpack_5551_image() expands
-     * them in place.  Any other format is still a refusal -- a CT24 strip would walk 4 bytes at a
-     * time over a 3-byte picture, and a swizzled one is not a row-major image at all. */
-    if (shown == 0 || (shown->bytes_pp != 4u && shown->bytes_pp != 2u)) {
-        s_read_bus_err = GS_READ_BUS_E_PAGE;
-        return -1;
-    }
-
-    req.vram_byte = shown->byte;                  /* the displayed page: what the census is about */
-    req.sbw64     = shown->fbw;
-    req.psm       = shown->psm;
-    req.x         = (uint32_t)x;
-    req.y         = (uint32_t)y;
-    req.w         = (uint32_t)w;
-    req.h         = (uint32_t)h;
-
-    iqwc = gs_read_image_qwc(req.w, req.h, req.psm);
-
-    if (iqwc == 0u || gs_read_block_packet(&req, blk, GS_READ_BLOCK_QWC) < 0) {
+    if (iqwc == 0u || gs_read_block_packet(req, blk, GS_READ_BLOCK_QWC) < 0) {
         /* A rectangle too small to fill a quadword and one that breaks a field law are the same exit
          * here, and gs_read_last_err() is what tells them apart from anything on the bus. */
         s_read_bus_err = GS_READ_BUS_E_BUILD;
@@ -642,10 +635,82 @@ int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
      * caller allocated and the loop runs downward -- see gs_unpack_5551_image()'s header comment.
      * It is skipped on a failed transfer, where the buffer is whatever the caller last put there and
      * a decode of that would be a colour invented from garbage. */
-    if (s_read_bus_err == GS_READ_BUS_OK && shown->bytes_pp == 2u)
-        gs_unpack_5551_image(dst, (uint32_t)w * (uint32_t)h);
+    if (s_read_bus_err == GS_READ_BUS_OK && bytes_pp == 2u)
+        gs_unpack_5551_image(dst, req->w * req->h);
 
     return (s_read_bus_err == GS_READ_BUS_OK) ? (int32_t)iqwc : -1;
+}
+
+int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
+{
+    gs_read_req req;
+    /* The census is of the page the PCRTC is showing -- the same owner the writers go through, which
+     * is the point: a read asked against page 0 while the screen scans page 1 reports a page nobody
+     * painted.  The base, the width field and the format all come from that one description rather
+     * than three literals that happen to agree with it today. */
+    const gs_disp_page_t *shown = gs_disp_shown();
+
+    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        s_read_bus_err = GS_READ_BUS_E_ARGS;
+        return -1;
+    }
+    /* 32-bit and 16-bit pages both answer, because every caller reads a uint32_t image and rung 3
+     * gave this function the decode that makes one out of the other: the DMA below writes `w * h *
+     * 2` bytes into a buffer its caller sized at `w * h * 4`, and gs_unpack_5551_image() expands
+     * them in place.  Any other format is still a refusal -- a CT24 strip would walk 4 bytes at a
+     * time over a 3-byte picture, and a swizzled one is not a row-major image at all. */
+    if (shown == 0 || (shown->bytes_pp != 4u && shown->bytes_pp != 2u)) {
+        s_read_bus_err = GS_READ_BUS_E_PAGE;
+        return -1;
+    }
+
+    req.vram_byte = shown->byte;                  /* the displayed page: what the census is about */
+    req.sbw64     = shown->fbw;
+    req.psm       = shown->psm;
+    req.x         = (uint32_t)x;
+    req.y         = (uint32_t)y;
+    req.w         = (uint32_t)w;
+    req.h         = (uint32_t)h;
+
+    return gs_read_transfer(&req, dst, shown->bytes_pp);
+}
+
+/* Read a registered texture plane out of VRAM -- the same recipe on a different page.
+ *
+ * This is what LANE 19's read was always able to do and never was asked to: BITBLTBUF names an
+ * arbitrary page, a pitch in 64-texel units and a format, and a plane's entry already carries all
+ * three (ps2_gs_tex.h plans `byte`, `tbw` and CT32 for the sampler's sake).  Only the census that
+ * needs it is new.
+ *
+ * Why a census of the ATLAS is the decisive half of an icon-glitch instrument: "the icons are solid
+ * rectangles" has two causes with the same picture on the screen -- bytes that never crossed, and
+ * bytes that crossed and were not sampled.  The page read alone cannot separate them, because a
+ * plane nobody uploaded and a plane the sampler lost both leave the flat vertex colour behind.
+ * Reading the plane answers the first one directly: a populated atlas is a field of distinct texels,
+ * and an un-uploaded or overwritten one is transparent black, or somebody else's picture.
+ *
+ * `index` is the registry slot, 0..gs_tex_count()-1.  The rectangle is in TEXELS of the padded plane,
+ * and the builder's laws are the page's, unchanged: CT32 makes a quadword 4 texels, so x and w are
+ * multiples of 4, the pitch check is against `tbw` x 64, and more than GS_READ_MAX_QWC quadwords is
+ * a caller's banding loop rather than one transfer.  dst is one uint32_t per texel. */
+int32_t ps2_gs_plane_read(uint32_t index, int x, int y, int w, int h, uint32_t *dst)
+{
+    const gs_tex_t *t = gs_tex_at(index);
+    gs_read_req req;
+
+    if (t == 0 || x < 0 || y < 0 || w <= 0 || h <= 0) {
+        s_read_bus_err = GS_READ_BUS_E_ARGS;
+        return -1;
+    }
+    req.vram_byte = t->byte;
+    req.sbw64     = t->tbw;
+    req.psm       = GS_PSM_CT32;                  /* ps2_gs_tex_upload()'s own format, not the display's */
+    req.x         = (uint32_t)x;
+    req.y         = (uint32_t)y;
+    req.w         = (uint32_t)w;
+    req.h         = (uint32_t)h;
+
+    return gs_read_transfer(&req, dst, 4u);
 }
 
 /* Cross one texture plane into VRAM (row 5b).

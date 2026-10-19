@@ -30,6 +30,24 @@
 # into a PSMCT16 display page and read back three times -- at 32 bits, at 16 with the GS's own
 # dither, at 16 without it.  Its verdict row says MEASURED only when the 16-bit page held the same
 # picture in the same box at half the quadwords, which is the gate rung 4 builds its second page on.
+#
+# BENCH_APP=1 BENCH_TEX=1 [BENCH_ORDER=0|1] scripts/ps2_bench.sh is LANE 24's icon A/B, and it JOINS the
+# run rather than replacing it: at the app phase's frame 3 it reads the live page and the desktop canvas
+# over the same box, plus every registered texture plane, and prints a paired verdict row naming which of
+# the three holds the flat rectangles.  ORDER=1 opens `lilcu` first, which is the sequence that made the
+# glitch disappear for the operator; ORDER=0 is the control.
+#
+# It is now a BEFORE/AFTER pair over one event, because that is how the fault was last described: "Icons
+# show inititially fine but get corrupted after FPS ticker changed".  The frame hook watches the XMB
+# window's caption -- the readout in src/gl/egl_surface.c renames it through wnd_set_title(), which
+# damages the tab rect and nothing else -- and takes the census again on the next pass and at +4 passes,
+# diffing cell by cell and diffing the texture registry's VRAM spans.  Rows are `[GSBOX] frame N ...`.
+#
+# The dial that used to be needed is not: one XMB frame costs 75-110 ms of emulator wall (the 78 s figure
+# was task #20's, and it was about a bake, not a frame), so the default BENCH_TIMEOUT of 300 s is ample
+# and BENCH_APP_FRAMES=12 is enough to cross two FPS windows.  With either LANE 24 dial up the run skips
+# the launcher-by-key cycle, which never returns (task #30) and would otherwise stall the run at its own
+# budget; the census lives in the app phase that follows it.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -78,7 +96,7 @@ kill -KILL "$VM" 2>/dev/null || true
 cp "$LOG" "$OUT"
 
 if grep -q '\[BENCH\]' "$LOG"; then
-    grep -E '\[BENCH\]|\[GSREAD\]|\[GSLIVE\]|\[GSTS\]|\[PW\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
+    grep -E '\[BENCH\]|\[GSREAD\]|\[GSLIVE\]|\[GSTS\]|\[GSBOX\]|\[PW\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
     echo "----------------------------------------------------------"
     echo "[PS2-BENCH] full log: $OUT ($elapsed s)"
     exit 0

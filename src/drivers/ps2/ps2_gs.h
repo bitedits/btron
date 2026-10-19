@@ -153,6 +153,18 @@ typedef enum {
  * Returns the quadwords asked for, or -1 with the reason in ps2_gs_vram_read_err(). */
 int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst);
 gs_read_bus_err ps2_gs_vram_read_err(void);
+/* The same read, aimed at a registered texture plane instead of the display page: `index` is a
+ * registry slot (0..gs_tex_count()-1) and the rectangle is in TEXELS of that plane's PADDED extent.
+ * The page, the pitch and the format come from the entry -- ps2_gs_tex.h planned `byte`, `tbw` and
+ * CT32 for the sampler, and a census that asked for anything else would be reading a page the
+ * sampler is not using.  Same refusals, same receipts, same bus restore, and `dst` is one uint32_t
+ * per texel.
+ *
+ * It exists for one question the page read cannot answer: an icon drawn as a solid rectangle is
+ * either a plane whose bytes never crossed or a plane that crossed and was not sampled, and the two
+ * have the same picture and opposite fixes.  Reading the plane distinguishes them, because a
+ * populated atlas is a field of distinct texels where an un-uploaded one is transparent black. */
+int32_t ps2_gs_plane_read(uint32_t index, int x, int y, int w, int h, uint32_t *dst);
 /* The one DMAC channel-2 sender that still blocks, shared by every producer whose buffer the port
  * cannot promise survives until the next yield: the canvas blit stream above, and everything the
  * boot path sends before a ring exists to hold a packet.  Declared rather than left accidentally

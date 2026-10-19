@@ -47,6 +47,13 @@ static void    *s_pixel_buf = NULL;
 static int      s_width     = 0;
 static int      s_height    = 0;
 
+/* How many window surfaces have been handed the one pipeline.  Counted because the fact is the
+ * bug this file used to have: `egl_create_window_surface()` calls gl_init() for EVERY GL window,
+ * and gl_init() used to reach glInit() every time -- see tinygl_backend_init().  A second GL
+ * window is normal (XMB plus an app), so the count is the row that says whether a texture name
+ * still means what it meant when it was minted. */
+static int      s_surfaces  = 0;
+
 /* ── Forward declarations ─────────────────────────────────────────── */
 static void   tgl_begin       (GLenum mode);
 static void   tgl_end         (void);
@@ -156,6 +163,45 @@ static void s_stamp_surface_alpha(void) {
 }
 
 void tinygl_backend_init(int w, int h, void *pixel_buf) {
+    /* ONE CONTEXT PER PROCESS, and this is the line that enforces it.
+     *
+     * egl_surface.c calls gl_init() from egl_create_window_surface(), so this ran once for every
+     * GL window the desktop opened.  glInit() begins with `gl_ctx = empty_gl_ctx` (tinygl/init.c)
+     * -- it overwrites the single global context with a static template and then allocates a fresh
+     * shared_state, so the previous window's texture nodes, display lists and buffers are neither
+     * deleted nor inherited: they are orphaned, and every name that window still holds now looks
+     * up an empty hash table.  An empty slot is not an error to the sampler; it draws the vertex
+     * colour instead of the texel, so each icon and each glyph becomes one flat rectangle.  That
+     * is the reported defect, measured: an icon row whose cells are solid 0x0000ff where the
+     * focused item's vertex colour is the selection blue, and solid black where it is the shadow,
+     * with the art underneath intact -- a lost texture, not a lost quad.
+     *
+     * It also explains the two things the operator reported about timing, which no present-path
+     * or VRAM story could:
+     *   "running lilcu, then xmb, made the glitch disappear" -- xmb opened LAST, so its atlas was
+     *   minted after the final glInit() and was the only texture namespace still alive;
+     *   "icons show initially fine but get corrupted after the FPS ticker changed" -- the first
+     *   caption tick is a repaint of a window whose surface had not been created yet, and creating
+     *   it is what erased the launcher's.
+     *
+     * So a pipeline that is already installed is re-pointed at the new surface, never rebuilt.
+     * The per-surface parts of the old call -- the ZBuffer's pixel array and its extent -- are
+     * exactly what tinygl_backend_resize() re-takes, including the alpha stamp for the area no
+     * primitive covers.  What survives is the shared namespace: glGenTextures() hands out
+     * max(handle)+1 over the live hash table, so with no wipe two windows can never be given the
+     * same name, and the only way a name is reused is by the highest-numbered texture dying.
+     *
+     * A real backend SWITCH still rebuilds, because it does not come through here with a live
+     * s_zb: gl_shutdown() -> tinygl_backend_shutdown() closes the ZBuffer and NULLs it first. */
+    if (s_zb) {
+        s_surfaces++;
+        uart_puts_raw("[GL] TinyGL: second window surface joins the one context -- textures and "
+                      "lists kept, raster re-pointed\n");
+        tinygl_backend_resize(w, h, pixel_buf);
+        return;
+    }
+
+    s_surfaces  = 1;
     s_width     = w;
     s_height    = h;
     s_pixel_buf = pixel_buf;
@@ -163,6 +209,7 @@ void tinygl_backend_init(int w, int h, void *pixel_buf) {
     /* Open TinyGL ZBuffer in RGBA 32-bit mode, using pixel_buf directly */
     s_zb = ZB_open(w, h, ZB_MODE_RGBA, pixel_buf);
     if (!s_zb) {
+        s_surfaces = 0;
         uart_puts_raw("[TinyGL] ERROR: ZB_open failed (OOM?)\n");
         return;
     }
@@ -184,14 +231,66 @@ void tinygl_backend_resize(int w, int h, void *pixel_buf) {
     s_pixel_buf = pixel_buf;
     ZB_resize(s_zb, pixel_buf, w, h);
     s_stamp_surface_alpha();
+
+    /* Re-take the viewport with the surface, because the two used to be changed by one call.
+     *
+     * Before the shared-context law, every new window surface ran glInit(), and glInit() ends by
+     * copying the ZBuffer's extent into the viewport and evaluating it (src/gl/tinygl/init.c).  The
+     * re-pointing path that replaced it takes only the raster's pixel array, so a second, smaller
+     * window inherited the first one's transform: its geometry was scaled to the other window's
+     * width and height and clipped against them.  That is the same class of bug this file just
+     * fixed, on the other half of the state -- one process-wide context means each per-surface
+     * fact has to be re-asserted at the switch, and the list is exactly two: where the pixels go,
+     * and what maps onto them.
+     *
+     * An app that sets its own viewport every frame -- xb_paint() does -- never noticed.  The one
+     * that does not, or that uploads a texture or draws before its first paint, does. */
+    glViewport(0, 0, w, h);
 }
 
-void tinygl_backend_shutdown(void) {
-    if (s_zb) {
-        glClose();
-        ZB_close(s_zb);
-        s_zb = NULL;
+int tinygl_backend_shutdown(void) {
+    if (!s_zb) return 0;
+
+    /* The other half of the same law as tinygl_backend_init(): a context shared by several window
+     * surfaces is closed when the LAST of them goes, not the first.
+     *
+     * egl_destroy_surface() calls gl_shutdown() on this pipeline for whatever window it is
+     * destroying, and glClose() runs endSharedState() -- which deletes every texture node and
+     * every display list in the process and frees the planes behind them.  So before this guard,
+     * closing any GL window silently destroyed every other GL window's textures, and each of the
+     * survivors' next paint drew the vertex colour instead of the texel: one flat rectangle per
+     * icon and per glyph.  A transient surface -- a menu, an overlay, a helper window -- opening
+     * and closing is exactly the "later event" the operator dated the corruption to.
+     *
+     * What the surviving surfaces still need is the namespace, so the count goes down and the
+     * context stays.  The raster is detached from the dying window's pixmap here rather than left
+     * pointing at freed bytes: s_pixel_buf going NULL makes the next bind's `fresh` test answer
+     * yes whatever the survivor's geometry is, so tinygl_backend_resize() re-takes pbuf before
+     * anything can draw.  ZBuffer's own frame_buffer_allocated stays 0, so no replacement pixmap
+     * is malloc'd for a window that has none.
+     *
+     * The return value answers the question the caller cannot ask any other way -- is there still
+     * a context here? -- and gl_dispatch.c keeps its ops table with the answer, because every GL
+     * entry point an app calls is a `g_gl->…` macro. */
+    if (s_surfaces > 1) {
+        s_surfaces--;
+        s_zb->pbuf  = NULL;
+        s_pixel_buf = NULL;
+        s_width     = 0;
+        s_height    = 0;
+        uart_puts_raw("[GL] TinyGL: one window surface closed with others still live -- context "
+                      "kept, raster detached until the next bind\n");
+        return 1;
     }
+
+    s_surfaces  = 0;
+    glClose();
+    ZB_close(s_zb);
+    s_zb        = NULL;
+    s_pixel_buf = NULL;
+    s_width     = 0;
+    s_height    = 0;
+    return 0;
 }
 
 /* ── TinyGL GL wrappers ───────────────────────────────────────────── */

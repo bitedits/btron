@@ -123,7 +123,13 @@ void gl_shutdown(void) {
     if (!g_gl) return;
 #if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_tinygl_pipeline()) {
-        tinygl_backend_shutdown();
+        /* The pipeline answers whether it is still usable, because several window surfaces now
+         * share one context: closing a window that is not the last closes nothing above it.
+         * Clearing `g_gl` anyway was a crash waiting for the survivor -- every GL entry point in
+         * include/gl.h is a `g_gl->…` macro, so the next paint after a benign window close follows
+         * a NULL pointer.  The ops table is the context's, so it lives and dies with the context. */
+        if (tinygl_backend_shutdown())
+            return;
         g_gl = NULL;
         return;
     }

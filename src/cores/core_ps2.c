@@ -9051,6 +9051,17 @@ static uint32_t s_bench_app_left;   /* frames owed until the injected Escape */
 static uint32_t s_bench_app_made;
 static uint32_t s_bench_app_t0;     /* folded µs clock at the open, for the frame heartbeat */
 static uint32_t s_bench_app_over;   /* frames made past the budget's Escape, 0 = not yet spent */
+static int s_bench_app_owns_end;    /* only the phase that blocks in the frame loop may end the run */
+
+/* Which phase is allowed to END the run from the frame hook.  The grace-frame sentinel exists for
+ * ps2_bench_app(), the one phase that blocks in the frame loop and would otherwise never return;
+ * arming the same counters from a bounded phase lets it fire early, and the 2026-10-19 LANE 24 run
+ * showed this happening: ps2_bench_launch_xmb_by_key() spends its budget inside ps2_bench_pad(), so
+ * `over` walks past 2 while the launched app's own body still drives passes, the sentinel rises, and
+ * ps2_bench_app() -- the only phase that opens XMB through the task shim, and the one the census is
+ * about -- never runs.  Every bench log from 2026-10-16 on reads the same way: no `opened through the
+ * task shim` row at all.  Ownership is a name rather than an ordering accident, so the flag says who
+ * may end the run and only that phase sets it. */
 
 extern WND *open_xmb_window(void);
 extern int  xmb_depth(void);        /* the depth xb_go_back() is standing at */
@@ -9269,12 +9280,43 @@ static void ps2_bench_gs_planes(void)
 #define BTRON_PS2_BENCH_LAUNCH_FRAMES 3u
 #endif
 
-static void ps2_bench_app(uint32_t frames)
+/* LANE 24's two dials, both off by default so every existing run keeps its rows and its timings:
+ * `BENCH_TEX=1` arms the page/plane/canvas cell census, `BENCH_ORDER=1` opens `lilcu` before `xmb`.
+ * The census is the measurement; the order is the variable.  Neither means anything without
+ * `BENCH_APP=1`, because the windows they ask about only the app phase opens. */
+#ifndef BTRON_PS2_BENCH_TEX
+#define BTRON_PS2_BENCH_TEX 0
+#endif
+#ifndef BTRON_PS2_BENCH_ORDER
+#define BTRON_PS2_BENCH_ORDER 0u
+#endif
+#if BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER
+static void ps2_bench_lilcu_warm(GDEV *screen);
+
+/* The warm sub-phase rides on the app phase's own counters on purpose: the Escape the frame hook
+ * injects when they run out is the only way this port closes a window it did not open, and whether
+ * the demo takes it is a fact worth printing rather than one to hide behind a second mechanism.
+ * It also means the XMB-labelled rows in that hook would fire over a demo phase, so they check
+ * this.  With both dials down the name expands to a constant 0, which is why it lives here rather
+ * than inside the guarded block below -- the hook is compiled by `BENCH_APP`, not by `BENCH_TEX`. */
+static int s_bench_tex_warm;
+#else
+#define s_bench_tex_warm 0
+#endif
+
+static void ps2_bench_app(GDEV *screen, uint32_t frames)
 {
     RENDER_STATS st;
     const uint32_t t_start = btron_render_perf_us();  /* folded: one frame exceeds a Count wrap */
     WND *w;
 
+#if BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER
+    /* First of everything, ahead of the stats take below: the A/B's other arm is a whole app run, and
+     * its frames must not be charged to the XMB's compositor row. */
+    if (BTRON_PS2_BENCH_ORDER == 1u) ps2_bench_lilcu_warm(screen);
+#else
+    (void)screen;      /* only LANE 24's arms drive a pass loop from here */
+#endif
     ps2_kprintf("\n[BENCH] xmb opened through the task shim -- %u frames asked of dly_tsk()\n",
                 (unsigned int)frames);
     btron_render_stats_take(&st);       /* the region table's counters are not this row's */
@@ -9287,6 +9329,7 @@ static void ps2_bench_app(uint32_t frames)
     s_bench_app_left = frames;
     s_bench_app_made = 0u;
     s_bench_app_over = 0u;
+    s_bench_app_owns_end = 1;       /* this phase's budget is the run's end; see its declaration */
     s_bench_app_t0 = t_start;
     /* Blocks until the injected Escape has closed the window: the frame loop is the
      * body's from here, not the session loop's.  The two heap rows are the pool's
@@ -9301,6 +9344,9 @@ static void ps2_bench_app(uint32_t frames)
     w = open_xmb_window();
     s_bench_app_active = 0;
     s_bench_app_left = 0u;
+    /* The counters belong to no phase again.  Left set, the launch phase that runs after this one
+     * would wear the app phase's identity, and LANE 24's rows are gated on that identity. */
+    s_bench_app_owns_end = 0;
     pool_bad = ps2_heap_check();
     ps2_kprintf("[BENCH] heap after  xmb: used=%u of %u kB, largest hole %u kB (peak %u kB), stack=%u kB, pool %s\n",
                 (unsigned int)(s_heap_used / 1024u), (unsigned int)(PS2_HEAP_SIZE / 1024u),
@@ -9543,6 +9589,591 @@ static WND *ps2_bench_wnd_named(const char *needle)
         if (tkl_strstr(w->title, needle)) return w;
     return NULL;
 }
+
+/* ── LANE 24: does the atlas reach VRAM, and does the sampler find it? ────────────────
+ * `BENCH_TEX=1 BENCH_APP=1 scripts/ps2_bench.sh` arms the census; `BENCH_ORDER=1` arms the other half
+ * of the A/B.  Both default to 0, so every existing run's rows and timings are untouched.
+ *
+ * The complaint, reported from hardware on 2026-10-18: launched alone, `xmb` draws its icon cells as
+ * solid blue and black rectangles; launch `lilcu` FIRST and then `xmb`, and the rectangles are gone.
+ * An order-dependent rendering fault is a shared-state fault by definition, and this build has three
+ * candidate shares -- one global TinyGL context (backend_tinygl.c's single `s_zb`), one session-global
+ * GS texture registry that no close path frees (ps2_gs_tex.c: `gs_tex_free()` and `gs_tex_compact()`
+ * have no caller in src/), and the one 4 MB of VRAM that both the planes and the display pages are cut
+ * from.  Reading the code cannot separate them, because all three predict the same picture on the
+ * monitor.  So this measures the three facts that do:
+ *
+ *   WHAT THE PLANE HOLDS IN VRAM.  ps2_gs_plane_read() -- the read rung 2 built, aimed at a registry
+ *   entry instead of at the display page.  A baked atlas is a field of distinct texels; a span whose
+ *   bytes never crossed is the transparent black the allocator left there.  This is the fact that turns
+ *   "the icons are rectangles" back into two different sentences.
+ *
+ *   WHAT THE PAGE HOLDS WHERE THE ICONS ARE, AND WHAT THE CANVAS HOLDS AT THE SAME BOX.  The canvas is
+ *   the app's paint as TinyGL left it, before any GS word is spoken; the page is what the GS put down.
+ *   Censusing BOTH at the same box makes the comparison PAIRED rather than thresholded: the number that
+ *   matters is how many flat cells the page has that the canvas did not have, and no choice of "what
+ *   counts as flat" can blur it.  It also covers the case the fork above forgot -- a canvas that is
+ *   itself flat, where the fault is upstream of the GS and no sampler work would fix it.
+ *
+ * The unit is the cell: a square of `GSBOX_CELL` px whose top-left colour covers every pixel of it is
+ * `solid`.  An icon is never solid and a flat quad is always solid, so `solid=` counts the rectangles
+ * the user is describing and the colour each is solid in names the "blue and black".  Words print in
+ * the page's own order -- the corner words are 0xAABBGGRR, so the palette's red is 0xff0000ff and a
+ * reader comparing these rows against `GSQUAD_*` is comparing like with like.
+ *
+ * Two laws this instrument inherits rather than re-derives.  (1) The read refuses while the GIF pipe is
+ * busy, so nothing prints or uploads between a band's read and its feed -- that is why the buffer is
+ * asked for before the first read and why every row comes after the last one.  (2) The builder's
+ * alignment law is the page's: a 32-bit page wants x and w as multiples of 4 px, a 16-bit one of 8, so
+ * the box is floored onto an 8-px grid and then onto whole cells, which drops a partial edge cell --
+ * a cell only counts when every pixel of it was read.
+ */
+#if BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER
+
+/* Frames of the demo to ask before the harness injects its Escape. */
+#define GSBOX_WARM_FRAMES 4u
+
+#if BTRON_PS2_BENCH_TEX
+#define GSBOX_CELL     64u   /* one cell per icon cell at the atlas's own scale */
+#define GSBOX_BAND     32u   /* rows per read: 800*32*4 = 102,400 B = 6,400 qw, well under DMAC's cap */
+#define GSBOX_TOP       8u   /* solid colours kept; a 9th evicts the rarest and is counted in `rare` */
+#define GSBOX_MAXCELLS  128u /* 12 x 8 over the client box, 8 x 8 over a 512-px plane */
+#define GSBOX_READ_CAP    8u /* readings past frame 3: each one is ~1.4 MB of Local->Host DMA and the
+                              * ticks come every ~3 frames, so uncapped the census would price the run
+                              * rather than the picture.  Eight covers two seconds of the phase. */
+
+typedef struct {
+    uint32_t x0, y0, w, h;             /* the floored census box, in source px */
+    uint32_t cell, shift;              /* px per cell, and its log2 -- always a power of two */
+    uint32_t cols, rows, cells;
+    uint32_t px, sent;                 /* px delivered, px the read never filled */
+    uint32_t solid, near, rare;        /* 100 % cells, >= 95 % cells, solid cells dropped from the table */
+    uint32_t cell_n[GSBOX_MAXCELLS], cell_same[GSBOX_MAXCELLS], cell_first[GSBOX_MAXCELLS];
+    uint32_t sol_col[GSBOX_TOP], sol_n[GSBOX_TOP];
+    gs_read_bus_err err;
+    int have;                          /* the box held at least one whole cell */
+} gsbox_t;
+
+/* Fields one at a time, as gsread_page_census()'s note says: this TU is compiled -mhard-float and a
+ * struct assignment here has put sdc1/ldc1 -- illegal on the R5900 -- into the image before. */
+static void gsbox_begin(gsbox_t *o, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h)
+{
+    uint32_t cell = GSBOX_CELL;
+    uint32_t i;
+
+    o->x0 = x0; o->y0 = y0;
+    o->px = 0u; o->sent = 0u; o->solid = 0u; o->near = 0u; o->rare = 0u;
+    o->err = GS_READ_BUS_OK;
+    o->have = 0;
+
+    /* Widen the cell until the grid fits its own array, so a 1024-px plane asks for 128 cells of 8 x 8
+     * rather than 256 of 4 x 4 and a silent truncation. */
+    for (;;) {
+        if (((w / cell) * (h / cell)) <= GSBOX_MAXCELLS || cell >= 256u) { o->cell = cell; break; }
+        cell <<= 1u;
+    }
+    o->shift = 0u;
+    while ((1u << (int)o->shift) < o->cell) o->shift++;
+    o->w = (w / o->cell) * o->cell;
+    o->h = (h / o->cell) * o->cell;
+    o->cols = o->w / o->cell;
+    o->rows = o->h / o->cell;
+    o->cells = o->cols * o->rows;
+    if (o->cells == 0u || o->cells > GSBOX_MAXCELLS) return;
+
+    for (i = 0u; i < GSBOX_MAXCELLS; i++) {
+        o->cell_n[i] = 0u; o->cell_same[i] = 0u; o->cell_first[i] = 0u;
+    }
+    for (i = 0u; i < GSBOX_TOP; i++) { o->sol_col[i] = 0u; o->sol_n[i] = 0u; }
+    o->have = 1;
+}
+
+/* Fold one band into the census.  `buf` is the band exactly as the read delivered it: `o->w` px per
+ * line, `rows` lines, starting at source line `y_start`.  The second half of that is not a detail -- a
+ * Local->Host download carries no row pitch beyond its own rectangle, so a stride of the SCREEN width
+ * would read the next row's start as this row's tail and call the difference texture. */
+static void gsbox_feed(gsbox_t *o, const uint32_t *buf, uint32_t y_start, uint32_t rows)
+{
+    uint32_t r, cx;
+
+    if (!o->have) return;
+    for (r = 0u; r < rows; r++) {
+        const uint32_t y = y_start + r;
+        uint32_t cy;
+
+        if (y < o->y0 || y >= o->y0 + o->h) continue;
+        cy = (y - o->y0) >> o->shift;
+        for (cx = 0u; cx < o->cols; cx++) {
+            const uint32_t ci = cy * o->cols + cx;
+            const uint32_t *p = buf + (size_t)r * o->w + (cx << o->shift);
+            uint32_t i, n = o->cell_n[ci], same = o->cell_same[ci], first = o->cell_first[ci];
+
+            for (i = 0u; i < o->cell; i++) {
+                const uint32_t v = p[i];
+
+                if (v == GSREAD_SENT) { o->sent++; continue; }
+                if (n == 0u) first = v;             /* the cell's own top-left, wherever it arrived */
+                o->px++;
+                n++;
+                if (v == first) same++;
+            }
+            o->cell_n[ci] = n; o->cell_same[ci] = same; o->cell_first[ci] = first;
+        }
+    }
+}
+
+/* Derive the two verdict columns.  Separate from the walk so it runs once per box, and so a box whose
+ * cells were only half read says nothing instead of saying `solid`. */
+static void gsbox_finish(gsbox_t *o)
+{
+    uint32_t ci, k;
+    const uint32_t full = o->cell * o->cell;
+
+    if (!o->have) return;
+    for (ci = 0u; ci < o->cells; ci++) {
+        const uint32_t n = o->cell_n[ci];
+        const uint32_t same = o->cell_same[ci];
+
+        if (n < full) continue;
+        if (same == n) {
+            uint32_t hit = GSBOX_TOP, empt = GSBOX_TOP;
+
+            o->solid++;
+            for (k = 0u; k < GSBOX_TOP; k++) {
+                if (o->sol_n[k] && o->sol_col[k] == o->cell_first[ci]) { hit = k; break; }
+                if (empt == GSBOX_TOP && o->sol_n[k] == 0u) empt = k;
+            }
+            if (hit != GSBOX_TOP) o->sol_n[hit]++;
+            else if (empt != GSBOX_TOP) { o->sol_col[empt] = o->cell_first[ci]; o->sol_n[empt] = 1u; }
+            else {
+                uint32_t worst = 0u;
+
+                for (k = 1u; k < GSBOX_TOP; k++) if (o->sol_n[k] < o->sol_n[worst]) worst = k;
+                o->rare += o->sol_n[worst];
+                o->sol_n[worst] = 1u;
+                o->sol_col[worst] = o->cell_first[ci];
+            }
+        } else if (same * 20u >= n * 19u) {
+            o->near++;                              /* >= 95 % one colour: a flat quad a neighbour's edge
+                                                     * intrudes on, which still is not an icon */
+        }
+    }
+}
+
+static void gsbox_row(const gsbox_t *o, const char *tag)
+{
+    uint32_t k;
+
+    if (!o->have) {
+        ps2_kprintf("[GSBOX] %s: NO CENSUS -- the box holds no whole %u px cell\n",
+                    tag, (unsigned int)GSBOX_CELL);
+        return;
+    }
+    ps2_kprintf("[GSBOX] %s: box=%u,%u %ux%u cell=%u cols=%u rows=%u px=%u sent=%u solid=%u p95=%u "
+                "rare=%u err=%s\n",
+                tag, (unsigned int)o->x0, (unsigned int)o->y0, (unsigned int)o->w, (unsigned int)o->h,
+                (unsigned int)o->cell, (unsigned int)o->cols, (unsigned int)o->rows,
+                (unsigned int)o->px, (unsigned int)o->sent, (unsigned int)o->solid,
+                (unsigned int)o->near, (unsigned int)o->rare, gsread_bus_name(o->err));
+    ps2_kprintf("[GSBOX] %s flat colours:", tag);
+    if (!o->solid) { ps2_kprintf(" none\n"); return; }
+    for (k = 0u; k < GSBOX_TOP; k++)
+        if (o->sol_n[k]) ps2_kprintf(" 0x%08x=%u", (unsigned int)o->sol_col[k],
+                                     (unsigned int)o->sol_n[k]);
+    ps2_kprintf("%s\n", o->rare ? " (+evicted)" : "");
+}
+
+/* Walk a rectangle of the DISPLAY PAGE, in bands. */
+static void gsbox_page(gsbox_t *o, uint32_t *buf, uint32_t width, uint32_t x, uint32_t y,
+                       uint32_t w, uint32_t h)
+{
+    uint32_t y_start;
+
+    if (x + w > width) w = width - x;              /* the page's own pitch law, before the builder's */
+    gsbox_begin(o, x, y, w, h);
+    if (!o->have) return;
+    for (y_start = o->y0; y_start < o->y0 + o->h; y_start += GSBOX_BAND) {
+        const uint32_t rows = (o->y0 + o->h - y_start < GSBOX_BAND) ? (o->y0 + o->h - y_start)
+                                                                    : GSBOX_BAND;
+        uint32_t i;
+
+        for (i = 0u; i < o->w * rows; i++) buf[i] = GSREAD_SENT;
+        (void)ps2_gs_vram_read((int)o->x0, (int)y_start, (int)o->w, (int)rows, buf);
+        o->err = ps2_gs_vram_read_err();
+        if (o->err != GS_READ_BUS_OK) {
+            ps2_kprintf("[GSBOX] page read y=%u FAILED: %s", (unsigned int)y_start,
+                        gsread_bus_name(o->err));
+            if (o->err == GS_READ_BUS_E_BUILD)
+                ps2_kprintf(" (law: %s)", gsread_law_name(gs_read_last_err()));
+            ps2_kprintf("\n");
+            return;
+        }
+        gsbox_feed(o, buf, y_start, rows);
+    }
+    gsbox_finish(o);
+}
+
+/* Walk a rectangle of a registered PLANE, in bands -- the same recipe on the other page. */
+static void gsbox_plane(gsbox_t *o, uint32_t *buf, uint32_t index, uint32_t w, uint32_t h)
+{
+    const gs_tex_t *t = gs_tex_at(index);
+    uint32_t y_start;
+
+    if (t == 0) { o->have = 0; return; }
+    if (w > t->pad_w) w = t->pad_w;
+    if (h > t->pad_h) h = t->pad_h;
+    gsbox_begin(o, 0u, 0u, w, h);
+    if (!o->have) return;
+    for (y_start = 0u; y_start < o->h; y_start += GSBOX_BAND) {
+        const uint32_t rows = (o->h - y_start < GSBOX_BAND) ? (o->h - y_start) : GSBOX_BAND;
+        uint32_t i;
+
+        for (i = 0u; i < o->w * rows; i++) buf[i] = GSREAD_SENT;
+        /* The band's own top line, in the PLANE's coordinates: the rectangle the builder gets is
+         * (0, y_start) inside a buffer whose row pitch is the plane's TBW, which is the whole point
+         * of reading a plane rather than the page. */
+        (void)ps2_gs_plane_read(index, 0, (int)y_start, (int)o->w, (int)rows, buf);
+        o->err = ps2_gs_vram_read_err();
+        if (o->err != GS_READ_BUS_OK) {
+            ps2_kprintf("[GSBOX] plane %u read y=%u FAILED: %s", (unsigned int)index,
+                        (unsigned int)y_start, gsread_bus_name(o->err));
+            if (o->err == GS_READ_BUS_E_BUILD)
+                ps2_kprintf(" (law: %s)", gsread_law_name(gs_read_last_err()));
+            ps2_kprintf("\n");
+            return;
+        }
+        gsbox_feed(o, buf, y_start, rows);
+    }
+    gsbox_finish(o);
+}
+
+/* One reading's cell detail, kept so the NEXT reading can be diffed against it instead of
+ * re-thresholded.  The arrays cover the whole box because the operator's 2026-10-18 fact is a
+ * sentence about ONE event in the middle of a phase -- "Icons show inititially fine but get corrupted
+ * after FPS ticker changed" -- and a single frame's flat-cell count cannot answer that.  The number
+ * that does is `went_flat`: cells that were art at the first reading and are one colour at the second.
+ * A box is 84 cells, so the whole reading is kept rather than a count. */
+typedef struct {
+    uint32_t first[GSBOX_MAXCELLS], n[GSBOX_MAXCELLS], same[GSBOX_MAXCELLS];
+    uint32_t cells, solid, cell;
+    int have;
+} gsprev_t;
+
+/* Field by field, never a struct copy: this TU is -mhard-float, and a copied struct here has put
+ * sdc1/ldc1 -- illegal on the R5900 -- into the image before. */
+static void gsprev_store(gsprev_t *p, const gsbox_t *b)
+{
+    uint32_t i;
+
+    p->cells = b->cells; p->solid = b->solid; p->cell = b->cell; p->have = b->have;
+    if (!b->have) return;
+    for (i = 0u; i < b->cells && i < GSBOX_MAXCELLS; i++) {
+        p->first[i] = b->cell_first[i];
+        p->n[i] = b->cell_n[i];
+        p->same[i] = b->cell_same[i];
+    }
+}
+
+/* The pair row, returning the count its verdict turns on.  `came_back` is the opposite motion, so
+ * `went_flat=0 came_back=0` says the event between the two readings did not touch this box, and a
+ * `came_back` with no `went_flat` is a page that healed -- the reading "gets corrupted" has to lose
+ * for a later-present story to be the true one. */
+static uint32_t gsbox_diff(const gsbox_t *now, const gsprev_t *was, const char *what,
+                           const char *tag, uint32_t frame)
+{
+    uint32_t i, changed = 0u, went = 0u, back = 0u, ex = 0u;
+    const uint32_t full = now->cell * now->cell;
+
+    if (was->cells != now->cells || was->cell != now->cell) {
+        ps2_kprintf("[GSBOX] frame %u %s %s diff: UNAVAILABLE -- the box moved (was %u cells of %u px, "
+                    "now %u of %u)\n", (unsigned int)frame, tag, what, (unsigned int)was->cells,
+                    (unsigned int)was->cell, (unsigned int)now->cells, (unsigned int)now->cell);
+        return 0u;
+    }
+    for (i = 0u; i < now->cells; i++) {
+        const uint32_t n = now->cell_n[i];
+        const int was_solid = (was->n[i] == full && was->same[i] == was->n[i]);
+        const int is_solid  = (n == full && now->cell_same[i] == n);
+
+        if (was->first[i] != now->cell_first[i]) changed++;
+        if (is_solid && !was_solid) { if (!went) ex = i; went++; }
+        else if (was_solid && !is_solid) back++;
+    }
+    ps2_kprintf("[GSBOX] frame %u %s %s diff: solid %u -> %u went_flat=%u came_back=%u recoloured=%u\n",
+                (unsigned int)frame, tag, what, (unsigned int)was->solid, (unsigned int)now->solid,
+                (unsigned int)went, (unsigned int)back, (unsigned int)changed);
+    if (went)
+        ps2_kprintf("[GSBOX] frame %u %s %s first cell that went flat: px %u,%u (cell %u of %u cols) "
+                    "was 0x%08x now 0x%08x\n",
+                    (unsigned int)frame, tag, what,
+                    (unsigned int)(now->x0 + (ex / now->cols) * now->cell),
+                    (unsigned int)(now->y0 + (ex % now->cols) * now->cell), (unsigned int)ex,
+                    (unsigned int)now->cols, (unsigned int)was->first[ex],
+                    (unsigned int)now->cell_first[ex]);
+    return went;
+}
+
+/* The arm of the A/B that reads the screen, and the rows that say which cause the pair names.
+ * `tag` labels WHICH reading this is -- "first" at frame 3, "after tick" once the FPS readout has
+ * renamed the window -- because the operator's fact moved the measurement from one frame to the event
+ * between two: the readout is written by src/gl/egl_surface.c's fps_overlay_tick() through
+ * wnd_set_title(), and wnd.c's own comment says what that damages -- "Repaint the tab only; the
+ * client image is untouched".  A tab-only damage that corrupts client-area icons is therefore a
+ * present-path event, and the page/plane/canvas pair across it is the whole question. */
+static void ps2_bench_tex_census(uint32_t frame, const char *order, const char *tag)
+{
+    static gsbox_t s_bx_page, s_bx_canvas, s_bx_pl[GS_TEX_MAX];
+    static gsprev_t s_prev_page, s_prev_canvas;
+    /* The registry, as the previous reading left it.  Asked for because of the rule ps2_gs_tex.h
+     * states: the plane POINTER is the identity, and "same pointer, *different* geometry is the C heap
+     * recycling a freed plane's address, so the entry is re-planned -- it takes a fresh span and
+     * abandons the old one".  A re-plan is exactly what a damage-driven repaint can cause, and it is
+     * invisible unless the span is remembered: the sampler's TEX0 would still name the old page. */
+    static const void *s_prev_plane[GS_TEX_MAX];
+    static uint32_t s_prev_byte[GS_TEX_MAX], s_prev_tbw[GS_TEX_MAX], s_prev_qwc[GS_TEX_MAX];
+    static uint32_t s_prev_padw[GS_TEX_MAX], s_prev_padh[GS_TEX_MAX], s_prev_npl;
+    static uint32_t s_prev_vram_left;
+    static int s_prev_valid;
+    const uint32_t width = (uint32_t)PS2_SCREEN_WIDTH;
+    const uint32_t height = (uint32_t)PS2_SCREEN_HEIGHT;
+    const uint32_t npl = gs_tex_count();
+    const WND *win = ps2_bench_wnd_named("Cross Media Bar");
+    const uint32_t *canvas = ps2_gs_get_framebuffer();
+    uint32_t *buf;
+    uint32_t i, x0 = 0u, y0 = 0u, bw = 0u, bh = 0u, agree = 0u;
+    uint32_t page_went = 0u, canvas_went = 0u;
+    const char *verdict;
+
+    /* Asked for up front, once, for the reason in this file's own note: Imalloc() prints a [HEAP] row
+     * past its threshold, and a console repaint is an upload of the page this census is about to read.
+     * 800 px x 32 rows is the widest band any of the three boxes asks for. */
+    buf = (uint32_t *)Imalloc((size_t)width * GSBOX_BAND * sizeof(uint32_t));
+    if (buf == 0) {
+        ps2_kprintf("[GSBOX] frame %u order=%s %s: NO BUFFER -- the census is skipped, not failed\n",
+                    (unsigned int)frame, order, tag);
+        return;
+    }
+
+    /* READ FIRST, PRINT LAST.  The old shape of this function printed its header and its plane rows
+     * between reads, and that is not a style choice -- a console write repaints the shell window, the
+     * repaint uploads the display page, and a page read after a print has measured the print.  The
+     * planes are immune to that confound (the present path writes the display page, not a texture
+     * page), but the display box is exactly the thing the operator says changes, so all three boxes
+     * are walked and folded before one row of this reading is emitted. */
+    for (i = 0u; i < npl && i < GS_TEX_MAX; i++) {
+        const gs_tex_t *t = gs_tex_at(i);
+        uint32_t pw = t ? t->pad_w : 0u, ph = t ? t->pad_h : 0u;
+
+        if (pw > 512u) pw = 512u;         /* the first 512 px is the claim; a whole 1024-px sheet would
+                                           * cost the run another megabyte of Local->Host DMA */
+        if (ph > 512u) ph = 512u;
+        gsbox_plane(&s_bx_pl[i], buf, i, pw, ph);
+    }
+
+    if (win != 0) {
+        /* The client box, floored onto the 8-px grid: multiples of 4 are what a CT32 page needs and
+         * multiples of 8 what a CT16 one needs, and 8 satisfies whichever LANE 21 dial is up. */
+        x0 = (uint32_t)win->client.left & ~7u;
+        y0 = (uint32_t)win->client.top & ~7u;
+        bw = (uint32_t)(win->client.right - win->client.left) & ~7u;
+        bh = (uint32_t)(win->client.bottom - win->client.top) & ~7u;
+
+        gsbox_page(&s_bx_page, buf, width, x0, y0, bw, bh);
+
+        /* The same box out of the desktop's own pixmap, copied band by band into the same buffer so
+         * the identical walk and the identical cell law answer the identical question.  This is a host
+         * -memory read, not a bus read, so it disturbs nothing -- and it is the control that says
+         * whether a flat cell the page gained was art the app never had in the first place. */
+        gsbox_begin(&s_bx_canvas, x0, y0, bw, bh);
+        if (s_bx_canvas.have) {
+            uint32_t y;
+
+            if (x0 + s_bx_canvas.w > width)  s_bx_canvas.have = 0;
+            if (y0 + s_bx_canvas.h > height) s_bx_canvas.have = 0;
+            for (y = 0u; s_bx_canvas.have && y < s_bx_canvas.h; y += GSBOX_BAND) {
+                const uint32_t rows = (s_bx_canvas.h - y < GSBOX_BAND) ? (s_bx_canvas.h - y) : GSBOX_BAND;
+                uint32_t r, c, *fill = buf;
+
+                for (r = 0u; r < rows; r++)
+                    for (c = 0u; c < s_bx_canvas.w; c++)
+                        *fill++ = canvas[(y0 + y + r) * width + (x0 + c)];
+                gsbox_feed(&s_bx_canvas, buf, y0 + y, rows);
+            }
+            if (s_bx_canvas.have) gsbox_finish(&s_bx_canvas);
+        }
+    }
+    Ifree(buf);
+
+    /* ── print phase: every read of this reading is done, so a row here costs the NEXT reading, not
+     * this one. ─────────────────────────────────────────────────────────────────────────────── */
+    ps2_kprintf("[GSBOX] frame %u order=%s %s: planes=%u pending=%u vram_left=%u title=\"%s\"\n",
+                (unsigned int)frame, order, tag, (unsigned int)npl, (unsigned int)gs_tex_pending(),
+                (unsigned int)gs_tex_vram_left(), win ? win->title : "(no xmb window)");
+
+    for (i = 0u; i < npl && i < GS_TEX_MAX; i++) {
+        const gs_tex_t *t = gs_tex_at(i);
+
+        if (!s_bx_pl[i].have) { gsbox_row(&s_bx_pl[i], "plane"); continue; }
+        ps2_kprintf("[GSBOX] plane %u: byte=%u tbw=%u tba=%u pad=%ux%u texels=%ux%u qwc=%u plane=0x%x%s\n",
+                    (unsigned int)i, (unsigned int)t->byte, (unsigned int)t->tbw,
+                    (unsigned int)t->tba, (unsigned int)t->pad_w, (unsigned int)t->pad_h,
+                    (unsigned int)t->px_w, (unsigned int)t->px_h, (unsigned int)t->qwc,
+                    (unsigned int)(uintptr_t)t->plane, t->pending ? " PENDING" : "");
+        gsbox_row(&s_bx_pl[i], "plane page");
+
+        /* The registry diff, and the reason the pointer is in the row above: a re-plan is the only way
+         * a session-global registry can answer a later frame differently from an earlier one without
+         * any code in the app having been touched.  SAME is the answer that clears it. */
+        if (s_prev_valid && i < s_prev_npl) {
+            const int moved = s_prev_plane[i] != t->plane || s_prev_byte[i] != t->byte ||
+                              s_prev_tbw[i] != t->tbw || s_prev_qwc[i] != t->qwc ||
+                              s_prev_padw[i] != t->pad_w || s_prev_padh[i] != t->pad_h;
+
+            if (!moved) {
+                ps2_kprintf("[GSBOX] frame %u plane %u registry: SAME\n", (unsigned int)frame,
+                            (unsigned int)i);
+            } else {
+                ps2_kprintf("[GSBOX] frame %u plane %u registry: CHANGED -- plane 0x%x -> 0x%x, byte %u "
+                            "-> %u, tbw %u -> %u, qwc %u -> %u, pad %ux%u -> %ux%u\n",
+                            (unsigned int)frame, (unsigned int)i,
+                            (unsigned int)(uintptr_t)s_prev_plane[i], (unsigned int)(uintptr_t)t->plane,
+                            (unsigned int)s_prev_byte[i], (unsigned int)t->byte,
+                            (unsigned int)s_prev_tbw[i], (unsigned int)t->tbw,
+                            (unsigned int)s_prev_qwc[i], (unsigned int)t->qwc,
+                            (unsigned int)s_prev_padw[i], (unsigned int)t->pad_w,
+                            (unsigned int)s_prev_padh[i], (unsigned int)t->pad_h);
+                if (s_prev_byte[i] != t->byte)
+                    ps2_kprintf("[GSBOX] frame %u plane %u registry: THE SPAN MOVED -- the old page is "
+                                "abandoned and a sampler still holding the old TEX0 reads it\n",
+                                (unsigned int)frame, (unsigned int)i);
+            }
+        }
+    }
+    if (s_prev_valid && (s_prev_npl != npl || s_prev_vram_left != gs_tex_vram_left()))
+        ps2_kprintf("[GSBOX] frame %u %s registry: planes %u -> %u, vram_left %u -> %u\n",
+                    (unsigned int)frame, tag, (unsigned int)s_prev_npl, (unsigned int)npl,
+                    (unsigned int)s_prev_vram_left, (unsigned int)gs_tex_vram_left());
+
+    for (i = 0u; i < npl && i < GS_TEX_MAX; i++) {
+        const gs_tex_t *t = gs_tex_at(i);
+
+        if (t == 0) continue;
+        s_prev_plane[i] = t->plane;
+        s_prev_byte[i] = t->byte; s_prev_tbw[i] = t->tbw; s_prev_qwc[i] = t->qwc;
+        s_prev_padw[i] = t->pad_w; s_prev_padh[i] = t->pad_h;
+    }
+    s_prev_npl = npl;
+    s_prev_vram_left = gs_tex_vram_left();
+    s_prev_valid = 1;
+
+    if (win == 0) {
+        ps2_kprintf("[GSBOX] frame %u order=%s %s: NO XMB WINDOW -- the box census is skipped\n",
+                    (unsigned int)frame, order, tag);
+        return;
+    }
+    gsbox_row(&s_bx_page, "page");
+    gsbox_row(&s_bx_canvas, "canvas");
+
+    if (s_bx_page.have && s_bx_canvas.have &&
+        s_bx_page.cell == s_bx_canvas.cell && s_bx_page.cells == s_bx_canvas.cells) {
+        for (i = 0u; i < s_bx_page.cells; i++)
+            if (s_bx_page.cell_first[i] == s_bx_canvas.cell_first[i] &&
+                s_bx_page.cell_n[i] == s_bx_canvas.cell_n[i]) agree++;
+    }
+
+    /* The second reading of the pair, cell by cell.  `s_prev_valid` is what makes the first call a
+     * control rather than a diff against zeroes, and the two numbers are read together: the page is
+     * what the eye gets, the canvas is what the app painted, and only a page that went flat while its
+     * canvas did not is a present-path fault. */
+    if (s_prev_valid) {
+        page_went = gsbox_diff(&s_bx_page, &s_prev_page, "page", tag, frame);
+        canvas_went = gsbox_diff(&s_bx_canvas, &s_prev_canvas, "canvas", tag, frame);
+        ps2_kprintf("[GSBOX] frame %u %s tick verdict: %s\n", (unsigned int)frame, tag,
+                    page_went && !canvas_went
+                        ? "THE TICK PUT FLAT CELLS ON THE PAGE THAT ITS CANVAS DOES NOT HAVE -- the "
+                          "damage-driven present wrote them, not the paint: read the 20y plate cut"
+                        : page_went && canvas_went
+                            ? "THE CANVAS WENT FLAT TOO -- TinyGL lost the art in its own bake at the "
+                              "tick, which is app/context state, not the GS stream"
+                            : "THE TICK MOVED NOTHING FLAT -- the corruption is not this event at this "
+                              "box: change the box or change the trigger before blaming the present");
+    }
+
+    gsprev_store(&s_prev_page, &s_bx_page);
+    gsprev_store(&s_prev_canvas, &s_bx_canvas);
+
+    /* The paired verdict, in the order that rules the harness out first.  `solid` counts are compared,
+     * never thresholded: what matters is whether the page holds flat cells the canvas did not have. */
+    if (!s_bx_page.have || !s_bx_canvas.have) {
+        verdict = "MEASURED NOTHING -- one of the two boxes could not be read; see the FAILED rows";
+    } else if (s_bx_page.err != GS_READ_BUS_OK) {
+        verdict = "PAGE READ FAILED -- the row above names the bus error, and nothing here is evidence";
+    } else if (s_bx_page.solid > s_bx_canvas.solid) {
+        verdict = "PAGE HAS MORE FLAT CELLS THAN THE CANVAS -- the paint had art the page lost: the "
+                  "stream or the sampler, not the bake";
+    } else if (s_bx_page.solid < s_bx_canvas.solid) {
+        verdict = "PAGE HAS FEWER FLAT CELLS THAN THE CANVAS -- the page disagrees with its own canvas in "
+                  "the app's favour; read agree= before believing either";
+    } else if (s_bx_canvas.solid == 0u) {
+        verdict = "NEITHER BOX IS FLAT -- no rectangle to measure at this frame: this run is a control";
+    } else {
+        verdict = "BOTH BOXES FLAT IN THE SAME CELLS -- the rectangles are the app's own paint: TinyGL did "
+                  "not sample the atlas either, which is the shared context, not the GS";
+    }
+    ps2_kprintf("[GSBOX] frame %u order=%s %s paired: page_solid=%u canvas_solid=%u cells_agree=%u/%u "
+                "VERDICT: %s\n",
+                (unsigned int)frame, order, tag, (unsigned int)s_bx_page.solid,
+                (unsigned int)s_bx_canvas.solid, (unsigned int)agree,
+                (unsigned int)s_bx_page.cells, verdict);
+}
+#endif /* BTRON_PS2_BENCH_TEX */
+
+/* `BENCH_ORDER=1`: the user's own sequence, headless -- `lilcu` at the prompt, some frames of it, then
+ * `xmb`.  `BENCH_ORDER=0` leaves ps2_bench_app()'s own open as the control, which is the state the
+ * glitch was reported from.  Four frames is enough to get past egl_create_window_surface() -- the
+ * uploads XMB is accused of missing happen from the first paint -- and the price is that many frames of
+ * an app whose frame costs seconds of emulator.
+ *
+ * It goes through shell_execute_cmd() rather than at open_lilcu64_demo_window() because that is the
+ * route the report describes and the one that has a verb table, a not-linked answer, and an echo this
+ * phase can count.  Whether the demo's window SURVIVED its own Escape is printed, because "run lilcu
+ * then xmb" has two readings -- with it closed and with it still up -- and the instrument must say which
+ * one it measured. */
+static void ps2_bench_lilcu_warm(GDEV *screen)
+{
+    int guard;
+    uint32_t made;
+
+    ps2_kprintf("\n[BENCH] order=lilcu-first: `lilcu` through the shell, then `xmb`\n");
+    s_bench_shell_lines = 0;
+    s_bench_tex_warm = 1;
+    s_bench_app_active = 1;
+    s_bench_app_made = 0u;
+    s_bench_app_over = 0u;
+    s_bench_app_left = GSBOX_WARM_FRAMES;
+    shell_execute_cmd("lilcu", ps2_bench_shell_out, NULL, NULL);
+    for (guard = 0; guard < (int)GSBOX_WARM_FRAMES + 6; guard++) {
+        if (!s_bench_app_left) break;
+        if (!ps2_bench_wnd_named("Lil Cu")) break;
+        ps2_gui_pass(screen);
+    }
+    made = s_bench_app_made;
+    s_bench_app_active = 0;
+    s_bench_app_left = 0u;
+    s_bench_app_over = 0u;
+    s_bench_app_made = 0u;
+    s_bench_tex_warm = 0;
+    ps2_kprintf("[BENCH] order=lilcu-first: demo echoed %d line(s), %u pass(es), its window now %s, "
+                "xmb window %s, planes=%u vram_left=%u\n",
+                s_bench_shell_lines, (unsigned int)made,
+                ps2_bench_wnd_named("Lil Cu") ? "UP" : "closed",
+                ps2_bench_wnd_named("Cross Media Bar") ? "up already" : "not yet",
+                (unsigned int)gs_tex_count(), (unsigned int)gs_tex_vram_left());
+#if BTRON_PS2_BENCH_TEX
+    ps2_bench_gs_planes();
+#endif
+}
+#endif /* BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER */
 
 /* `BENCH_GS=2` is this census and not the Stage-1 one: it needs a live desktop, a window that only
  * the app phase opens, and the presents whose pages it reads.  Value 1 keeps the standalone rung
@@ -15065,11 +15696,29 @@ static void ps2_bench_run(GDEV *screen)
      * dispatch's default backend is virtio (gl_dispatch.c:18) and this target has no
      * virtio GPU, so the phase is a harness waiting for the GL downstack to be
      * selected correctly -- which is exactly what it is here to measure. */
-    /* First, because a frame of this app costs tens of seconds of emulator time: the
-     * rows that answer "can the launcher actually run XMB" have to be in the log before
-     * the 60-frame phase below is cut off by the harness' timeout. */
+    /* The cadence this comment used to quote -- "tens of seconds a frame" -- is the 78 s figure task
+     * #20 measured and then closed: on this machine the emulator's own line prefixes put consecutive
+     * `[XMBT] cycle` rows about 0.08 s apart, and a frame is 75-110 ms of host wall.  What is still true
+     * is the ordering advice: the rows that answer "can the launcher actually run XMB" belong upstream,
+     * because a harness timeout cuts whatever is downstream. */
+#if BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER
+    /* LANE 24 runs ps2_bench_app() and NOT the key cycle, and the order is a measured finding rather
+     * than a preference.  The key phase never returns: its Escape does not close the launcher (#30),
+     * its own body keeps driving passes re-entrantly while the call is still on the stack, and with
+     * the grace-frame sentinel moved off it the run simply stalls inside that phase until the harness
+     * kills it -- `build/ps2-bench-gsbox-arm0.log` ends at `xmb frame 4010 at 294623 ms folded` and
+     * nothing after.  That is why every bench log back to 2026-10-16 has zero `opened through the task
+     * shim` rows: the phase that opens XMB through the shim, owns the frame budget, and carries the
+     * census has never executed.  Putting the key phase second would not fix it either -- the app
+     * phase ends the run from its own frame hook, so anything downstream of it is unreachable. */
+    ps2_bench_app(screen, BTRON_PS2_BENCH_APP_FRAMES);
+    /* Named, not called, so the warning-free build cannot be read as the phase having run: this arm
+     * skips it on purpose, and #30 is what restores it. */
+    (void)ps2_bench_launch_xmb_by_key;
+#else
     ps2_bench_launch_xmb_by_key(screen);
-    ps2_bench_app(BTRON_PS2_BENCH_APP_FRAMES);
+    ps2_bench_app(screen, BTRON_PS2_BENCH_APP_FRAMES);
+#endif
 #endif
 
     /* Runs last of the phases, so nothing downstream inherits the windows it opens;
@@ -15175,7 +15824,8 @@ static void ps2_gui_pass(GDEV *screen)
          * window up, and taking values rather than the pointer is deliberate -- the WND
          * does not outlive the close this phase's own Escape causes, and reading it after
          * the call returned would print geometry for a window that is already gone. */
-        if (s_bench_shell_watch && !s_bench_shell_window_seen && s_bench_app_made <= 3u) {
+        if (s_bench_shell_watch && !s_bench_shell_window_seen && !s_bench_tex_warm &&
+            s_bench_app_made <= 3u) {
             const WND *w = ps2_bench_wnd_named("Cross Media Bar");
 
             if (w) {
@@ -15202,7 +15852,11 @@ static void ps2_gui_pass(GDEV *screen)
          * and not in its hold, SLEEP would mean the hold is marked around the wrong span, NEW
          * at frame 3 would mean the counted passes are the session loop's and not the body's,
          * and no row at all would mean cre_tsk() never got a slot. */
-        if (s_bench_app_made == 3u) {
+        /* Every XMB-labelled row below is suppressed while the demo owns the counters, because a
+         * `frame 3` census of the launcher while lilcu is on the screen would be a row about a
+         * window that is not being measured.  The warm arm's own rows are printed by
+         * ps2_bench_lilcu_warm() when it returns. */
+        if (!s_bench_tex_warm && s_bench_app_made == 3u) {
             char trow[64];
 
             /* Walked to the end rather than to PS2_MAX_TASKS: that macro belongs to the task
@@ -15224,13 +15878,16 @@ static void ps2_gui_pass(GDEV *screen)
          * between a renderer that is slow and one that is stuck, and the elapsed
          * column is the number that tells them apart.  Sparse on purpose: the console
          * write itself costs bus time, and this phase measures a frame. */
-        if (s_bench_app_made <= 3u || (s_bench_app_made % 10u) == 0u)
+        if (!s_bench_tex_warm &&
+            (s_bench_app_made <= 3u || (s_bench_app_made % 10u) == 0u))
             /* Folded clock, not ps2_us_since(): a raw Count delta is 32 bits at
              * 147.18 MHz and wraps every 29.1 s, which made the first version of this
              * row print 14446, 24884, 6107 ms for three equally spaced frames.  The
              * fold is only exact while something polls between wraps, and one frame of
-             * this app outlives two of them, so the column is monotonic but short: the
-             * wall cadence is the emulator's own prefix on these lines, ~78 s a frame. */
+             * this app outlives two of them, so the column is monotonic but short.  The
+             * wall cadence is the emulator's own prefix on these lines -- about 75-110 ms
+             * a frame on this machine, which is why a bench run reaches thousands of
+             * frames inside its timeout. */
             ps2_kprintf("[BENCH] xmb frame %u at %u ms folded\n",
                         (unsigned int)s_bench_app_made,
                         (unsigned int)((btron_render_perf_us() - s_bench_app_t0) / 1000u));
@@ -15249,18 +15906,89 @@ static void ps2_gui_pass(GDEV *screen)
 #endif
         /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
          * renderer that needed its textures baked, and one black both times never drew. */
-        if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_face_stats("frame 3 "); ps2_bench_gs_planes(); }
-        if (s_bench_app_made == 30u) { ps2_bench_xmb_surface("frame 30"); ps2_bench_face_stats("frame 30"); }
+        if (!s_bench_tex_warm && s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_face_stats("frame 3 "); ps2_bench_gs_planes(); }
+        if (!s_bench_tex_warm && s_bench_app_made == 30u) { ps2_bench_xmb_surface("frame 30"); ps2_bench_face_stats("frame 30"); }
         /* LANE 12's census runs on three consecutive passes.  It samples the canvas the
          * previous pass finished, so the delta between two of these rows is exactly one
          * XMB frame, and the third row is the control: a wave that moves the picture and
          * a clock that moves a row once a second give different answers over three.
          * Whether the 28 ms rebuild and the 4.7 ms transfer are work or redundancy is
          * the number the frame's second-biggest term turns on. */
-        if (s_bench_app_made >= 4u && s_bench_app_made <= 6u)
+        if (!s_bench_tex_warm && s_bench_app_made >= 4u && s_bench_app_made <= 6u)
             ps2_bench_canvas_census(screen, (unsigned int)s_bench_app_made);
+#if BTRON_PS2_BENCH_TEX
+        /* LANE 24's paired cell census, at the same frame the launcher's own surface row is
+         * taken -- one frame, so the two rows describe one picture rather than two.  The census
+         * reads all three of its boxes before it prints any of them now, which is the only order
+         * that keeps a console repaint from being the thing the page row is describing. */
+        static char s_tex_title[64];        /* the caption the last reading saw */
+        static uint32_t s_tex_ticks;        /* title changes seen since frame 3 */
+        static uint32_t s_tex_taken;        /* after-tick readings taken, against the cap */
+        static uint32_t s_tex_at;           /* frame the next owed reading fires at */
+        static uint32_t s_tex_left;         /* readings owed for the tick that just fired */
+
+        if (!s_bench_tex_warm && s_bench_app_made == 3u) {
+            const WND *w3 = ps2_bench_wnd_named("Cross Media Bar");
+
+            ps2_bench_tex_census(s_bench_app_made,
+                                 BTRON_PS2_BENCH_ORDER == 1u ? "lilcu-first" : "alone", "first");
+            if (w3) {
+                tkl_strncpy(s_tex_title, w3->title, sizeof(s_tex_title) - 1u);
+                s_tex_title[sizeof(s_tex_title) - 1u] = '\0';
+            }
+            s_tex_left = 0u;
+        }
+        /* The operator's trigger, watched rather than assumed -- "Icons show inititially fine but get
+         * corrupted after FPS ticker changed".  That is a claim about ONE event, so the instrument now
+         * runs a before/after pair across it.  The event is datable without guessing:
+         * src/gl/egl_surface.c's fps_overlay_tick() closes a counting window at 250 ms or 30 frames
+         * and renames the window through wnd_set_title(), and wnd.c's damage for a rename is the tab
+         * rect alone.  So EVERY caption change after frame 3 is a tick: the first two of the run that
+         * built this instrument were clean, and a claim that a LATER tick does the damage can only be
+         * tested by sampling later ticks.  Two readings per tick -- one on the next pass, so the tick's
+         * own present has landed, and one four passes later, which tells a corruption from a flicker --
+         * capped by GSBOX_READ_CAP because a reading is ~1.4 MB of Local->Host DMA.  Silent at
+         * detection: a print here would be an upload of the page the next reading is about to read. */
+        if (!s_bench_tex_warm && s_bench_app_made > 3u && s_tex_title[0]) {
+            const WND *w = ps2_bench_wnd_named("Cross Media Bar");
+
+            if (w && tkl_strcmp(s_tex_title, w->title) != 0) {
+                s_tex_ticks++;
+                tkl_strncpy(s_tex_title, w->title, sizeof(s_tex_title) - 1u);
+                s_tex_title[sizeof(s_tex_title) - 1u] = '\0';
+                if (s_tex_taken < GSBOX_READ_CAP) {
+                    s_tex_left = 2u;
+                    s_tex_at = s_bench_app_made + 1u;
+                }
+            }
+        }
+        if (!s_bench_tex_warm && s_tex_left && s_bench_app_made >= s_tex_at) {
+            const uint32_t which = s_tex_left;
+
+            ps2_bench_tex_census(s_bench_app_made,
+                                 BTRON_PS2_BENCH_ORDER == 1u ? "lilcu-first" : "alone",
+                                 which == 2u ? "after tick" : "tick +4");
+            /* AFTER the census, not before, for the reason in that function's own note: a row is a
+             * console repaint and a repaint is an upload of the page the census reads.  This is the
+             * reading's date stamp -- which tick, seen at which frame -- and nothing downstream of it
+             * is read on this pass. */
+            if (which == 2u)
+                ps2_kprintf("[GSBOX] tick %u seen at frame %u, read at %u: the caption is now \"%s\"\n",
+                            (unsigned int)s_tex_ticks, (unsigned int)(s_bench_app_made - 1u),
+                            (unsigned int)s_bench_app_made, s_tex_title);
+            s_tex_taken++;
+            s_tex_left--;
+            if (s_tex_left) s_tex_at = s_bench_app_made + 4u;
+        }
+        /* One more at the phase's own last frame: the budget's Escape is a second event the operator
+         * describes -- the desktop they leave is not the desktop they opened -- and the diff rows above
+         * only mean anything if a reading exists on both sides of it. */
+        if (!s_bench_tex_warm && s_bench_app_made == BTRON_PS2_BENCH_APP_FRAMES)
+            ps2_bench_tex_census(s_bench_app_made,
+                                 BTRON_PS2_BENCH_ORDER == 1u ? "lilcu-first" : "alone", "last");
+#endif
 #if BTRON_PS2_BENCH_GS >= 2
-        if (s_bench_app_made == 3u)
+        if (!s_bench_tex_warm && s_bench_app_made == 3u)
             ps2_bench_gs_live_census(s_bench_app_made);
 #endif
     }
@@ -15271,12 +15999,13 @@ static void ps2_gui_pass(GDEV *screen)
          * what the event queue answered, and the depth xb_go_back() is standing at.
          * r!=0 means the key died in the queue; r==0 with depth>1 means it was taken
          * as a go-back, which is not a close. */
-        ps2_kprintf("[BENCH] xmb: budget spent, escape r=%d depth=%d top=%s made=%u\n",
+        ps2_kprintf("[BENCH] %s: budget spent, escape r=%d depth=%d top=%s made=%u\n",
+                    s_bench_tex_warm ? "lilcu warm" : "xmb",
                     (int)injected, xmb_depth(), get_top_wnd() ? "up" : "closed",
                     (unsigned int)s_bench_app_made);
         s_bench_app_over = 1u;
-    } else if (s_bench_app_active && s_bench_app_over &&
-               ++s_bench_app_over > 2u && !s_bench_sentinel) {
+    } else if (s_bench_app_active && s_bench_app_owns_end && !s_bench_tex_warm &&
+               s_bench_app_over && ++s_bench_app_over > 2u && !s_bench_sentinel) {
         /* The frame budget ends the run when the app does not end itself.  Without
          * this the closing sentinel is only reachable through the app's exit, and the
          * 2026-10-10 PCSX2 run of a 3-frame ask was still printing frame 40 when the

@@ -35,7 +35,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
-        test-xmb-render test-xmb-render-tgl \
+        test-xmb-render test-xmb-render-tgl test-gl-context \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
@@ -1359,13 +1359,32 @@ BENCH_LAUNCH_FRAMES ?= 3
 # unaligned count print as their own labelled row and are NOT part of the verdict, because whether
 # PCSX2 raises CSR.VSYNC here is a fact about the emulator rather than about the rotation.
 BENCH_GS       ?= 0
+# LANE 24's two dials, both off so every older run keeps its rows.  BENCH_TEX=1 arms a paired cell
+# census taken from the app phase's frame hook: the live display page and the desktop canvas read at
+# the SAME box, plus every registered texture plane read out of VRAM, and the verdict row says which
+# of the three holds the flat rectangles the user reports.  It is now a BEFORE/AFTER pair rather than
+# one frame, because the report moved: "Icons show inititially fine but get corrupted after FPS ticker
+# changed" names an event, so the hook watches the window caption (fps_overlay_tick() renames it through
+# wnd_set_title(), whose damage is the tab rect alone) and censuses again on the next pass and at +4,
+# diffing cell by cell and diffing the texture registry's VRAM spans.  BENCH_ORDER=1 opens `lilcu`
+# before `xmb` -- the sequence the original report describes -- which is the variable; the census above
+# is the measurement.  Both need BENCH_APP=1, since the windows they ask about only the app phase opens.
+# With either dial up, the app phase runs WITHOUT the launcher-by-key cycle ahead of it: that phase
+# never returns (its Escape does not close the launcher, task #30), and the census lives in the phase
+# after it, which is why bench logs back to 2026-10-16 carry no `opened through the task shim` row.
+BENCH_TEX      ?= 0
+BENCH_ORDER    ?= 0
 $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP) \
                                 -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u \
                                 -DBTRON_PS2_BENCH_LAUNCH_FRAMES=$(BENCH_LAUNCH_FRAMES)u \
+                                -DBTRON_PS2_BENCH_TEX=$(BENCH_TEX) \
+                                -DBTRON_PS2_BENCH_ORDER=$(BENCH_ORDER)u \
                                 -DBTRON_PS2_BENCH_GS=$(BENCH_GS)
 
 PS2_BGS_STAMP = .build/ps2-bgs.stamp
-PS2_BGS_KEY := $(BENCH_APP):$(BENCH_GS):$(BENCH_LAUNCH_FRAMES)
+# The frame budget is IN the key: it is a -D of this same object, and a loop that re-runs with
+# BENCH_APP_FRAMES=12 after a run at 60 would otherwise silently reuse the 60-frame image.
+PS2_BGS_KEY := $(BENCH_APP):$(BENCH_GS):$(BENCH_LAUNCH_FRAMES):$(BENCH_APP_FRAMES):$(BENCH_TEX):$(BENCH_ORDER)
 PS2_BGS_PREV := $(shell cat $(PS2_BGS_STAMP) 2>/dev/null)
 ifneq ($(PS2_BGS_PREV),$(PS2_BGS_KEY))
 $(shell mkdir -p ./.build && echo '$(PS2_BGS_KEY)' >$(PS2_BGS_STAMP) && rm -f $(PS2_BENCH_OBJ))
@@ -2851,6 +2870,32 @@ $(TEST_XMB_TGL_BIN): $(TEST_XMB_TGL_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_XMB_TGL_OBJS) -o $@ $(LDFLAGS) -lm
 
+# LANE 24's other half: the law that the icon rectangles were actually breaking.  egl_surface.c
+# installs a GL pipeline for EVERY window surface and tears it down when any one of them closes,
+# and TinyGL has one context -- so the second window orphaned the first's texture names, and a
+# lost name is not an error to the sampler, it is the vertex colour drawn instead of the texel:
+# one flat rectangle per icon.  See the header of the suite for the two operator reports that
+# pinned it, and for why `lilcu then xmb` made it disappear.
+# A private object suffix, because this is the only suite that includes tinygl/zgl.h.
+TEST_GLCI_SRCS = verify/tests/test_gl_context_isolation.c \
+                 src/gl/gl_dispatch.c src/gl/backend_tinygl.c src/gl/backend_virgl.c \
+                 $(TINYGL_SRCS)
+TEST_GLCI_OBJS = $(TEST_GLCI_SRCS:.c=.ci.o)
+TEST_GLCI_BIN  = ./.build/test_gl_context_isolation
+
+%.ci.o: %.c
+	$(CC) $(CFLAGS) -DBTRON_GL_BACKEND_TINYGL -MMD -MP -c $< -o $@
+
+test-gl-context: $(TEST_GLCI_BIN)
+	@echo "=========================================================="
+	@echo " Running LANE 24 gate: one context, N window surfaces..."
+	@echo "=========================================================="
+	@./$(TEST_GLCI_BIN)
+
+$(TEST_GLCI_BIN): $(TEST_GLCI_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_GLCI_OBJS) -o $@ $(LDFLAGS) -lm
+
 # ═══════════════════════════════════════════════════════════════════
 # XMB icon atlas: geometry on the host, sheet in the image
 # ═══════════════════════════════════════════════════════════════════
@@ -2977,7 +3022,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

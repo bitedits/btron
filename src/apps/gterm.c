@@ -1817,3 +1817,11 @@ void gterm_close_menu(WND *wnd) {
         app_menu_close(&st->menu_bar);
     }
 }
+
+void gterm_exec(WND *wnd, const char *cmd_line) {
+    if (!wnd || !cmd_line) return;
+    GTermState *st = (GTermState*)(uintptr_t)wnd->user_data;
+    if (st) {
+        gterm_execute_cmd(wnd, st, cmd_line);
+    }
+}

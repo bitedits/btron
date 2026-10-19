@@ -144,6 +144,23 @@ APPS_MAP = {
             "alt": "端末 バージョン情報 (About gterm)"
         }
     ],
+    "Commander.html": [
+        {
+            "screen": "../img/screens/Commander_SC.png",
+            "caption": "実機描画フレームバッファより自動抽出された Sokhatsky Commander (sc) 左右二面ファイルマネージャ (Dual-Pane File Manager)",
+            "alt": "Sokhatsky Commander (sc) 二面ファイル管理画面"
+        },
+        {
+            "screen": "../img/screens/Commander_TV.png",
+            "caption": "実機描画フレームバッファより自動抽出された Terminal Vision (tv) 高速テキスト/テーブルビューア (Terminal Vision Table/Text Viewer)",
+            "alt": "Terminal Vision (tv) テキスト閲覧画面"
+        },
+        {
+            "screen": "../img/screens/Commander_Exit.png",
+            "caption": "実機描画フレームバッファより自動抽出された F10 終了確認パネル (Exit Panel F10 Quit Sokhatsky Commander)",
+            "alt": "F10 終了確認パネル (Exit Panel F10 Quit Sokhatsky Commander)"
+        }
+    ],
     "Cassette.html": [
         {
             "screen": "../img/screens/Cassette_Application.png",

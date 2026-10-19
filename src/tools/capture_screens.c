@@ -46,6 +46,7 @@ extern WND* open_tad_browser_window(const char *filepath, const char *title);
 extern WND* open_audio_player_window(void);
 extern WND* open_orchestra_window(void);
 extern WND* open_gterm_window(void);
+extern WND* open_gterm_window_rect(H x, H y, H w, H h, UW attr);
 extern WND* open_about_window(void);
 extern WND* open_teditor_about_window(void);
 extern WND* open_vobj_about_window(void);
@@ -68,6 +69,7 @@ extern H    tip_get_caret_y(void);
 /* Forward declarations for GTerm internals */
 typedef struct GTermState GTermState;
 extern void gterm_append_line(GTermState *st, const char *text, COLOR col);
+extern void gterm_exec(WND *wnd, const char *cmd_line);
 
 /* Forward declarations for Chat */
 typedef struct ChatClient ChatClient;
@@ -323,6 +325,42 @@ int main(int argc, char **argv) {
             }
             redraw_all_windows();
             dump_window_rect(dev, w_term, "/tmp/btron_raw_screens/Terminal_Application.raw");
+            cls_wnd(w_term);
+        }
+
+        /* Sokhatsky Commander (SC) Dual-Pane File Manager */
+        reset_isolation_state(dev);
+        WND *w_sc = open_gterm_window_rect(70, 180, 1120, 396,
+                                           WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+        if (w_sc) {
+            gterm_exec(w_sc, "sc");
+            inval_wnd(w_sc);
+            redraw_all_windows();
+            dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_SC.raw");
+            dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_Application.raw");
+
+            /* F10 Quit Sokhatsky Commander (Exit Confirmation Panel) */
+            EVT evt_f10;
+            memset(&evt_f10, 0, sizeof(EVT));
+            evt_f10.type = EV_KEY_DOWN;
+            evt_f10.key = BTRON_KEY_F10;
+            if (w_sc->event_handler) w_sc->event_handler(w_sc, &evt_f10);
+            inval_wnd(w_sc);
+            redraw_all_windows();
+            dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_Exit.raw");
+            cls_wnd(w_sc);
+        }
+
+        /* Terminal Vision (TV) Table/Text Viewer */
+        reset_isolation_state(dev);
+        WND *w_tv = open_gterm_window_rect(70, 180, 1120, 396,
+                                           WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+        if (w_tv) {
+            gterm_exec(w_tv, "tv /SYS/CLU.md");
+            inval_wnd(w_tv);
+            redraw_all_windows();
+            dump_window_rect(dev, w_tv, "/tmp/btron_raw_screens/Commander_TV.raw");
+            cls_wnd(w_tv);
         }
 
         /* Cassette Application Window */

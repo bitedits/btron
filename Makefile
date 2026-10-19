@@ -3326,6 +3326,15 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/fs/blk_part.c \
                        src/fs/vol.c \
                        src/fs/file.c \
+                       src/clu/lang.c \
+                       src/clu/term.c \
+                       src/clu/tty.c \
+                       src/clu/vfs.c \
+                       src/clu/sc/files.c \
+                       src/clu/sc/input.c \
+                       src/clu/sc/menus.c \
+                       src/clu/sc/sc.c \
+                       src/clu/tv/tv.c \
                        $(CLU_APPS_SRCS) \
                        src/clu/clu.c \
                        src/apps/b_drivesetup.c \

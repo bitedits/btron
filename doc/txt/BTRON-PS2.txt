@@ -1,0 +1,184 @@
+# THE ARCHITECTURE AND IMPLEMENTATION OF THE B-SYSTEM for PlayStation 2
+
+## High-Performance Real-Time OS Engineering, Fixed-Function 3D Acceleration, and Hybrid Window Compositing
+
+*A Technical Reference and Architectural Treatise on the BTRON Implementation*
+
+---
+
+### PREFACE: PHILOSOPHY OF THE B-SYSTEM CODEBASE
+
+The B-System is an industrial-grade, deterministic operating system implementation rooted in the TRON (The Real-time Operating system Nucleus) architecture. Engineered in strict C99, the codebase bridges microkernel real-time guarantees, cleanroom fixed-function OpenGL rasterization, and hardware-accelerated graphics synthesis on architectures with rigid pipeline constraints—most notably the MIPS R5900 Emotion Engine and the Sony Graphics Synthesizer (GS).
+
+This treatise consolidates the core mathematical, architectural, and systemic masterpieces extracted during the formal peer review of the implementation codebase.
+
+---
+
+### TABLE OF CONTENTS
+1. [Chapter 1: The BTRON System Model & Desktop Architecture](#chapter-1-the-btron-system-model--desktop-architecture)
+2. [Chapter 2: Fixed-Function Graphics Synthesizer (GS) Hardware Pipeline](#chapter-2-fixed-function-graphics-synthesizer-gs-hardware-pipeline)
+3. [Chapter 3: Blending Algebra & Dynamic Range Adaptation](#chapter-3-blending-algebra--dynamic-range-adaptation)
+4. [Chapter 4: Fixed-Point Coordinate Transforms & ABI Boundary Isolation](#chapter-4-fixed-point-coordinate-transforms--abi-boundary-isolation)
+5. [Chapter 5: Memory Architecture, DMA Banding & VSYNC Double-Buffering](#chapter-5-memory-architecture-dma-banding--vsync-double-buffering)
+6. [Chapter 6: Cleanroom Verification & Pixel-Exact Telemetry](#chapter-6-cleanroom-verification--pixel-exact-telemetry)
+
+---
+
+### CHAPTER 1: THE BTRON SYSTEM MODEL & DESKTOP ARCHITECTURE
+
+#### 1.1 The Real-Time Window Subsystem
+The B-System desktop interface departs fundamentally from traditional asynchronous X11 or Wayland windowing models. Window state, clipping boundaries, and surface lifecycles are governed by direct synchronous passes through the window manager:
+
+- **Window Descriptor Hierarchy (`WND`)**: Window objects maintain client rectangles, frame extents, z-order links, title attributes, and event hooks.
+- **Client Geometry Invariance**: The visible canvas operates in a device-coordinate viewport, where title bars, resize borders, and menu panels occupy explicit non-overlapping coordinate bands.
+- **Surface Isolation**: In accordance with the single-context multi-surface invariant, individual window surfaces share the underlying OpenGL execution context without leaking texture name spaces or display list bindings across process boundaries.
+
+#### 1.2 Interactive Shell and Stage Transitions
+The runtime cleanly differentiates initialization and operational stages:
+- **Stage 1 (Text Console & Diagnostic Probes)**: Direct register and DMA access without compositor interaction, enabling diagnostic probes (`gsquad`, `gsread`, `gstex`) to verify low-level hardware paths with zero software rasterizer overhead.
+- **Stage 2 (GUI Window Shell & Compositor)**: Continuous event loop dispatching input packets (PS/2 keyboard, mouse, USB HID) while synchronizing VRAM band uploads with vertical blanking intervals.
+
+---
+
+### CHAPTER 2: FIXED-FUNCTION GRAPHICS SYNTHESIZER (GS) HARDWARE PIPELINE
+
+#### 2.1 GIF DMA Channels and Quadword Alignment
+All communication with the Graphics Synthesizer traverses the Graphic Interface (GIF) via DMA Channel 2. The GIF operates on 128-bit quadwords (QW). Every packet submitted to the GIF adheres to strict structural formatting:
+
+```
++-----------------------------------------------------------------------+
+| NREG (4b) | FLG (2b) | PRIM (11b) | PRE (1b) | EOP (1b) | NLOOP (15b) |  (Tag Low 64b)
++-----------------------------------------------------------------------+
+|                              REGS (64b)                               |  (Tag High 64b)
++-----------------------------------------------------------------------+
+```
+
+#### 2.2 FLG=PACKED vs FLG=REGLIST Encodings
+The hardware provides two primary packet streaming formats:
+
+1. **`FLG=PACKED` (Sparse Format)**:
+   - Each register named in the `REGS` descriptor consumes one dedicated 128-bit quadword.
+   - Ideal for low-frequency state configuration (such as drawing environment setup packets writing `FRAME_1`, `ZBUF_1`, `XYOFFSET_1`, and `SCISSOR_1`).
+   
+2. **`FLG=REGLIST` (Dense Format)**:
+   - Two 64-bit register values are packed into each 128-bit quadword.
+   - Stream layout:
+     - Even 64-bit slots contain `RGBAQ` or `ST`.
+     - Odd 64-bit slots contain `XYZ2` coordinates.
+   - **Bandwidth Optimization**: Untextured triangles pack into 2 QW/vertex (`{RGBAQ, XYZ2}`), while 2D rectangular sprites pack into 2 QW/primitive (`{RGBAQ, XYZ2, XYZ2}`).
+
+#### 2.3 The PRIM Latch Invariant & GIFTAG Bit 46 (`PRE`)
+A subtle hardware constraint in the GS rasterizer concerns primitive mode configuration:
+
+> **Hardware Invariant**: GIFTAG bit 46 (`PRE`) controls PRIM register output. When `PRE=1` (`GIF_PRE_ENABLE`), the primitive field embedded in the tag is suppressed, causing the primitive to draw under whatever configuration was previously latched into the internal `GS_REG_PRIM` register.
+
+To reliably transition between primitive types (e.g. flat SPRITE vs Gouraud-shaded TRIANGLE) without inheriting stale pipeline state, the B-System compiler emits an explicit A+D register write targeting `GS_REG_PRIM` immediately preceding the vertex stream:
+
+```c
+/* Explicit A+D Preamble to configure TRIANGLE + Gouraud Shading (IIP=1) */
+s_ad[0] = gs_pack_giftag(1u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
+s_ad[1] = gs_pack_regs(ad_nibble, 1u);
+s_ad[2] = gs_pack_prim(GS_PRIM_TRI, GS_IIP_GOURAUD, 0, 0, 0, 0, 0, 0, 0);
+s_ad[3] = GS_REG_PRIM;
+```
+
+---
+
+### CHAPTER 3: BLENDING ALGEBRA & DYNAMIC RANGE ADAPTATION
+
+#### 3.1 The GS Blending Equation
+The fixed-function rasterizer computes pixel blend equations according to:
+
+$$\text{Output} = \left( \frac{(\text{Color}_A - \text{Color}_B) \times \text{Alpha}_C}{128} \right) + \text{Color}_D$$
+
+Encoded within the 64-bit `GS_REG_ALPHA` register:
+- **`A[1:0]`**: Selects $\text{Color}_A$ (`0=Cs`, `1=Cd`, `2=0`)
+- **`B[3:2]`**: Selects $\text{Color}_B$ (`0=Cs`, `1=Cd`, `2=0`)
+- **`C[5:4]`**: Selects $\text{Alpha}_C$ (`0=As`, `1=Ad`, `2=FIX`)
+- **`D[7:6]`**: Selects $\text{Color}_D$ (`0=Cs`, `1=Cd`, `2=0`)
+- **`FIX[39:32]`**: 8-bit constant scalar ($0 \dots 255$)
+
+#### 3.2 Fixed-Function Emulation of OpenGL Blending
+
+1. **Standard Alpha Blending (`GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`)**:
+   $$(C_s - C_d) \times A_s \gg 7 + C_d$$
+   Configured via: $A=C_s(0), B=C_d(1), C=A_s(0), D=C_d(1), \text{FIX}=0$.
+
+2. **Destination Brightening (`GL_DST_COLOR, GL_ONE`)**:
+   Standard OpenGL destination-modulated luminance maps require multiplying destination color by source luminance ($C_d \times C_s$). Because the GS rasterizer lacks a per-channel color multiplier, the B-System derives an exact luminance-modulation algebra:
+   
+   $$(C_d - 0) \times A_s \gg 7 + C_d = C_d \times \left(1 + \frac{A_s}{128}\right)$$
+   
+   Configured via: $A=C_d(1), B=0(2), C=A_s(0), D=C_d(1), \text{FIX}=0$.
+   
+   *Result*: Background hue is 100% preserved while luminance scales dynamically with the mesh vertex alpha, rendering translucent ribbons and 3D wave meshes without color desaturation.
+
+---
+
+### CHAPTER 4: FIXED-POINT COORDINATE TRANSFORMS & ABI BOUNDARY ISOLATION
+
+#### 4.1 Fixed-Point GS Vertex Quantization (12.4 Format)
+The GS rasterizer interprets vertex screen coordinates as unsigned 16-bit integers in 12.4 fixed-point format (1/16th pixel resolution), biased by the viewport page offset:
+
+$$X_{\text{hw}} = \left( \lfloor X_{\text{px}} \times 16 \rfloor + \text{GS\_XYOFFSET\_PAGE} \right) \ \& \ \text{0xFFFF}$$
+$$Y_{\text{hw}} = \left( \lfloor Y_{\text{px}} \times 16 \rfloor + \text{GS\_XYOFFSET\_PAGE} \right) \ \& \ \text{0xFFFF}$$
+
+Where $\text{GS\_XYOFFSET\_PAGE} = 2048 \times 16 = 32768$. This centering offset ensures negative relative vertex coordinates remain positive within the 16-bit register space across a valid coordinate envelope of $-2048 \dots +2047$ pixels.
+
+#### 4.2 MIPS Floating-Point ABI Boundary Isolation
+To guarantee deterministic execution and avoid software floating-point emulation traps on MIPS R5900 processors:
+- **Geometry Processing Stage (`vertex_stage.c`)**: Compiled with `-mhard-float` to exploit the EE Coprocessor 1 (FPU) for matrix transformations and wave mesh projections.
+- **Device Driver Presentation Layer (`backend_eegs.c`, `ps2_gs_rec.c`)**: Compiled with `-msoft-float`.
+- **The Bridge Interface (`grid_map.h`)**: Communication across this ABI boundary strictly prohibits `float` parameters. Coordinates are flattened into integer device space structs (`tgl_grid_pt_t`), encapsulating fixed-point device coordinates and 32-bit packed RGBAQ color words.
+
+---
+
+### CHAPTER 5: MEMORY ARCHITECTURE, DMA BANDING & VSYNC DOUBLE-BUFFERING
+
+#### 5.1 VRAM Allocation & Compaction
+The GS provides 4 MB of ultra-high-bandwidth embedded DRAM (eDRAM). Memory layout is organized in 2048-byte pages:
+
+```
++-----------------------------------------------------------------+
+| Framebuffer 0 (800x600 CT32 / CT16)                            |
++-----------------------------------------------------------------+
+| Framebuffer 1 (800x600 CT16 Double-Buffer Target)               |
++-----------------------------------------------------------------+
+| Z-Buffer (800x600 Z16S / Z32)                                   |
++-----------------------------------------------------------------+
+| Texture Atlas & Dynamic Font Glyphs                             |
++-----------------------------------------------------------------+
+```
+
+#### 5.2 Multi-Row Band Uploads & 16-bit DMA Counter Limits
+Direct Memory Access Channel 2 utilizes a 16-bit quadword transfer counter (`CH_QWC`).
+- A full $800 \times 600$ 32-bit framebuffer occupies $120,000$ quadwords.
+- Passing $120,000$ into a 16-bit register causes an integer overflow ($120,000 \pmod{65,536} = 54,464$ QW), truncating the transfer.
+- **Architectural Solution**: Framebuffer presentations are partitioned into 150-row horizontal bands ($30,000$ QW each), remaining safely below the $65,535$ limit.
+
+#### 5.3 Asynchronous Double-Buffering & Damage Debt
+In 16-bit display mode (`PSMCT16`), double-buffering is enabled:
+1. **Front Buffer**: Scanned out continuously by the PCRTC.
+2. **Back Buffer**: Staged with dirty rectangle damage regions.
+3. **Damage Debt**: Any band updated in the back buffer while hidden is recorded as a damage debt mask. When flipping pages via `ps2_gs_flip()`, accumulated debt is patched into the newly retired buffer, guaranteeing identical frame sync with zero tearing.
+
+---
+
+### CHAPTER 6: CLEANROOM VERIFICATION & PIXEL-EXACT TELEMETRY
+
+#### 6.1 Headless VRAM Readback Verification
+To verify rendering correctness without relying on visual inspection or interactive monitors:
+- The system initiates Local->Host VRAM DMA transfers across VIF1 and Channel 1 (`ps2_gs_vram_read`).
+- Pre-poisons read buffers with sentinel words (`0x00FF00FF`) to detect incomplete DMA bursts.
+- Evaluates histogram distributions against expected primitive bounding boxes.
+
+#### 6.2 Inter-Frame Hash Invariance
+For static scene optimization, the present layer computes a dual 32-bit FNV-1a hash across the display list:
+- Hashes two 32-bit words per quadword to eliminate 64-bit software emulation on 32-bit MIPS registers.
+- When consecutive frames produce identical hash signatures and zero damage rects, DMA presentation is elided, conserving bus bandwidth and CPU cycles.
+
+---
+
+### CONCLUSION
+
+The B-System demonstrates that high visual fidelity, deterministic real-time responsiveness, and portable architectural cleanliness can coexist within a disciplined C99 design. By decoupling hardware constraints through explicit mathematical mappings, the system achieves maximum performance on fixed-function silicon while maintaining cleanroom standards suitable for peer review, formal publication, and mission-critical embedded deployment.

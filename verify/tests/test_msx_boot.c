@@ -137,7 +137,7 @@ extern uint8_t *vdp_vram(uint32_t *size);
             v9938_t *v = msx_get_v9938();
             if (v) {
                 printf("V9938 regs:");
-                for (int r = 0; r <= 23; r++) printf(" R%d=%02X", r, v->regs[r]);
+                for (int r = 0; r <= 31; r++) printf(" R%d=%02X", r, v->regs[r]);
                 printf("\n");
                 printf("V9938 pal:");
                 for (int p = 0; p < 16; p++) printf(" P%d=%04X", p, v->pal[p]);

@@ -26,12 +26,26 @@
 #define R1_IE0           0x20u
 #define R0_IE1           0x10u
 
-/* Default MSX palette */
+/* Official V9938 power-on default palette (V9938 MSX-VIDEO Technical Data Book p. 148):
+ * 0x000, 0x000, 0x611, 0x733, 0x117, 0x327, 0x151, 0x627,
+ * 0x171, 0x373, 0x661, 0x664, 0x411, 0x265, 0x555, 0x777 (GRB 3-bit values mapped to 0..255) */
 static const uint8_t s_def_pal[16][3] = {
-    {   0,   0,   0 }, {   0,   0,   0 }, {  33, 200,  66 }, {  94, 220, 120 },
-    {  84,  85, 237 }, { 125, 118, 252 }, { 212,  83,  61 }, {  66, 235, 245 },
-    { 252,  87,  85 }, { 255, 124, 118 }, { 212, 193,  84 }, { 233, 208, 125 },
-    {  34, 150,  48 }, { 200,  90, 196 }, { 204, 204, 204 }, { 255, 255, 255 }
+    {   0,   0,   0 },  /*  0: transparent / black */
+    {   0,   0,   0 },  /*  1: black               */
+    {  36, 219,  36 },  /*  2: medium green (R:1, G:6, B:1) */
+    { 109, 255, 109 },  /*  3: light green  (R:3, G:7, B:3) */
+    {  36,  36, 255 },  /*  4: dark blue    (R:1, G:1, B:7) */
+    {  73, 109, 255 },  /*  5: light blue   (R:2, G:3, B:7) */
+    { 182,  36,  36 },  /*  6: dark red     (R:5, G:1, B:1) */
+    {  73, 219, 255 },  /*  7: cyan         (R:2, G:6, B:7) */
+    { 255,  36,  36 },  /*  8: medium red   (R:7, G:1, B:1) */
+    { 255, 109, 109 },  /*  9: light red    (R:7, G:3, B:3) */
+    { 219, 219,  36 },  /* 10: dark yellow  (R:6, G:6, B:1) */
+    { 219, 219, 146 },  /* 11: light yellow (R:6, G:6, B:4) */
+    {  36, 146,  36 },  /* 12: dark green   (R:1, G:4, B:1) */
+    { 219,  73, 182 },  /* 13: magenta      (R:6, G:2, B:5) */
+    { 182, 182, 182 },  /* 14: gray         (R:5, G:5, B:5) */
+    { 255, 255, 255 }   /* 15: white        (R:7, G:7, B:7) */
 };
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
@@ -39,6 +53,14 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
     return (uint16_t)(((uint32_t)(r >> 3) << 11) |
                       ((uint32_t)(g >> 2) <<  5) |
                       ((uint32_t)(b >> 3)));
+}
+
+static inline uint16_t rgb555_to_rgb565(uint8_t r, uint8_t g, uint8_t b)
+{
+    uint32_t r5 = (uint32_t)(r & 0x1Fu);
+    uint32_t g6 = (uint32_t)(((g & 0x1Fu) << 1) | ((g & 0x1Fu) >> 4));
+    uint32_t b5 = (uint32_t)(b & 0x1Fu);
+    return (uint16_t)((r5 << 11) | (g6 << 5) | b5);
 }
 
 /* V9938 Graphic 7 fixed sprite palette (V9938 data book p. 98) */
@@ -49,9 +71,9 @@ static const uint16_t s_g7_sprite_pal[16] = {
 
 static inline uint16_t rgb332_to_rgb565(uint8_t c)
 {
-    /* Graphic 7 (Screen 8): bits 7-5 Red, bits 4-2 Green, bits 1-0 Blue */
-    uint8_t r = (uint8_t)(((c >> 5) & 7) * 255 / 7);
-    uint8_t g = (uint8_t)(((c >> 2) & 7) * 255 / 7);
+    /* Graphic 7 (Screen 8): bits 7-5 Green, bits 4-2 Red, bits 1-0 Blue (V9938 GGGRRRBB) */
+    uint8_t g = (uint8_t)(((c >> 5) & 7) * 255 / 7);
+    uint8_t r = (uint8_t)(((c >> 2) & 7) * 255 / 7);
     uint8_t b = (uint8_t)(( c        & 3) * 255 / 3);
     return rgb565(r, g, b);
 }
@@ -74,6 +96,12 @@ void v9938_reset(v9938_t *v)
     for (i = 0; i < 16; i++) {
         v->pal[i] = rgb565(s_def_pal[i][0], s_def_pal[i][1], s_def_pal[i][2]);
     }
+    for (int j = 0; j < 256; j++) {
+        v->pal256[j] = rgb332_to_rgb565((uint8_t)j);
+    }
+    v->pal_sub_idx = 0;
+    v->pal_r_latch = 0;
+    v->pal_g_latch = 0;
     v->vram_ptr = 0;
     v->latch = 0;
     v->pal_latch = 0;
@@ -407,8 +435,16 @@ static void v9938_reg_write(v9938_t *v, uint8_t reg, uint8_t val)
 {
     if (reg >= V9938_REG_COUNT) return;
     v->regs[reg] = val;
+    {
+        extern uint16_t msx_get_pc(void);
+        uint16_t pc = msx_get_pc();
+        if (pc >= 0xE000) {
+            printf("[REG %d] pc=%04X val=%02X\n", reg, pc, val);
+        }
+    }
     if (reg == 16) {
         v->pal_pending = 0;
+        v->pal_sub_idx = 0;
     }
 
     /* Indirect register R17 auto-increment or setup */
@@ -585,21 +621,46 @@ void v9938_write(v9938_t *v, uint8_t port, uint8_t val)
         break;
     }
     case 2: { /* Port 0x9A: Palette */
-        if (v->pal_pending) {
-            uint8_t first = v->pal_latch; /* bits 6-4: Red, bits 2-0: Blue */
-            uint8_t pidx = (uint8_t)(v->regs[16] & 0x0Fu);
-            uint8_t r3 = (uint8_t)((first >> 4) & 0x07u);
-            uint8_t b3 = (uint8_t)(first & 0x07u);
-            uint8_t g3 = (uint8_t)(val & 0x07u);
-            uint8_t r8 = (uint8_t)((r3 * 255u) / 7u);
-            uint8_t g8 = (uint8_t)((g3 * 255u) / 7u);
-            uint8_t b8 = (uint8_t)((b3 * 255u) / 7u);
-            v->pal_pending = 0;
-            v->pal[pidx] = rgb565(r8, g8, b8);
-            v->regs[16] = (uint8_t)((pidx + 1) & 0x0Fu);
+        if (v->regs[20] & 0x01) {
+            /* V9968 Extended Palette (EPAL): 3 bytes per entry (R, G, B in 0..31) */
+            uint8_t pidx = v->regs[16];
+            if (v->pal_sub_idx == 0) {
+                v->pal_r_latch = (uint8_t)(val & 0x1Fu);
+                v->pal_sub_idx = 1;
+            } else if (v->pal_sub_idx == 1) {
+                v->pal_g_latch = (uint8_t)(val & 0x1Fu);
+                v->pal_sub_idx = 2;
+            } else {
+                uint8_t r = v->pal_r_latch;
+                uint8_t g = v->pal_g_latch;
+                uint8_t b = (uint8_t)(val & 0x1Fu);
+                uint16_t c565 = rgb555_to_rgb565(r, g, b);
+                v->pal256[pidx] = c565;
+                if (pidx < 16) {
+                    v->pal[pidx] = c565;
+                }
+                v->regs[16] = (uint8_t)(pidx + 1);
+                v->pal_sub_idx = 0;
+            }
         } else {
-            v->pal_latch = val;
-            v->pal_pending = 1;
+            /* Standard V9938 Palette: 2 bytes per color (RGB333) */
+            if (v->pal_pending) {
+                uint8_t first = v->pal_latch; /* bits 6-4: Red, bits 2-0: Blue */
+                uint8_t pidx = (uint8_t)(v->regs[16] & 0x0Fu);
+                uint8_t r3 = (uint8_t)((first >> 4) & 0x07u);
+                uint8_t b3 = (uint8_t)(first & 0x07u);
+                uint8_t g3 = (uint8_t)(val & 0x07u);
+                uint8_t r8 = (uint8_t)((r3 * 255u) / 7u);
+                uint8_t g8 = (uint8_t)((g3 * 255u) / 7u);
+                uint8_t b8 = (uint8_t)((b3 * 255u) / 7u);
+                v->pal_pending = 0;
+                v->pal[pidx] = rgb565(r8, g8, b8);
+                v->pal256[pidx] = v->pal[pidx];
+                v->regs[16] = (uint8_t)((pidx + 1) & 0x0Fu);
+            } else {
+                v->pal_latch = val;
+                v->pal_pending = 1;
+            }
         }
         break;
     }
@@ -656,7 +717,9 @@ int v9938_vblank_taken(v9938_t *v)
 void v9938_render(v9938_t *v, uint16_t *fb)
 {
     uint8_t m = v9938_mode(v);
-    uint16_t bg = v->pal[v->regs[7] & 0x0Fu];
+    int use_epal = (v->regs[20] & 0x01) != 0;
+    uint8_t bg_idx = (uint8_t)(v->regs[7] & ((m == 0x1C && use_epal) ? 0xFFu : 0x0Fu));
+    uint16_t bg = (m == 0x1C && use_epal) ? v->pal256[bg_idx] : v->pal[bg_idx];
     uint16_t y, x;
     uint16_t disp_lines = (v->regs[9] & 0x80u) ? 212u : 192u;
     uint16_t top_border = (disp_lines < MSX_SCREEN_H) ? (uint16_t)((MSX_SCREEN_H - disp_lines) / 2u) : 0u;
@@ -687,7 +750,7 @@ void v9938_render(v9938_t *v, uint16_t *fb)
     }
 
     if (m == 0x1C) {
-        /* SCREEN 8: Mode G7 (256x212, 8bpp RGB332) */
+        /* SCREEN 8: Mode G7 (256x212, 8bpp RGB332 or V9968 256-color palette) */
         for (y = 0; y < MSX_SCREEN_H; y++) {
             uint16_t *row = fb + (uint32_t)y * MSX_SCREEN_W;
             if (y < top_border || y >= bot_border) {
@@ -698,7 +761,7 @@ void v9938_render(v9938_t *v, uint16_t *fb)
             uint32_t line_addr = page_base + eff_y * 256u;
             for (x = 0; x < MSX_SCREEN_W; x++) {
                 uint8_t c = v->vram[(line_addr + x) & (V9938_VRAM_SIZE - 1u)];
-                row[x] = rgb332_to_rgb565(c);
+                row[x] = use_epal ? v->pal256[c] : rgb332_to_rgb565(c);
             }
         }
     } else if (m == 0x0C) {
@@ -931,7 +994,7 @@ void v9938_render(v9938_t *v, uint16_t *fb)
                             if (s_front[px]) {
                                 if (cc) {
                                     s_color[px] |= color;
-                                    row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[s_color[px] & 0x0Fu] : v->pal[s_color[px] & 0x0Fu];
+                                    row_px[px] = (m == 0x1C && !use_epal) ? s_g7_sprite_pal[s_color[px] & 0x0Fu] : v->pal[s_color[px] & 0x0Fu];
                                 } else {
                                     if (!ic && !s_ic[px]) {
                                         v->stat[0] |= ST_C;
@@ -941,7 +1004,7 @@ void v9938_render(v9938_t *v, uint16_t *fb)
                                 s_front[px] = 1u;
                                 s_color[px] = color;
                                 s_ic[px] = ic ? 1u : 0u;
-                                row_px[px] = (m == 0x1C) ? s_g7_sprite_pal[color & 0x0Fu] : v->pal[color & 0x0Fu];
+                                row_px[px] = (m == 0x1C && !use_epal) ? s_g7_sprite_pal[color & 0x0Fu] : v->pal[color & 0x0Fu];
                             }
                         }
                     }

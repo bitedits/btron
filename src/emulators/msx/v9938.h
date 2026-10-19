@@ -17,10 +17,14 @@ typedef struct {
     uint8_t  regs[V9938_REG_COUNT];
     uint8_t  stat[V9938_STAT_COUNT];
     uint16_t pal[16];                /* RGB565 */
+    uint16_t pal256[256];            /* V9968 Extended 256-color palette (RGB565) */
 
     uint16_t vram_ptr;               /* low 14 bits */
     uint8_t  latch;                  /* first byte of 2-byte sequence */
     uint8_t  pal_latch;              /* first byte of 2-byte palette sequence */
+    uint8_t  pal_r_latch;            /* V9968 EPAL red latch */
+    uint8_t  pal_g_latch;            /* V9968 EPAL green latch */
+    uint8_t  pal_sub_idx;            /* V9968 EPAL sub-cycle (0=R, 1=G, 2=B) */
     uint8_t  ctrl_pending;
     uint8_t  pal_pending;
     uint8_t  write_mode;

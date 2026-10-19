@@ -220,7 +220,8 @@ void egl_make_current(EGL_SURFACE *surf) {
     }
 #if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_tinygl_pipeline()) {
-        tinygl_backend_resize(surf->width, surf->height, surf->pixels);
+        tinygl_backend_make_current_ctx(&surf->gl_ctx, surf->width, surf->height,
+                                        surf->pixels);
         return;
     }
 #endif
@@ -269,9 +270,19 @@ void egl_destroy_surface(EGL_SURFACE *surf) {
      * window that outlives its surface must look like a software window, not like a GL
      * window holding a freed context. */
     if (surf->wnd && surf->wnd->gl_surf == surf) surf->wnd->gl_surf = NULL;
+#if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_tinygl_pipeline()) {
-        gl_shutdown();
-    } else if (surf->gl_ctx) {
+        if (surf->gl_ctx) {
+            tinygl_backend_destroy_ctx(surf->gl_ctx);
+            surf->gl_ctx = NULL;
+        } else {
+            gl_shutdown();
+        }
+        free(surf);
+        return;
+    }
+#endif
+    if (surf->gl_ctx) {
         virgl_backend_destroy_ctx(surf->gl_ctx);
         surf->gl_ctx = NULL;
     }

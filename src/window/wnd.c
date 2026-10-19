@@ -215,7 +215,8 @@ WND* opn_wnd(const char *title, H x, H y, H w, H h, UW attr) {
     if (tw < 100) tw = 100;
     wnd->tab_width = tw;
 
-    wnd->dev = opn_dev(w - border * 2, h - title_h - border * 2);
+    H dev_w = (w - border * 2) & ~3;
+    wnd->dev = opn_dev(dev_w, h - title_h - border * 2);
 
     /* Insert at head of z-stack */
     wnd->next = g_wnd_head;
@@ -335,7 +336,7 @@ ER rsz_wnd(WND *wnd, H w, H h) {
      * draws the tab at full width when it exceeds the window). */
     wset_tab_offset(wnd, wnd->tab_offset_x);
 
-    H new_dev_w = w - border * 2;
+    H new_dev_w = (w - border * 2) & ~3;
     H new_dev_h = h - title_h - border * 2;
     if (new_dev_w < 10) new_dev_w = 10;
     if (new_dev_h < 10) new_dev_h = 10;
@@ -1004,11 +1005,14 @@ void wnd_tile_all(void) {
         if (curr->visible) {
             int c = idx % cols;
             int r_idx = idx / cols;
+            H w = tile_w - 4;
+            w = ((w - 8) & ~3) + 8;
+            H h = tile_h - 4;
             RECT r = {
                 (H)(left_margin + c * tile_w),
                 (H)(top_margin + r_idx * tile_h),
-                (H)(left_margin + (c + 1) * tile_w - 4),
-                (H)(top_margin + (r_idx + 1) * tile_h - 4)
+                (H)(left_margin + c * tile_w + w),
+                (H)(top_margin + r_idx * tile_h + h)
             };
             wrsz_wnd(curr, &r);
             idx++;

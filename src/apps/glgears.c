@@ -277,13 +277,17 @@ static void glgears_destroy(WND *wnd) {
     }
 }
 
-WND* open_glgears_window(void) {
+WND* open_glgears_window_rect(int x, int y, int w, int h) {
     if (s_glgears_wnd) {
         top_wnd(s_glgears_wnd);
         return s_glgears_wnd;
     }
 
-    s_glgears_wnd = opn_wnd("glgears - OpenGL ES 1.1", 340, 60, 320, 240,
+    if (w <= 0 || h <= 0) {
+        x = 340; y = 60; w = 320; h = 240;
+    }
+
+    s_glgears_wnd = opn_wnd("glgears - OpenGL ES 1.1", x, y, w, h,
                             WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE | WND_ATTR_RESIZE);
     if (!s_glgears_wnd) {
         uart_puts_raw("[GL] ERROR: open_glgears_window failed\n");
@@ -323,4 +327,8 @@ WND* open_glgears_window(void) {
 
     uart_puts_raw("[GL] glgears window open\n");
     return s_glgears_wnd;
+}
+
+WND* open_glgears_window(void) {
+    return open_glgears_window_rect(-1, -1, -1, -1);
 }

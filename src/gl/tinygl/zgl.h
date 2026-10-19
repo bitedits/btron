@@ -344,7 +344,10 @@ typedef struct GLContext {
 } GLContext;
 
 extern GLContext gl_ctx;
-static GLContext* gl_get_context(void) { return &gl_ctx; }
+extern GLContext* gl_current_context;
+static GLContext* gl_get_context(void) { return gl_current_context ? gl_current_context : &gl_ctx; }
+void gl_init_context(GLContext *c, void *zbuffer1);
+void gl_close_context(GLContext *c);
 
 /* Vertices that have been through gl_Vertex, counted where a vertex is made rather than
  * where one is drawn: a triangle strip shares them, so this is the quantity the geometry

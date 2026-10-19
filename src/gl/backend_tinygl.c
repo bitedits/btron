@@ -14,6 +14,8 @@
 #include <btron/dp.h>          /* COLOR typedef */
 #include <btron/btron.h>       /* uart_puts_raw */
 #include <btron/wnd.h>
+#include <stdlib.h>
+#include <string.h>
 
 extern void uart_puts_raw(const char *s);
 
@@ -291,6 +293,105 @@ int tinygl_backend_shutdown(void) {
     s_width     = 0;
     s_height    = 0;
     return 0;
+}
+
+/* ── Per-surface context isolation (matching VirGL / POSIX architecture) ── */
+
+typedef struct tinygl_context_s {
+    GLContext  gl;
+    ZBuffer   *zb;
+    int        w;
+    int        h;
+    void      *pixel_buf;
+} tinygl_context_t;
+
+void tinygl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf) {
+    if (!p_ctx) {
+        tinygl_backend_resize(w, h, pixel_buf);
+        return;
+    }
+
+    tinygl_context_t *ctx = (tinygl_context_t *)(*p_ctx);
+    if (!ctx) {
+        ctx = (tinygl_context_t *)calloc(1, sizeof(tinygl_context_t));
+        if (!ctx) {
+            tinygl_backend_resize(w, h, pixel_buf);
+            return;
+        }
+        ctx->w = w;
+        ctx->h = h;
+        ctx->pixel_buf = pixel_buf;
+        ctx->zb = ZB_open(w, h, ZB_MODE_RGBA, pixel_buf);
+        if (!ctx->zb) {
+            free(ctx);
+            tinygl_backend_resize(w, h, pixel_buf);
+            return;
+        }
+        if (pixel_buf) {
+            COLOR *px = (COLOR *)pixel_buf;
+            int n = w * h;
+            for (int i = 0; i < n; i++) px[i] |= 0xFF000000u;
+        }
+        gl_init_context(&ctx->gl, ctx->zb);
+
+        /* Share display lists and texture hash table across all contexts (OpenGL spec / LANE 24) */
+        if (gl_ctx.shared_state.lists) {
+            if (ctx->gl.shared_state.lists && ctx->gl.shared_state.lists != gl_ctx.shared_state.lists) {
+                gl_free(ctx->gl.shared_state.lists);
+            }
+            if (ctx->gl.shared_state.texture_hash_table && ctx->gl.shared_state.texture_hash_table != gl_ctx.shared_state.texture_hash_table) {
+                gl_free(ctx->gl.shared_state.texture_hash_table);
+            }
+            if (ctx->gl.shared_state.buffers && ctx->gl.shared_state.buffers != gl_ctx.shared_state.buffers) {
+                gl_free(ctx->gl.shared_state.buffers);
+            }
+            ctx->gl.shared_state = gl_ctx.shared_state;
+            ctx->gl.current_texture = gl_ctx.current_texture;
+        }
+
+        *p_ctx = ctx;
+    }
+
+    /* Switch active context and raster buffer */
+    gl_current_context = &ctx->gl;
+    s_zb = ctx->zb;
+    s_pixel_buf = pixel_buf;
+    s_width = w;
+    s_height = h;
+
+    if (ctx->w != w || ctx->h != h || ctx->pixel_buf != pixel_buf) {
+        ctx->w = w;
+        ctx->h = h;
+        ctx->pixel_buf = pixel_buf;
+        ZB_resize(ctx->zb, pixel_buf, w, h);
+        if (pixel_buf) {
+            COLOR *px = (COLOR *)pixel_buf;
+            int n = w * h;
+            for (int i = 0; i < n; i++) px[i] |= 0xFF000000u;
+        }
+        glViewport(0, 0, w, h);
+    }
+}
+
+void tinygl_backend_destroy_ctx(void *ctx_ptr) {
+    if (!ctx_ptr) return;
+    tinygl_context_t *ctx = (tinygl_context_t *)ctx_ptr;
+    if (gl_current_context == &ctx->gl) {
+        gl_current_context = &gl_ctx;
+        s_zb = gl_ctx.zb;
+    }
+    /* If sharing shared_state with gl_ctx, do not free the shared tables */
+    if (ctx->gl.shared_state.lists == gl_ctx.shared_state.lists) {
+        ctx->gl.shared_state.lists = NULL;
+        ctx->gl.shared_state.texture_hash_table = NULL;
+        ctx->gl.shared_state.buffers = NULL;
+    }
+    gl_close_context(&ctx->gl);
+    if (ctx->zb) {
+        ZB_close(ctx->zb);
+        ctx->zb = NULL;
+    }
+    free(ctx);
 }
 
 /* ── TinyGL GL wrappers ───────────────────────────────────────────── */

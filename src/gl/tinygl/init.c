@@ -1,6 +1,7 @@
 #include "msghandling.h"
 #include "zgl.h"
 GLContext gl_ctx;
+GLContext* gl_current_context = &gl_ctx;
 static const GLContext empty_gl_ctx = {0};
 
 static void initSharedState(GLContext* c) {
@@ -139,34 +140,23 @@ static int TinyGLRuntimeCompatibilityTest() {
 }
 #endif
 
-void glInit(void* zbuffer1) {
-	GLContext* c;
+void gl_init_context(GLContext *c, void* zbuffer1) {
 	GLViewport* v;
 	GLint i;
 	ZBuffer* zbuffer = (ZBuffer*)zbuffer1;
-#if TGL_FEATURE_TINYGL_RUNTIME_COMPAT_TEST == 1
-	if (TinyGLRuntimeCompatibilityTest())
-		gl_fatal_error("TINYGL_FAILED_RUNTIME_COMPAT_TEST");
-#endif
-	gl_ctx = empty_gl_ctx;
-	c = &gl_ctx;
-	if (!c)
-		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
 
+	*c = empty_gl_ctx;
 	c->zb = zbuffer;
 #if TGL_FEATURE_ERROR_CHECK == 1
 	c->error_flag = GL_NO_ERROR;
 #endif
-	/* allocate GLVertex array */
-	/*c->vertex_max = POLYGON_MAX_VERTEX;*/
-	/*c->vertex = gl_malloc(POLYGON_MAX_VERTEX * sizeof(GLVertex));*/
-	/*if(!c->vertex) gl_fatal_error("TINYGL_CANNOT_INIT_OOM");*/
 	/* viewport */
 	v = &c->viewport;
 	v->xmin = 0;
 	v->ymin = 0;
 	v->xsize = zbuffer->xsize;
 	v->ysize = zbuffer->ysize;
+	gl_current_context = c;
 	gl_eval_viewport();
 	/* buffer stuff GL 1.1 */
 	c->drawbuffer = GL_FRONT;
@@ -226,8 +216,7 @@ void glInit(void* zbuffer1) {
 	c->color_material_enabled = 0;
 
 	/* textures */
-	/*glInitTextures(c);*/
-	glInitTextures(); //Bug Fix!
+	glInitTextures();
 
 	/* blending */
 	c->zb->enable_blend = 0;
@@ -345,12 +334,22 @@ void glInit(void* zbuffer1) {
 	c->pzoomy = 1;
 }
 
-void glClose(void) {
+void glInit(void* zbuffer1) {
+#if TGL_FEATURE_TINYGL_RUNTIME_COMPAT_TEST == 1
+	if (TinyGLRuntimeCompatibilityTest())
+		gl_fatal_error("TINYGL_FAILED_RUNTIME_COMPAT_TEST");
+#endif
+	gl_init_context(&gl_ctx, zbuffer1);
+	gl_current_context = &gl_ctx;
+}
 
+void gl_close_context(GLContext *c) {
 	GLuint i;
-	GLContext* c = gl_get_context();
 	for (i = 0; i < 3; i++) {
-		gl_free(c->matrix_stack[i]);
+		if (c->matrix_stack[i]) {
+			gl_free(c->matrix_stack[i]);
+			c->matrix_stack[i] = NULL;
+		}
 	}
 	i = 0;
 #if TGL_FEATURE_SPECULAR_BUFFERS == 1
@@ -361,8 +360,14 @@ void glClose(void) {
 			gl_free(b);
 			i++;
 		}
+		c->specbuf_first = NULL;
 	}
 #endif
 	endSharedState(c);
+}
+
+void glClose(void) {
+	gl_close_context(&gl_ctx);
 	gl_ctx = empty_gl_ctx;
+	gl_current_context = &gl_ctx;
 }

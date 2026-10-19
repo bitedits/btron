@@ -21,7 +21,11 @@ GLint op_table_size[] = {
 #include "opinfo.h"
 };
 
-static GLList* find_list(GLuint list) { return gl_get_context()->shared_state.lists[list]; }
+static GLList* find_list(GLuint list) {
+	GLContext* c = gl_get_context();
+	if (!c || !c->shared_state.lists || list >= MAX_DISPLAY_LISTS) return NULL;
+	return c->shared_state.lists[list];
+}
 
 static void delete_list(GLint list) {
 	GLContext* c = gl_get_context();
@@ -179,21 +183,19 @@ void glopEndList(GLParam* p) { exit(1); }
 void glopNextBuffer(GLParam* p) { exit(1); }
 
 void glopCallList(GLParam* p) {
-	
 	GLList* l;
 	GLint list;
 #include "error_check_no_context.h"
 	list = p[1].ui;
 	l = find_list(list);
 
-#if TGL_FEATURE_ERROR_CHECK == 1
-	if (l == NULL) {
-		gl_fatal_error("Bad list op, not defined");
+	if (!l || !l->first_op_buffer) {
+		return;
 	}
-#else
-	
-#endif
 	p = l->first_op_buffer->ops;
+	if (!p) {
+		return;
+	}
 
 	while (1) {
 		GLint op;
@@ -203,9 +205,14 @@ void glopCallList(GLParam* p) {
 			break;
 		if (op == OP_NextBuffer) {
 			p = (GLParam*)p[1].p;
+			if (!p) break;
 		} else {
-			op_table_func[op](p);
-			p += op_table_size[op];
+			if (op >= 0 && (size_t)op < (sizeof(op_table_func) / sizeof(op_table_func[0])) && op_table_func[op]) {
+				op_table_func[op](p);
+				p += op_table_size[op];
+			} else {
+				break;
+			}
 		}
 	}
 }

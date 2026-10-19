@@ -3506,10 +3506,9 @@ void xmb_ribbon_calibrate(float *min_b, float *max_b, float *mean_b, int *sample
     if (samples) *samples = n;
 }
 
-WND* open_xmb_window(void)
+WND* open_xmb_window_rect(int x, int y, int w, int h)
 {
     BTRON_DESKTOP *desk;
-    int x = 16, y = 16, w = 960, h = 600;
     T_CTSK ctsk;
 
     if (s_wnd) {
@@ -3517,14 +3516,17 @@ WND* open_xmb_window(void)
         return s_wnd;
     }
 
-    desk = get_btron_desktop();
-    if (desk && desk->width > 160 && desk->height > 160) {
-        w = desk->width - 24;
-        h = desk->height - 64;
-        x = 12;
-        y = 20;
-        if (w > 1440) w = 1440;
-        if (h > 900)  h = 900;
+    if (w <= 0 || h <= 0) {
+        x = 16; y = 16; w = 960; h = 600;
+        desk = get_btron_desktop();
+        if (desk && desk->width > 160 && desk->height > 160) {
+            w = desk->width - 24;
+            h = desk->height - 64;
+            x = 12;
+            y = 20;
+            if (w > 1440) w = 1440;
+            if (h > 900)  h = 900;
+        }
     }
 
     s_phase_t0 = btron_render_perf_us();
@@ -3574,4 +3576,9 @@ WND* open_xmb_window(void)
 
     uart_puts_raw("[GL] xmb: XrossMediaBar open\n");
     return s_wnd;
+}
+
+WND* open_xmb_window(void)
+{
+    return open_xmb_window_rect(-1, -1, -1, -1);
 }

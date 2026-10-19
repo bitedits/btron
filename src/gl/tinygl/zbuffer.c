@@ -19,10 +19,8 @@ ZBuffer* ZB_open(GLint xsize, GLint ysize, GLint mode,
 	if (zb == NULL)
 		return NULL;
 
-	zb->xsize = xsize & ~3; 
+	zb->xsize = xsize; 
 	zb->ysize = ysize;
-	
-	
 	zb->linesize = (xsize * PSZB);
 
 	switch (mode) {
@@ -78,9 +76,6 @@ void ZB_close(ZBuffer* zb) {
 
 void ZB_resize(ZBuffer* zb, void* frame_buffer, GLint xsize, GLint ysize) {
 	GLint size;
-
-	/* xsize must be a multiple of 4 */
-	xsize = xsize & ~3;
 
 	const int size_changed = (zb->xsize != xsize || zb->ysize != ysize);
 

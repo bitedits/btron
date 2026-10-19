@@ -14,6 +14,7 @@
 #include <btron/apps.h>
 #include <btron/fast_blit.h>
 #include <btron/libc_shim.h>
+#include "../gl/gl_backend_choice.h"
 #if BTRON_HOSTED
 #include <time.h>
 #endif
@@ -520,24 +521,40 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
 
 #if defined(BTRON_PS2_TARGET)
     btron_desktop_note_size(w, h);
+    gl_backend_select(GL_BACKEND_TINYGL);
     /* 4 OpenGL apps opened in Tile mode:
-     * 1) Terminal
-     * 2) XMB
-     * 3) GL Gears
-     * 4) Quake
+     * Quadrant 0 (Top-Left): Terminal (392x276, client 384x248)
+     * Quadrant 1 (Top-Right): XMB (392x276, client 384x248)
+     * Quadrant 2 (Bottom-Left): GL Gears (392x276, client 384x248)
+     * Quadrant 3 (Bottom-Right): Quake (392x276, client 384x248)
      * opn_wnd prepends each new window to g_wnd_head.
-     * To tile in order (0: Terminal, 1: XMB, 2: GL Gears, 3: Quake),
-     * we open in reverse order: Quake, GL Gears, XMB, Terminal.
+     * Open in reverse order: Quake, GL Gears, XMB, Terminal.
      */
-    WND *w_quake = open_quake_window ? open_quake_window(120, 60, 480, 360) : NULL;
-    WND *w_gears = open_glgears_window ? open_glgears_window() : NULL;
-    WND *w_xmb   = open_xmb_window ? open_xmb_window() : NULL;
-    WND *w_cli   = open_gterm_window ? open_gterm_window() : NULL;
+    H w_box = 392; /* dev width = 392 - 8 = 384 (16/4 byte aligned) */
+    H h_box = 276; /* dev height = 276 - 28 = 248 */
+    H q0_x = 6,   q0_y = 32;
+    H q1_x = 402, q1_y = 32;
+    H q2_x = 6,   q2_y = 312;
+    H q3_x = 402, q3_y = 312;
+
+    /* Quadrant 3 (Bottom-Right): Quake */
+    WND *w_quake = open_quake_window ? open_quake_window(q3_x, q3_y, w_box, h_box) : NULL;
+
+    /* Quadrant 2 (Bottom-Left): GL Gears */
+    WND *w_gears = open_glgears_window_rect ? open_glgears_window_rect(q2_x, q2_y, w_box, h_box)
+                   : (open_glgears_window ? open_glgears_window() : NULL);
+
+    /* Quadrant 1 (Top-Right): XMB */
+    WND *w_xmb   = open_xmb_window_rect ? open_xmb_window_rect(q1_x, q1_y, w_box, h_box)
+                   : (open_xmb_window ? open_xmb_window() : NULL);
+
+    /* Quadrant 0 (Top-Left): Terminal */
+    WND *w_cli   = open_gterm_window_rect ? open_gterm_window_rect(q0_x, q0_y, w_box, h_box,
+                        WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE | WND_ATTR_RESIZE)
+                   : (open_gterm_window ? open_gterm_window() : NULL);
     (void)w_quake;
     (void)w_gears;
     (void)w_xmb;
-
-    wnd_tile_all();
 
     if (w_cli) {
         top_wnd(w_cli);

@@ -23,4 +23,8 @@ void tinygl_backend_resize(int w, int h, void *pixel_buf);
  * 1 = surfaces still live, 0 = the last one went (or there was nothing to close). */
 int  tinygl_backend_shutdown(void);
 
+/* Per-surface isolated context lifecycle (POSIX build symmetry) */
+void tinygl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf);
+void tinygl_backend_destroy_ctx(void *ctx_ptr);
+
 #endif /* BTRON_GL_BACKEND_TINYGL_H */

@@ -40,6 +40,7 @@ typedef enum {
     XCMD_FILE_QUIT,
     XCMD_EMU_PAUSE,
     XCMD_EMU_RESUME,
+    XCMD_EMU_FAST_FORWARD,
     XCMD_VIEW_FIT,
     XCMD_VIEW_1X,
     XCMD_VIEW_2X,
@@ -309,6 +310,8 @@ static void msx_init_menu_bar(MsxViewer *st)
                       "Ctrl+P", XCMD_EMU_PAUSE, TRUE);
     app_menu_add_item(&st->menu_bar, h1, "再開 (Resume)",
                       "Ctrl+P", XCMD_EMU_RESUME, TRUE);
+    app_menu_add_item(&st->menu_bar, h1, "早送り 300F (Fast Forward)",
+                      "Tab", XCMD_EMU_FAST_FORWARD, TRUE);
     app_menu_add_item(&st->menu_bar, h1, "機械: MSX1 / TMS9918A",
                       "", XCMD_NONE, FALSE);
 
@@ -512,6 +515,12 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
             if (st->running && st->paused) {
                 msx_pause(FALSE);
                 st->paused = FALSE;
+                s_frame_due = TRUE;
+            }
+            break;
+        case XCMD_EMU_FAST_FORWARD:
+            if (st->running && !st->paused) {
+                for (int i = 0; i < 300; i++) msx_run_frame();
                 s_frame_due = TRUE;
             }
             break;
@@ -740,3 +749,15 @@ WND *open_msx_window_with_rom(const char *path)
     }
     return msx_open(name);
 }
+
+void msx_app_fast_forward(int frames)
+{
+    if (s_msx.running && !s_msx.paused) {
+        for (int i = 0; i < frames; i++) {
+            msx_run_frame();
+        }
+        s_frame_due = TRUE;
+        if (s_wnd) inval_wnd(s_wnd);
+    }
+}
+

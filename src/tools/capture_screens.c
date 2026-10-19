@@ -61,6 +61,7 @@ extern WND* open_paint_window(void);
 extern WND* open_paint_window_with_file(const char *filepath);
 extern WND* open_paint_about_window(void);
 extern WND* open_msx_window_with_rom(const char *path);
+extern void msx_app_fast_forward(int frames);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
 
@@ -529,42 +530,37 @@ int main(int argc, char **argv) {
             dump_window_rect(dev, w_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened.raw");
         }
 
-        /* B-MSX with cartridges in the slot. One repaint is one machine frame
-         * here (see the cre_tsk stub above), so the walk boots C-BIOS far enough
-         * to hand control to the cartridge and draw its own screen. */
-        reset_isolation_state(dev);
-        WND *w_msx = open_msx_window_with_rom("Lode Runner (1984)(Sony)[a].rom");
-        if (w_msx) {
-            int msx_f;
-            for (msx_f = 0; msx_f < 400; msx_f++)
-                redraw_all_windows();
-            dump_window_rect(dev, w_msx, "/tmp/btron_raw_screens/B_MSX_Application.raw");
-            dump_window_rect(dev, w_msx, "/tmp/btron_raw_screens/MSX_LodeRunner.raw");
-
-            simulate_menu_click(w_msx, 0);      /* ファイル(F): the ROM cascade */
-            redraw_all_windows();
-            dump_window_rect(dev, w_msx, "/tmp/btron_raw_screens/B_MSX_Menu_Opened.raw");
-            cls_wnd(w_msx);
-        }
-
+        /* B-MSX with cartridges in the slot. Fast-forward each game to its
+         * active title or 3D in-game scene, then redraw and capture. */
         static const struct {
             const char *rom;
             const char *out_path;
             int frames;
         } s_msx_games[] = {
-            { "Lode Runner II (Japan).rom", "/tmp/btron_raw_screens/MSX_LodeRunner2.raw", 400 },
-            { "BULLRUSH.ROM", "/tmp/btron_raw_screens/MSX_Bullrush.raw", 400 },
+            { "Lode Runner (1984)(Sony)[a].rom", "/tmp/btron_raw_screens/MSX_LodeRunner.raw", 500 },
+            { "Lode Runner II (Japan).rom", "/tmp/btron_raw_screens/MSX_LodeRunner2.raw", 550 },
+            { "BULLRUSH.ROM", "/tmp/btron_raw_screens/MSX_Bullrush.raw", 450 },
             { "NEON_REVENANT-HC-Geo3D-256-v0.2.0.rom", "/tmp/btron_raw_screens/MSX_NeonRevenant.raw", 450 },
-            { "NIGHT_RAVEN_GEO3D.ROM", "/tmp/btron_raw_screens/MSX_NightRaven.raw", 400 }
+            { "NIGHT_RAVEN_GEO3D.ROM", "/tmp/btron_raw_screens/MSX_NightRaven.raw", 450 }
         };
 
         for (size_t gi = 0; gi < sizeof(s_msx_games)/sizeof(s_msx_games[0]); gi++) {
             reset_isolation_state(dev);
             WND *gw = open_msx_window_with_rom(s_msx_games[gi].rom);
             if (gw) {
-                for (int msx_f = 0; msx_f < s_msx_games[gi].frames; msx_f++)
-                    redraw_all_windows();
+                msx_app_fast_forward(s_msx_games[gi].frames);
+                inval_wnd(gw);
+                redraw_all_windows();
                 dump_window_rect(dev, gw, s_msx_games[gi].out_path);
+
+                if (gi == 0) {
+                    /* Also save as generic B_MSX_Application.raw and capture opened menu */
+                    dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Application.raw");
+
+                    simulate_menu_click(gw, 0); /* ファイル(F): the ROM cascade */
+                    redraw_all_windows();
+                    dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Menu_Opened.raw");
+                }
                 cls_wnd(gw);
             }
         }

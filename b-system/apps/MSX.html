@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MSX – ゲームシステム | B-System Specification</title>
-  <meta name="description" content="ゲームシステム（MSX / B-MSX）は、B-Systemの仕様に準拠したC99実装アプリケーション。Z80/R800 CPU、V9938/TMS9918A VDP、PSG音源、C-BIOS、Geo3Dハードウェアパイプラインを統合したMSX/MSX2/turboRネイティブエミュレーション環境。">
+  <meta name="description" content="ゲームシステム（MSX / B-MSX）は、B-Systemの仕様に準拠したC99実装アプリケーション。Z80/R800 CPU、V9938/TMS9918A VDP、PSG音源、C-BIOS、Geo3Dハードウェアパイプライン、早送り（Fast-Forward）機能を統合したMSX/MSX2/turboRネイティブエミュレーション環境。">
   <link rel="stylesheet" href="../../index.css">
   <link rel="stylesheet" href="../settings/settings.css">
   <link rel="stylesheet" href="./apps.css">
@@ -36,7 +36,7 @@
   <div class="setting-hero">
     <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F3AE.svg" alt="🎮" width="64" height="64"></div>
     <h1>ゲームシステム (MSX)</h1>
-    <div class="setting-hero-badge">MSX / MSX2 / turboR C-BIOS 準拠 · Geo3D パイプライン · C99 実装 · リアルタイムゲームシステム</div>
+    <div class="setting-hero-badge">MSX / MSX2 / turboR C-BIOS 準拠 · Geo3D パイプライン · 早送り (Fast-Forward) · C99 実装</div>
     <div class="subtitle">MSX/MSX2/turboR カートリッジ実行環境およびリアルタイム 3D 幾何学演算エンジン<br><span style="font-size:0.9em; opacity:0.85;">"Comprehensive MSX/MSX2/turboR game emulation system and Geo3D pipeline integrated directly into B-System window environment."</span></div>
   </div>
 
@@ -44,9 +44,9 @@
     <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>ゲームシステム（MSX）</strong> — B-MSX は、B-System ワークベンチ空間上で動作する C99 純実装の MSX / MSX2 / MSX2+ / MSX turbo R 統合エミュレーション環境です。オープンソース C-BIOS を内蔵し、TMS9918A / V9938 VDP 互換描画、PSG (AY-3-8910) 音源、MegaROM カートリッジマッパー、および 3次元幾何学リアルタイム演算エンジン Geo3D をネイティブサポートします。<br>
+      <strong>ゲームシステム（MSX）</strong> — B-MSX は、B-System ワークベンチ空間上で動作する C99 純実装の MSX / MSX2 / MSX2+ / MSX turbo R 統合エミュレーション環境です。オープンソース C-BIOS を内蔵し、TMS9918A / V9938 VDP 互換描画、PSG (AY-3-8910) 音源、MegaROM カートリッジマッパー、高速早送り（Fast-Forward）、および 3次元幾何学リアルタイム演算エンジン Geo3D をネイティブサポートします。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
-        "Official technical specification for the B-MSX game emulation environment, cartridge subsystem, and Geo3D accelerator within B-System."
+        "Official technical specification for the B-MSX game emulation environment, cartridge subsystem, fast-forward engine, and Geo3D accelerator within B-System."
       </span>
     </div>
 
@@ -141,8 +141,8 @@
     <div class="section">
       <h2>2. メニュー構造と操作体系 (Menu Architecture &amp; Operations)</h2>
       <p>
-        B-MSX は、BTRON3 標準の 3D ベベルメニューバーおよびカスケードサブメニューを備え、カートリッジの動的装填やゲームリセットを直感的に操作できます。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Standard BTRON3 cascade menu bindings and real-time cartridge swapping system."</span>
+        B-MSX は、BTRON3 標準の 3D ベベルメニューバーおよびカスケードサブメニューを備え、カートリッジの動的装填やゲームリセット、早送り（Fast-Forward）を直感的に操作できます。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Standard BTRON3 cascade menu bindings, real-time cartridge swapping, and instant fast-forward controls."</span>
       </p>
       <table class="market-table">
         <thead>
@@ -155,8 +155,13 @@
         <tbody>
           <tr>
             <td><b>ファイル (File)</b></td>
-            <td><b>ROM カセット ▶</b> (カスケード一覧)<br>リセット (Reset)<br>閉じる (Close)</td>
+            <td><b>ROM カセット ▶</b> (カスケード一覧)<br>リセット (Reset, Ctrl+R)<br>終了 (Quit, Ctrl+Q)</td>
             <td><code>assets/msx/</code> または <code>/SYS/msx/</code> 内の ROM を走査して動的メニュー生成。選択時に <code>msx_load()</code> と <code>msx_reset()</code> を即時実行。</td>
+          </tr>
+          <tr>
+            <td><b>エミュレータ (Emulator)</b></td>
+            <td>一時停止 (Pause, Ctrl+P)<br>再開 (Resume, Ctrl+P)<br><b>早送り (Fast-Forward, Tab)</b></td>
+            <td><code>msx_app_fast_forward()</code> による高速フレームスキップ実行。C-BIOS の初期化・ロゴ画面を高速スキップしてタイトル画面やゲームプレイへ瞬時到達。</td>
           </tr>
           <tr>
             <td><b>表示 (View)</b></td>
@@ -222,12 +227,13 @@
     </div>
 
     <div class="section">
-      <h2>4. B-System ウィンドウマネージャ統合 (B-System GUI Integration)</h2>
+      <h2>4. B-System ウィンドウマネージャ統合と早送り (Window Integration &amp; Fast-Forward)</h2>
       <p>
         B-MSX は独立した外部プログラムではなく、B-System のウィンドウマネージャと完全に一体化しています。<br>
         <span style="font-size:0.9em; opacity:0.85;">"Native BTRON window manager event dispatch, multi-window compositing, and headless screenshot automation."</span>
       </p>
       <ul>
+        <li><b>早送り (Fast-Forward) アーキテクチャ:</b> <code>msx_app_fast_forward(int frames)</code> により、描画遅延を伴うことなく CPU 命令サイクルおよび VDP レジスタ更新のみを任意のフレーム数（300〜550 フレーム）高速進捗。C-BIOS 初期化待機をスキップし、瞬時にタイトル画面・ゲーム本編に到達します。</li>
         <li><b>独立 μITRON タスク駆動:</b> <code>msx_task</code> がバックグラウンドタスクとして独立稼働し、ウィンドウメッセージキューをブロックすることなく 60fps でフレームを更新。</li>
         <li><b>ゼロコピー描画:</b> VDP の 256×212 ピクセルバッファから B-System の GDEV フレームバッファへダイレクトスケーリング転送。</li>
         <li><b>自動テスト＆スクリーンショット自動抽出:</b> <code>src/tools/capture_screens.c</code> により、ヘッドレス環境で実機描画パイプラインを起動し、カートリッジ画面およびメニュー展開状態をピクセルパーフェクトに PNG 抽出。</li>

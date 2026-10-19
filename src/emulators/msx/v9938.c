@@ -255,6 +255,59 @@ static void v9938_pset_pixel(v9938_t *v, int x, int y, uint8_t color, uint8_t op
     }
 }
 
+static void v9938_tr_write(v9938_t *v, uint8_t val)
+{
+    if (!v->tr_active) return;
+    int mode = v9938_mode(v);
+    if (v->tr_code == 0x0F) { /* HMMC: high speed byte transfer */
+        int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
+        uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
+        int start_byte = (mode == 0x1C) ? (int)v->dx : (mode == 0x10 ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
+        int cur_x_byte = (start_byte + (int)v->tr_x * v->tr_dix) & (int)(line_pitch - 1);
+        uint32_t a = ((uint32_t)cur_y * line_pitch + (uint32_t)cur_x_byte) & (V9938_VRAM_SIZE - 1u);
+        v->vram[a] = val;
+        v->tr_x++;
+        if (v->tr_x >= v->tr_bytes_per_line) {
+            v->tr_x = 0;
+            v->tr_y++;
+            if (v->tr_y >= (v->ny ? v->ny : 1024)) {
+                v->tr_active = 0;
+                v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
+            }
+        }
+    } else if (v->tr_code == 0x0B) { /* LMMC: logical move CPU to VRAM (1 pixel per byte write) */
+        int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
+        int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
+        uint8_t col;
+        int max_x;
+
+        if (mode == 0x1C) {
+            col = val;
+            max_x = 256;
+        } else if (mode == 0x14) {
+            col = (uint8_t)(val & 0x0Fu);
+            max_x = 512;
+        } else if (mode == 0x10) {
+            col = (uint8_t)(val & 0x03u);
+            max_x = 512;
+        } else { /* mode == 0x0C (Screen 5) */
+            col = (uint8_t)(val & 0x0Fu);
+            max_x = 256;
+        }
+
+        v9938_pset_pixel(v, cur_x, cur_y, col, v->tr_op, mode);
+        v->tr_x++;
+        if (v->tr_x >= (v->nx ? v->nx : max_x)) {
+            v->tr_x = 0;
+            v->tr_y++;
+            if (v->tr_y >= (v->ny ? v->ny : 1024)) {
+                v->tr_active = 0;
+                v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
+            }
+        }
+    }
+}
+
 static void v9938_exec_command(v9938_t *v)
 {
     uint8_t code = (uint8_t)(v->cmd >> 4);
@@ -399,6 +452,8 @@ static void v9938_exec_command(v9938_t *v)
         v->tr_x = 0;
         v->tr_y = 0;
         v->stat[2] |= ST_CE | ST_TR;
+        /* Per V9938 hardware spec, the first byte is preloaded in R#44 (v->col) before R#46 is written */
+        v9938_tr_write(v, v->col);
         return;
 
     case 0x0F: /* HMMC - High speed Move CPU to VRAM */
@@ -419,6 +474,8 @@ static void v9938_exec_command(v9938_t *v)
             v->tr_bytes_per_line = v->nx ? (v->nx >> 1) : 128;
         }
         v->stat[2] |= ST_CE | ST_TR;
+        /* Per V9938 hardware spec, the first byte is preloaded in R#44 (v->col) before R#46 is written */
+        v9938_tr_write(v, v->col);
         return;
 
     default:
@@ -458,80 +515,7 @@ static void v9938_reg_write(v9938_t *v, uint8_t reg, uint8_t val)
         case 12:
             v->col = val;
             if (v->tr_active) {
-                int mode = v9938_mode(v);
-                if (v->tr_code == 0x0F) { /* HMMC */
-                    int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
-                    uint32_t line_pitch = (mode == 0x14 || mode == 0x1C) ? 256u : 128u;
-                    int start_byte = (mode == 0x1C) ? (int)v->dx : (mode == 0x10 ? (int)(v->dx >> 2) : (int)(v->dx >> 1));
-                    int cur_x_byte = (start_byte + (int)v->tr_x * v->tr_dix) & (int)(line_pitch - 1);
-                    uint32_t a = ((uint32_t)cur_y * line_pitch + (uint32_t)cur_x_byte) & (V9938_VRAM_SIZE - 1u);
-                    v->vram[a] = val;
-                    v->tr_x++;
-                    if (v->tr_x >= v->tr_bytes_per_line) {
-                        v->tr_x = 0;
-                        v->tr_y++;
-                        if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                            v->tr_active = 0;
-                            v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                        }
-                    }
-                } else if (v->tr_code == 0x0B) { /* LMMC: logical move CPU to VRAM */
-                    int cur_y = (v->dy + (int)v->tr_y * v->tr_diy) & 1023;
-                    if (mode == 0x1C) {
-                        /* Screen 8: 1 pixel per byte */
-                        int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                        v9938_pset_pixel(v, cur_x, cur_y, val, v->tr_op, mode);
-                        v->tr_x++;
-                        if (v->tr_x >= (v->nx ? v->nx : 256)) {
-                            v->tr_x = 0;
-                            v->tr_y++;
-                            if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                                v->tr_active = 0;
-                                v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                            }
-                        }
-                    } else if (mode == 0x0C || mode == 0x14) {
-                        /* Screen 5 / Screen 7: 2 pixels per byte (4 bpp) */
-                        uint8_t p0 = (uint8_t)(val >> 4);
-                        uint8_t p1 = (uint8_t)(val & 0x0Fu);
-                        int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                        v9938_pset_pixel(v, cur_x, cur_y, p0, v->tr_op, mode);
-                        v->tr_x++;
-                        if (v->tr_x >= (v->nx ? v->nx : (mode == 0x0C ? 256 : 512))) {
-                            v->tr_x = 0;
-                            v->tr_y++;
-                        } else {
-                            cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                            v9938_pset_pixel(v, cur_x, cur_y, p1, v->tr_op, mode);
-                            v->tr_x++;
-                            if (v->tr_x >= (v->nx ? v->nx : (mode == 0x0C ? 256 : 512))) {
-                                v->tr_x = 0;
-                                v->tr_y++;
-                            }
-                        }
-                        if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                            v->tr_active = 0;
-                            v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                        }
-                    } else if (mode == 0x10) {
-                        /* Screen 6: 4 pixels per byte (2 bpp) */
-                        for (int s = 3; s >= 0; s--) {
-                            uint8_t p = (uint8_t)((val >> (s * 2)) & 3u);
-                            int cur_x = (v->dx + (int)v->tr_x * v->tr_dix);
-                            v9938_pset_pixel(v, cur_x, cur_y, p, v->tr_op, mode);
-                            v->tr_x++;
-                            if (v->tr_x >= (v->nx ? v->nx : 512)) {
-                                v->tr_x = 0;
-                                v->tr_y++;
-                                break;
-                            }
-                        }
-                        if (v->tr_y >= (v->ny ? v->ny : 1024)) {
-                            v->tr_active = 0;
-                            v->stat[2] &= (uint8_t)~(ST_CE | ST_TR);
-                        }
-                    }
-                }
+                v9938_tr_write(v, val);
             }
             break;
         case 13: v->arg = val; break;

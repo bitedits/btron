@@ -107,7 +107,7 @@ PS2_CC      ?= $(LLVM_CLANG) --target=mipsel-unknown-elf -march=mips2 -mabi=32 -
 MIPS_LD ?= $(if $(shell command -v mipsel-linux-gnu-ld 2>/dev/null),mipsel-linux-gnu-ld,$(LLD_BIN) -EL)
 
 # BCM283x bare-metal flags (TYPE_RPI=2 → BCM2836, Pi 2B, Cortex-A7)
-BCM_INC      = -Iinclude -Iinclude/arch/bcm283x -Isrc/kernel -Isrc/cores
+BCM_INC      = -Iinclude -Iinclude/gl -Iinclude/arch/bcm283x -Isrc/kernel -Isrc/cores
 ARM_CFLAGS   = -O2 -Wall -Wextra -std=c99 -mno-unaligned-access \
                -D_RPI_BCM283x_ -DTYPE_RPI=2 -DBTRON_TARGET=2 -mfpu=vfpv4 -mfloat-abi=softfp \
                $(BCM_INC)

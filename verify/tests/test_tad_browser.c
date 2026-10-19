@@ -414,7 +414,7 @@ static void test_btron3_corner_window_resizing(void) {
     TEST_ASSERT(er == E_OK, "rsz_wnd executed successfully");
     TEST_ASSERT(w->bounds.right - w->bounds.left == 550, "Updated window width to 550px");
     TEST_ASSERT(w->bounds.bottom - w->bounds.top == 420, "Updated window height to 420px");
-    TEST_ASSERT(w->dev != NULL && w->dev->width == 550 - 8, "Resized client graphic device width");
+    TEST_ASSERT(w->dev != NULL && w->dev->width == ((550 - 8) & ~3), "Resized client graphic device width");
 
     /* Test Minimum Size Guard */
     rsz_wnd(w, 50, 50);

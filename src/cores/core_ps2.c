@@ -9512,6 +9512,44 @@ static void ps2_bench_tex_census(uint32_t frame, const char *order, const char *
 }
 #endif /* BTRON_PS2_BENCH_TEX */
 
+/* Pre-warm sub-phase: executes `lilcu` demo through shell prior to `xmb` launch
+ * to verify multi-application VRAM residency and state transitions. */
+static void ps2_bench_lilcu_warm(GDEV *screen)
+{
+    int guard;
+    uint32_t made;
+
+    ps2_kprintf("\n[BENCH] order=lilcu-first: `lilcu` through the shell, then `xmb`\n");
+    s_bench_shell_lines = 0;
+    s_bench_tex_warm = 1;
+    s_bench_app_active = 1;
+    s_bench_app_made = 0u;
+    s_bench_app_over = 0u;
+    s_bench_app_left = GSBOX_WARM_FRAMES;
+    shell_execute_cmd("lilcu", ps2_bench_shell_out, NULL, NULL);
+    for (guard = 0; guard < (int)GSBOX_WARM_FRAMES + 6; guard++) {
+        if (!s_bench_app_left) break;
+        if (!ps2_bench_wnd_named("Lil Cu")) break;
+        ps2_gui_pass(screen);
+    }
+    made = s_bench_app_made;
+    s_bench_app_active = 0;
+    s_bench_app_left = 0u;
+    s_bench_app_over = 0u;
+    s_bench_app_made = 0u;
+    s_bench_tex_warm = 0;
+    ps2_kprintf("[BENCH] order=lilcu-first: demo echoed %d line(s), %u pass(es), its window now %s, "
+                "xmb window %s, planes=%u vram_left=%u\n",
+                s_bench_shell_lines, (unsigned int)made,
+                ps2_bench_wnd_named("Lil Cu") ? "UP" : "closed",
+                ps2_bench_wnd_named("Cross Media Bar") ? "up already" : "not yet",
+                (unsigned int)gs_tex_count(), (unsigned int)gs_tex_vram_left());
+#if BTRON_PS2_BENCH_TEX
+    ps2_bench_gs_planes();
+#endif
+}
+#endif /* BTRON_PS2_BENCH_TEX || BTRON_PS2_BENCH_ORDER */
+
 #if BTRON_PS2_BENCH_GS >= 2
 /* ── Live Stream VRAM Framebuffer Telemetry Census ───────────────────────────
  *

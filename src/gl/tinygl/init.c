@@ -24,38 +24,45 @@ static void endSharedState(GLContext* c) {
 	GLint i;
 	GLList* l;
 	GLParamBuffer *pb, *pb1;
-	for (i = 0; i < MAX_DISPLAY_LISTS; i++)
-		if (s->lists[i]) {
-			l = s->lists[i];
-			pb = l->first_op_buffer;
-			while (pb != NULL) {
-				pb1 = pb->next;
-				gl_free(pb);
-				pb = pb1;
+	if (s->lists) {
+		for (i = 0; i < MAX_DISPLAY_LISTS; i++) {
+			if (s->lists[i]) {
+				l = s->lists[i];
+				pb = l->first_op_buffer;
+				while (pb != NULL) {
+					pb1 = pb->next;
+					gl_free(pb);
+					pb = pb1;
+				}
+				gl_free(l);
+				s->lists[i] = NULL;
 			}
-			gl_free(l);
-			s->lists[i] = NULL;
 		}
-	gl_free(s->lists);
-	/* Every texture still alive at close, deleted by the application or not, goes through
-	 * the one path that owns both halves of it: the node and the plane behind it.  What this
-	 * loop used to do was unlink and free the node, which orphaned each image's
-	 * `gl_zalloc`'d plane -- `glClose()` then zeroes the context, so the only pointer to
-	 * those bytes went with it and the pool never saw them again.  On a target whose heap is
-	 * one static 11 MB array that is a leak big enough to make the next window fail. */
-	for (i = 0; i < TEXTURE_HASH_TABLE_SIZE; i++)
-		while (s->texture_hash_table[i])
-			gl_texture_node_destroy(c, s->texture_hash_table[i]);
-	gl_free(s->texture_hash_table);
-	for (i = 0; i < MAX_BUFFERS; i++) {
-		if (s->buffers[i]) {
-			if (s->buffers[i]->data) {
-				gl_free(s->buffers[i]->data);
-			}
-			gl_free(s->buffers[i]);
-		}
+		gl_free(s->lists);
+		s->lists = NULL;
 	}
-	gl_free(s->buffers);
+	/* Every texture still alive at close, deleted by the application or not, goes through
+	 * the one path that owns both halves of it: the node and the plane behind it. */
+	if (s->texture_hash_table) {
+		for (i = 0; i < TEXTURE_HASH_TABLE_SIZE; i++) {
+			while (s->texture_hash_table[i])
+				gl_texture_node_destroy(c, s->texture_hash_table[i]);
+		}
+		gl_free(s->texture_hash_table);
+		s->texture_hash_table = NULL;
+	}
+	if (s->buffers) {
+		for (i = 0; i < MAX_BUFFERS; i++) {
+			if (s->buffers[i]) {
+				if (s->buffers[i]->data) {
+					gl_free(s->buffers[i]->data);
+				}
+				gl_free(s->buffers[i]);
+			}
+		}
+		gl_free(s->buffers);
+		s->buffers = NULL;
+	}
 }
 
 #if TGL_FEATURE_TINYGL_RUNTIME_COMPAT_TEST == 1

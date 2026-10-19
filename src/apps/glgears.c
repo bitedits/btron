@@ -190,6 +190,15 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
     }
 
     glViewport(0, 0, dev->width, dev->height);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+    glEnable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glShadeModel(GL_SMOOTH);
+    static GLfloat pos[4] = { 5.0f, 5.0f, 10.0f, 0.0f };
+    glLightfv(GL_LIGHT0, GL_POSITION, pos);
+
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     double aspect = (double)dev->width / (double)(dev->height > 0 ? dev->height : 1);

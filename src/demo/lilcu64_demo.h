@@ -21,6 +21,7 @@ extern "C" {
  * Returns pointer to the created WND, or NULL on failure.
  */
 WND* open_lilcu64_demo_window(void);
+WND* open_lilcu64_demo_window_rect(int x, int y, int w, int h);
 
 #ifdef __cplusplus
 }

@@ -47,6 +47,7 @@ __WEAK_APP WND* open_xmb_window_rect(int x, int y, int width, int height);
 __WEAK_APP WND* open_glgears_window(void);
 __WEAK_APP WND* open_glgears_window_rect(int x, int y, int width, int height);
 __WEAK_APP WND* open_lilcu64_demo_window(void);
+__WEAK_APP WND* open_lilcu64_demo_window_rect(int x, int y, int width, int height);
 __WEAK_APP WND* open_msx_window(void);
 __WEAK_APP WND* open_msx_window_with_rom(const char *path);
 

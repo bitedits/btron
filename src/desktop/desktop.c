@@ -537,8 +537,10 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
     H q2_x = 6,   q2_y = 312;
     H q3_x = 402, q3_y = 312;
 
-    /* Quadrant 3 (Bottom-Right): Quake */
-    WND *w_quake = open_quake_window ? open_quake_window(q3_x, q3_y, w_box, h_box) : NULL;
+    /* Quadrant 3 (Bottom-Right): Lil Cu 64 Demoscene (fallback to Quake) */
+    WND *w_demo = open_lilcu64_demo_window_rect ? open_lilcu64_demo_window_rect(q3_x, q3_y, w_box, h_box)
+                  : (open_quake_window ? open_quake_window(q3_x, q3_y, w_box, h_box) : NULL);
+    (void)w_demo;
 
     /* Quadrant 2 (Bottom-Left): GL Gears */
     WND *w_gears = open_glgears_window_rect ? open_glgears_window_rect(q2_x, q2_y, w_box, h_box)
@@ -552,7 +554,7 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
     WND *w_cli   = open_gterm_window_rect ? open_gterm_window_rect(q0_x, q0_y, w_box, h_box,
                         WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE | WND_ATTR_RESIZE)
                    : (open_gterm_window ? open_gterm_window() : NULL);
-    (void)w_quake;
+    (void)w_demo;
     (void)w_gears;
     (void)w_xmb;
 

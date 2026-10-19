@@ -1417,6 +1417,23 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     lilcu64_synth_pump_virtio(735); /* ~16.6ms of audio at 44.1kHz */
 
     glViewport(0, 0, dev->width, dev->height);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_COLOR_MATERIAL);
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+    glDisable(GL_BLEND);
+    glShadeModel(GL_SMOOTH);
+
+    static const GLfloat light_pos[4]     = { 4.0f, 8.0f, 6.0f, 1.0f };
+    static const GLfloat light_white[4]   = { 0.95f, 0.95f, 0.95f, 1.0f };
+    static const GLfloat ambient_light[4] = { 0.75f, 0.75f, 0.75f, 1.0f };
+
+    glLightfv(GL_LIGHT0, GL_AMBIENT, (GLfloat *)ambient_light);
+    glLightfv(GL_LIGHT0, GL_POSITION, (GLfloat *)light_pos);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, (GLfloat *)light_white);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, (GLfloat *)light_white);
+
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
 
@@ -1608,14 +1625,18 @@ static void demo_task_fn(VW exinf) {
 
 /* ── Public Entrypoint ────────────────────────────────────────────── */
 
-WND* open_lilcu64_demo_window(void) {
+WND* open_lilcu64_demo_window_rect(int x, int y, int w, int h) {
     if (s_demo_wnd) {
         top_wnd(s_demo_wnd);
         return s_demo_wnd;
     }
 
+    if (w <= 0 || h <= 0) {
+        x = 180; y = 40; w = 720; h = 540;
+    }
+
     s_demo_wnd = opn_wnd("Lil Cu 64 — B-System Alpha 1 [Ceremony]",
-                         180, 40, 720, 540,
+                         x, y, w, h,
                          WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE | WND_ATTR_RESIZE);
     if (!s_demo_wnd) {
         uart_puts_raw("[DEMO] ERROR: opn_wnd failed\n");
@@ -1670,4 +1691,8 @@ WND* open_lilcu64_demo_window(void) {
 
     uart_puts_raw("[DEMO] Lil Cu 64 Demoscene window active\n");
     return s_demo_wnd;
+}
+
+WND* open_lilcu64_demo_window(void) {
+    return open_lilcu64_demo_window_rect(-1, -1, -1, -1);
 }

@@ -27,6 +27,25 @@ static void gl_tex_plane_publish(const GLImage *im)
 static void gl_tex_plane_publish(const GLImage *im) { (void)im; }
 #endif
 
+/* The other end of the same edge, and the reason it has to be here: a plane's GS VRAM span is
+ * claimed where its bytes are born, so it is returned where they die.  Without this the registry
+ * is a monotonic count of planes ever uploaded -- `gs_tex_register()` appends, the cap is
+ * GS_TEX_MAX, and an entry freed by a closing window is never re-taken -- so a texture that is
+ * perfectly alive on the TinyGL side answers `gs_tex_find()` with 0, `eegs_texture()` counts a
+ * miss, and the GS draws the vertex colour.  A flat rectangle, with no orphaned name anywhere.
+ *
+ * Called before `gl_image_clear()` because the pixmap pointer IS the registry key: after the
+ * clear it is NULL and the entry it named could no longer be found. */
+#if defined(BTRON_PS2_TARGET)
+static void gl_tex_plane_retire(const GLImage *im)
+{
+	if (im->pixmap == NULL) return;
+	gs_tex_free(im->pixmap);
+}
+#else
+static void gl_tex_plane_retire(const GLImage *im) { (void)im; }
+#endif
+
 static GLTexture* find_texture(GLint h) {
 	GLTexture* t;
 	GLContext* c = gl_get_context();
@@ -113,13 +132,13 @@ static void gl_image_clear(GLImage* im) {
  * sheet) out of an 11 MB pool whose boot hole is 5,413 kB -- and refused the atlas
  * outright on the third `xmb` typed at the prompt.
  *
- * What clearing the image does *not* do on this target is hand the plane's GS VRAM span
- * back: `gs_tex` has no release entry point, so the registry keeps the entry keyed on the
- * pointer that is going away.  That is survivable rather than correct -- a plane re-allocated
- * at the same address with the same padded geometry is the registry's "same plane, new
- * contents" case and reuses its span, which is what a fixed pool does for the same app -- and
- * the shell ledger in core_ps2.c prints `registered` and the VRAM left per cycle precisely to
- * watch whether that holds.  If it does not, the missing API is the next thing to land.
+ * What the plane's death also does on this target, since 2026-10-19, is hand its GS VRAM span
+ * back -- `gl_tex_plane_retire()` above.  Before that the registry kept the entry keyed on the
+ * pointer that was going away, which was survivable only while the registry had room: a plane
+ * re-allocated at the same address with the same padded geometry hit the "same plane, new
+ * contents" case and reused its span, but a plane at a NEW address took a NEW slot, and the
+ * eighth one in a session took none.  The shell ledger in core_ps2.c prints `registered` and the
+ * VRAM left per cycle, and that is the row that shows the ceiling no longer climbing.
  */
 void gl_texture_node_destroy(GLContext* c, GLTexture* t) {
 	GLint level;
@@ -136,8 +155,10 @@ void gl_texture_node_destroy(GLContext* c, GLTexture* t) {
 	if (t->next != NULL)
 		t->next->prev = t->prev;
 
-	for (level = 0; level < MAX_TEXTURE_LEVELS; level++)
+	for (level = 0; level < MAX_TEXTURE_LEVELS; level++) {
+		gl_tex_plane_retire(&t->images[level]);
 		gl_image_clear(&t->images[level]);
+	}
 
 	gl_free(t);
 }

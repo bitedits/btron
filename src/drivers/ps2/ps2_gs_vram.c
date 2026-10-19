@@ -66,11 +66,48 @@ uint32_t gs_vram_tex_bytes(uint32_t w_texels, uint32_t h_texels)
 
 int gs_vram_take_tex(gs_vram_t *v, uint32_t bytes, uint32_t *out_byte)
 {
-    uint32_t span;
+    uint32_t span, i;
 
     if (bytes == 0 || v == 0 || out_byte == 0) return -1;
 
     span = (bytes + GS_PAGE_TEX_PLANE - 1u) / GS_PAGE_TEX_PLANE * GS_PAGE_TEX_PLANE;
+
+    /* First fit over the spans a freed plane left behind, BEFORE the cursor is asked for new
+     * ground.  This is the half of the release path that `gs_vram_free()` could not do on its
+     * own: it marks a block unused, and only `gs_vram_compact()` ever moves the cursor -- which
+     * it can do for the TRAILING blocks and no other.  So a plane freed in the middle of the
+     * arena left its span counted as taken by every later `gs_vram_left()`, and a registry that
+     * reuses its slot (see gs_tex_register) would hand a new plane a byte range nobody owned.
+     *
+     * Reuse is by whole-block fit, `size >= span`, and the remainder is split into a fresh free
+     * block rather than stranded: the spans here are 16 KiB units and the planes asked for are
+     * 64x64 (one unit) and 512x512 (sixty-four), so a policy that required an exact match would
+     * never reuse the atlas a closed XMB left behind, which is the whole case this rung exists
+     * for.  A split keeps `blocks[]` in offset order, because the remainder starts where this
+     * plane ends and every later block starts above that.
+     *
+     * With the table full there is nowhere to put a remainder, so the block is taken whole and
+     * its tail goes unused until the next compaction -- a wasted span is a budget problem; a
+     * doubled span is a picture of somebody else's texels. */
+    for (i = 0u; i < v->block_count; i++) {
+        if (v->blocks[i].used || v->blocks[i].size < span) continue;
+
+        *out_byte = v->blocks[i].offset;
+        if (v->blocks[i].size > span && v->block_count < GS_VRAM_MAX_BLOCKS) {
+            uint32_t rest = v->blocks[i].size - span;
+            uint32_t j    = v->block_count;
+
+            while (j > i + 1u) { v->blocks[j] = v->blocks[j - 1u]; j--; }
+            v->blocks[i + 1u].offset = *out_byte + span;
+            v->blocks[i + 1u].size   = rest;
+            v->blocks[i + 1u].used   = 0u;
+            v->block_count++;
+            v->blocks[i].size = span;
+        }
+        v->blocks[i].used = 1u;
+        return 0;
+    }
+
     if (v->next + span > GS_VRAM_BYTES) return -1;
 
     *out_byte = v->next;

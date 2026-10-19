@@ -96,9 +96,27 @@ const gs_tex_t *gs_tex_register(const void *plane, uint32_t px_w, uint32_t px_h,
     }
 
     if (slot == 0) {
-        if (s_n == GS_TEX_MAX) return 0;
-        index = s_n;
-        slot = &s_reg[s_n];
+        /* A cleared entry is this plane's home before the registry grows.  Without the scan the
+         * index is a monotonic count of planes ever uploaded: `gs_tex_free()` could hand its slot
+         * back and nothing would take it, so the eighth plane in a session -- two probe planes at
+         * boot, an XMB open/close cycle, and the operator is there -- is refused a VRAM address,
+         * `gs_tex_find()` answers 0, `eegs_texture()` counts a miss, and the GS draws the vertex
+         * colour.  A flat rectangle, from a texture that is perfectly alive on the TinyGL side.
+         *
+         * Lowest index first, so that the reuse is deterministic and a host gate can name the
+         * slot it expects. */
+        for (i = 0u; i < s_n; i++) {
+            if (s_reg[i].plane != 0) continue;
+            slot  = &s_reg[i];
+            index = i;
+            break;
+        }
+
+        if (slot == 0) {
+            if (s_n == GS_TEX_MAX) return 0;
+            index = s_n;
+            slot = &s_reg[s_n];
+        }
     }
 
     /* A plane's own span, so that no two planes share a 4 KB swizzle block or a 256-byte block:
@@ -111,8 +129,15 @@ const gs_tex_t *gs_tex_register(const void *plane, uint32_t px_w, uint32_t px_h,
          * leaving it keyed on an address now owned by a texture it is not -- is the drawing from
          * somebody else's page this function exists to refuse. */
         if (recycled) {
+            /* The span the dead entry owned goes back with it.  Leaving it marked used with no
+             * registry key is a piece of VRAM nobody can ever hand out again -- and with
+             * gs_vram_take_tex() now reusing free spans, "nobody" is the only thing that would
+             * keep it out of the next plane's address.  No `byte != 0` test: this slot was found
+             * by its live key, so it holds a span, and 0 is a span's address, not its absence. */
+            gs_vram_free(&s_vram, slot->byte);
             slot->plane = 0;
             slot->pending = 0;
+            slot->byte  = 0;
         }
         return 0;
     }
@@ -156,7 +181,12 @@ const gs_tex_t *gs_tex_register(const void *plane, uint32_t px_w, uint32_t px_h,
     slot->clamp = gs_pack_clamp(GS_REPEAT, GS_REPEAT, 0u, pad_w - 1u,
                                 0u, pad_h - 1u);
     slot->pending = 1;
-    if (!recycled) s_n = index + 1u;
+    /* A high-water mark, never a rename.  `index` reaches this line from the append (index == s_n)
+     * and from a cleared middle slot (index < s_n); assigning `s_n = index + 1` unconditionally
+     * would shorten the registry to the height of the hole and make every plane above it
+     * unfindable -- a live texture drawn as one flat rectangle, which is the symptom this rung
+     * exists to remove.  So only the append may grow it. */
+    if (!recycled && index >= s_n) s_n = index + 1u;
 
     hand_over(index);
     return slot;
@@ -201,15 +231,25 @@ uint32_t gs_tex_vram_left(void)
 int gs_tex_free(const void *plane)
 {
     uint32_t i;
+
     if (plane == 0) return -1;
     for (i = 0; i < s_n; i++) {
         if (s_reg[i].plane == plane) {
-            if (s_reg[i].byte != 0) {
-                gs_vram_free(&s_vram, s_reg[i].byte);
-            }
+            /* Unconditionally, and with no sentinel: an entry that has a `plane` owns a span,
+             * because gs_tex_register() only publishes a slot whose take_tex() succeeded -- so
+             * `byte` is an address, not a flag, and VRAM byte 0 is a real one.  Guarding on
+             * `byte != 0` leaked the span of any plane planned at the start of the arena, which
+             * is exactly what verify/tests/test_fb_order.c does: the host link never calls
+             * gs_tex_init(), so its cursor starts at 0 rather than above the display pages. */
+            gs_vram_free(&s_vram, s_reg[i].byte);
             s_reg[i].plane = 0;
             s_reg[i].pending = 0;
             s_reg[i].byte = 0;
+            /* Trim the tail and move the cursor with it, so `gs_tex_vram_left()` -- the number
+             * the [GSTS] row prints -- says what the GS actually has rather than what the
+             * high-water mark once took.  A freed span in the middle is not lost either:
+             * gs_vram_take_tex() first-fits over the unused blocks now. */
+            gs_tex_compact();
             return 0;
         }
     }

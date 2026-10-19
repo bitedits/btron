@@ -43,6 +43,14 @@
 
 #include "../../src/gl/tinygl/zbuffer.h"
 
+#if defined(BTRON_PS2_TARGET)
+/* The registry the plane-publish half of texture.c writes into.  Both builds link it -- the
+ * COLOR-order binary simply never puts anything in it -- so paint_gl()'s release gate can name the
+ * entry the upload created, and the retire that follows it, without a suite of its own. */
+#include "../../src/drivers/ps2/ps2_gs_tex.h"
+#include "../../src/drivers/ps2/ps2_gs_vram.h"
+#endif
+
 /* dp_core.c's stage timings ask the platform core for a counter; this link has no core. */
 void uart_puts_raw(const char *s) { (void)s; }
 
@@ -54,6 +62,11 @@ void uart_puts_raw(const char *s) { (void)s; }
 static COLOR s_dp[FB_DP_W * FB_DP_H];
 static COLOR s_gl[FB_GL_W * FB_GL_H];
 static COLOR s_clr[FB_GL_W * FB_GL_H];
+
+/* Defined below, next to the other reporting helpers.  The registry gate has to run inside the
+ * GL frame, where the context is current -- a frame end closes the context and takes every
+ * texture with it -- so paint_gl() needs the reporter before it is declared. */
+static void expect(const char *what, int ok, const char *detail);
 
 /* The cell the store-side control reads: inside the first fill_rec, in device coords. */
 #define RED_CX 20
@@ -203,6 +216,58 @@ static void paint_gl(void)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex);
     glEnable(GL_TEXTURE_2D);
     quad_tex(-1.0f, -1.0f, 0.0f, 0.3f);
+
+#if defined(BTRON_PS2_TARGET)
+    /*
+     * 5b's release half.  This is the only suite in the tree that compiles src/gl/tinygl/
+     * texture.c with the PS2 predicate on AND links the real registry, so it is where the
+     * publish/retire pair is gated: the upload above handed the plane's pixmap pointer to
+     * gs_tex_register(), and the texture's death has to give that key and the VRAM span under it
+     * back.  A registry that only ever appends left a dead key answering gs_tex_find(), and a
+     * plane allocated at a NEW address took a NEW slot -- so the eighth plane in a session was
+     * refused an address, eegs_texture() counted a miss and the GS drew the vertex colour: one
+     * flat rectangle per icon.  That is the second of the two routes to the operator's
+     * screenshot; the first is the process-global GLContext, gated on painted pixels in
+     * verify/tests/test_gl_context_isolation.c.
+     *
+     * Inside the frame, because gl_frame_end() closes the context and endSharedState() deletes
+     * the textures an application never deleted -- which is the same retire, one layer up.  The
+     * scene then re-mints and re-uploads the identical plane, so the canvas this program dumps is
+     * the canvas it always was and the two builds still compare.
+     */
+    {
+        const gs_tex_t *live = 0;
+        const void *key = 0;
+        uint32_t slot, span = 0u, left_before, n_before;
+        char why[128];
+
+        for (slot = 0u; slot < gs_tex_count(); slot++) {
+            const gs_tex_t *e = gs_tex_at(slot);
+            if (e->px_w == 16u && e->px_h == 16u) live = e;
+        }
+        expect("plane published", live != 0,
+               "the scene's 16x16 glTexImage2D reached the GS registry");
+        if (live != 0) {
+            key         = live->plane;
+            span        = gs_vram_tex_bytes(live->pad_w, live->pad_h);
+            left_before = gs_tex_vram_left();
+            n_before    = gs_tex_count();
+            glDeleteTextures(1, &tid);
+            expect("key retired", gs_tex_find(key) == 0,
+                   "a dead texture's plane pointer no longer answers a draw call");
+            snprintf(why, sizeof why,
+                     "the span it held (%u bytes) is on offer to the next plane again", span);
+            expect("span retired", gs_tex_vram_left() == left_before + span, why);
+            snprintf(why, sizeof why,
+                     "the entry was trimmed rather than left as a hole: %u became %u",
+                     n_before, gs_tex_count());
+            expect("slot retired", gs_tex_count() + 1u == n_before, why);
+        }
+        glGenTextures(1, &tid);
+        glBindTexture(GL_TEXTURE_2D, tid);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex);
+    }
+#endif
 
     /* 4. the recognised blend: GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA / GL_FUNC_ADD, which
      *    is TGL_BLEND_ALPHA_ADD -- the one pack that names its fields */

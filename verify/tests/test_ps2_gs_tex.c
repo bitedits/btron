@@ -67,6 +67,47 @@ static const void *plane_of(int i)
     return &s_planes[i][0];
 }
 
+/* Reading a slot through `gs_tex_at(i)->field` means that a law which fails to create the slot
+ * crashes the run instead of reporting it, and a crashed gate prints nothing at all -- control D
+ * below (the registry renamed to the reused index rather than kept as a high-water mark) is exactly
+ * that failure, and it segfaulted before its first FAIL row.  These answer 0 for a slot that is not
+ * there, so every case below fails as a number on a line rather than as a truncated log. */
+static const void *plane_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->plane : 0;
+}
+
+static uint32_t byte_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->byte : 0u;
+}
+
+static uint32_t tbw_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->tbw : 0u;
+}
+
+static uint32_t pxw_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->px_w : 0u;
+}
+
+static uint32_t qwc_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->qwc : 0u;
+}
+
+static uint32_t pending_at(uint32_t i)
+{
+    const gs_tex_t *e = gs_tex_at(i);
+    return e != 0 ? e->pending : 1u;   /* absent: claim it is pending, so the count row refuses */
+}
+
 /* The numbers the two real sheets produce, derived by hand and named once so every case below
  * quotes the same plan.
  *
@@ -331,7 +372,7 @@ static void test_recycled_pointer(void)
      * slot being patched in place. */
     check("a new plane starts where the re-plan ended",
           gs_tex_register(plane_of(1), 64u, 64u, 64u, 64u) != 0 &&
-          gs_tex_at(1u)->byte == 2064384u + 16384u);
+          byte_at(1u) == 2064384u + 16384u);
 }
 
 /* The cap and the end of VRAM, both of which have to refuse rather than draw from an address
@@ -377,15 +418,106 @@ static void test_cap_and_exhaustion(void)
     check("the recycled re-plan that does not fit is refused",
           gs_tex_register(plane_of(0), 256u, 256u, 256u, 256u) == 0);
     check("the entry is dead rather than stale",
-          gs_tex_at(0u) != 0 && gs_tex_at(0u)->plane == 0 && gs_tex_at(0u)->pending == 0);
+          gs_tex_at(0u) != 0 && plane_at(0u) == 0 && pending_at(0u) == 0);
     check("and the dead key no longer answers a draw call", gs_tex_find(plane_of(0)) == 0);
     check("a new plane is still planned after it", gs_tex_register(plane_of(5), 64u, 64u,
                                                                    64u, 64u) != 0);
-    check_num("which lands in the next free slot, not the dead one", gs_tex_count(), 4u);
-    check("so the dead slot is skipped: the living three are the ones that answer",
-          gs_tex_at(3u)->plane == plane_of(5) && gs_tex_at(0u)->plane == 0);
+    /* The dead slot IS the next plane's home now, and the abandoned span is its address: a
+     * registry that only ever appends turned the eighth plane in a session into a texture with
+     * no VRAM page -- which draws as one flat rectangle however alive its GL side is.  See
+     * test_release_and_reuse() for the whole release law. */
+    check_num("which takes the dead slot rather than growing the registry", gs_tex_count(), 3u);
+    check("so the reused slot answers, and at the span the dead entry abandoned",
+          plane_at(0u) == plane_of(5) && byte_at(0u) == k_atlas_byte);
     check_num("and the killed entry is the only one that stops counting as pending",
               gs_tex_pending(), 3u);
+}
+
+/* The release path, which is the half the registry was missing: a plane's death hands its slot
+ * AND its VRAM span back, and the next plane takes both.  This is the second of the two
+ * independent routes to the operator's flat icon rectangles -- the first is the process-global GL
+ * context, gated in verify/tests/test_gl_context_isolation.c on painted pixels.  A texture can
+ * survive its own context and still be refused a page here. */
+static void test_release_and_reuse(void)
+{
+    const gs_tex_t *a, *b, *c, *d;
+    uint32_t left_after_three;
+
+    gs_tex_init();
+    a = gs_tex_register(plane_of(0), 512u, 512u, 512u, 512u);
+    b = gs_tex_register(plane_of(1), 64u, 64u, 64u, 64u);
+    c = gs_tex_register(plane_of(2), 64u, 64u, 64u, 64u);
+    check("three planes are planned", a != 0 && b != 0 && c != 0);
+    left_after_three = gs_tex_vram_left();
+    check_num("atlas + two sheets, from the cursor", left_after_three,
+              4194304u - 1998848u - 1048576u - 16384u - 16384u);
+
+    check_num("freeing the middle plane's span answers", gs_tex_free(plane_of(0)), 0);
+    check("and a key that is gone stops answering a draw call", gs_tex_find(plane_of(0)) == 0);
+    check("the entry is cleared, not shifted",
+          plane_at(0u) == 0 && plane_at(1u) == plane_of(1));
+    check_num("with the registry no shorter -- a middle slot cannot trim the tail",
+              gs_tex_count(), 3u);
+    check_num("and a non-trailing span leaves the cursor where it was",
+              gs_tex_vram_left(), left_after_three);
+
+    /* The whole point: a plane of the same size takes the abandoned span and the freed slot, so
+     * the count never climbs and the address is one somebody just gave back. */
+    d = gs_tex_register(plane_of(3), 512u, 512u, 512u, 512u);
+    check("a fourth plane of the abandoned size is planned", d != 0);
+    check("in the slot the first one vacated", d == gs_tex_at(0u));
+    check_num("at the address it vacated", d != 0 ? d->byte : 0u, k_atlas_byte);
+    check_num("and the registry did not grow", gs_tex_count(), 3u);
+    /* The sharpest edge of taking a middle slot: `s_n` is a high-water mark, and code that treated
+     * the reused index as a new end would shorten the registry to the height of the hole -- the
+     * two planes above it would stop answering gs_tex_find() while still holding a VRAM span.
+     * This is the first version of this rung's source got wrong, so it is gated by name. */
+    check("and the planes above the hole still answer a draw call",
+          gs_tex_find(plane_of(1)) == b && gs_tex_find(plane_of(2)) == c);
+    check_num("nor did the cursor move", gs_tex_vram_left(), left_after_three);
+
+    /* A smaller plane fits the same span, and the remainder has to stay available -- otherwise
+     * reuse is a renaming of the leak rather than a fix for it. */
+    gs_tex_init();
+    check("a 512x512 atlas claims the first megabyte",
+          gs_tex_register(plane_of(0), 512u, 512u, 512u, 512u) != 0);
+    check("a sheet behind it starts at the atlas's end",
+          gs_tex_register(plane_of(1), 64u, 64u, 64u, 64u) != 0 &&
+          byte_at(1u) == k_atlas_byte + 1048576u);
+    check_num("the atlas dies", gs_tex_free(plane_of(0)), 0);
+    check("a small plane lands in its span",
+          gs_tex_register(plane_of(2), 64u, 64u, 64u, 64u) != 0 &&
+          byte_at(0u) == k_atlas_byte);
+    check("and the 1,032,192 bytes left of it are not stranded: the next small plane is handed "
+          "the remainder",
+          gs_tex_register(plane_of(3), 64u, 64u, 64u, 64u) != 0 &&
+          byte_at(2u) == k_atlas_byte + 16384u);
+
+    /* Freeing the LAST entry trims the registry and moves the cursor, which is the number the
+     * [GSTS] row prints as `vram=`. */
+    gs_tex_init();
+    check("two sheets", gs_tex_register(plane_of(0), 64u, 64u, 64u, 64u) != 0 &&
+                        gs_tex_register(plane_of(1), 64u, 64u, 64u, 64u) != 0);
+    left_after_three = gs_tex_vram_left();
+    check("the trailing one dies", gs_tex_free(plane_of(1)) == 0);
+    check_num("the registry is one shorter", gs_tex_count(), 1u);
+    check_num("and the cursor came back for its span", gs_tex_vram_left(),
+              left_after_three + 16384u);
+    check("freeing a key that was never registered is refused, not a no-op",
+          gs_tex_free(plane_of(7)) == -1);
+
+    /* And the lowest span of all.  `byte` is an address, never a flag: a first version of this
+     * rung guarded gs_vram_free() on `byte != 0`, which is harmless on the console -- where
+     * gs_tex_init() starts the cursor above the display pages -- and leaks the whole span of any
+     * entry planned at the arena's base.  The host link in verify/tests/test_fb_order.c never
+     * calls gs_tex_init(), so there the base IS zero, and that is the build that found it. */
+    gs_tex_init();
+    check("a plane at the arena's own base is planned",
+          gs_tex_register(plane_of(0), 64u, 64u, 64u, 64u) != 0 &&
+          byte_at(0u) == 1998848u);
+    check_num("freeing it answers", gs_tex_free(plane_of(0)), 0);
+    check_num("and the cursor comes home, so the arena is whole again", gs_tex_vram_left(),
+              4194304u - 1998848u);
 }
 
 /* The unit question the whole registry rests on: a plane's span is the *padded* picture's, on the
@@ -417,8 +549,8 @@ static void test_plane_span(void)
     check("the registry plans a narrow plane at its padded width",
           gs_tex_register(plane_of(6), 32u, 128u, 64u, 128u) != 0);
     check("with TBW from the plane, not the upload",
-          gs_tex_at(0u)->tbw == 1u && gs_tex_at(0u)->px_w == 32u);
-    check_num("and a stream that carries the whole padded plane", gs_tex_at(0u)->qwc,
+          tbw_at(0u) == 1u && pxw_at(0u) == 32u);
+    check_num("and a stream that carries the whole padded plane", qwc_at(0u),
               64u * 128u / 4u);
     check_num("which is the span the cursor moved by", gs_tex_vram_left(),
               4194304u - 1998848u - 32768u);
@@ -435,6 +567,7 @@ int main(void)
     test_sink_at_registration();
     test_recycled_pointer();
     test_cap_and_exhaustion();
+    test_release_and_reuse();
     test_plane_span();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);

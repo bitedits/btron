@@ -982,6 +982,138 @@ PART TWO -- THE LINK: LAWS THAT MAKE THE IMAGE LEGAL
          normalise to the same 31,488 words, which is the first direct
          evidence that linking the GS stage changes nothing the canvas holds.
 
+  LAW 7c (one context, N surfaces; a plane is retired where it was
+  published).  The process has ONE TinyGL context, created when the first GL
+  window opens its surface and joined -- never rebuilt -- by every surface
+  after it.  A join re-points the two per-surface facts and nothing else:
+  where the pixels go (the raster's pbuf) and what maps onto them (the
+  viewport).  The namespace -- texture names, display lists, the planes under
+  them -- belongs to the context and dies only with the LAST surface.  On the
+  GS side the same lifetime law holds at the other boundary: a texture plane
+  enters the registry when its texels land and leaves it when the image that
+  owns them dies, and it leaves all of it at once -- its key, its slot, and
+  the VRAM span under it, which any later plane may then be handed.
+
+  WHY  The operator's screenshot: blue and black rectangles where the XMB's
+       icons should be, and the two half-observations that dated it --
+       "running lilcu, then xmb, made the glitch disappear", and "icons show
+       initially fine but get corrupted after the FPS ticker changed".  Two
+       independent routes draw that identical picture, and each had to be
+       closed on its own.
+
+       Route 1, the NAME (src/gl/backend_tinygl.c).  Every new window surface
+       used to run gl_init() -> glInit(), whose first act is
+       `gl_ctx = empty_gl_ctx` (src/gl/tinygl/init.c:151).  Opening a second
+       window therefore orphaned the first window's texture nodes -- the hash
+       table went, the nodes did not -- glGenTextures restarted at 1, and the
+       second window was handed the FIRST window's name.  A closing window
+       did the same damage from the other end: glClose() runs
+       endSharedState(), which deletes every texture in the process, so any
+       survivor's next paint sampled an empty slot.  An empty slot draws the
+       VERTEX COLOUR, which is a flat rectangle the size of the quad.  XMB
+       opening last was the only namespace still alive, and a transient
+       surface coming and going -- a menu, an overlay, the ticker's repaint
+       forcing the first real bind -- is what erased a live one.  Names are
+       now handed out as max(handle)+1 over the LIVE table, so two windows
+       cannot be given the same name at all.
+
+       Route 2, the PLANE (src/drivers/ps2/ps2_gs_tex.c).  On a PS2_GL=eegs
+       build the sampler's answer is `eegs_texture(gs_tex_find(m->pixmap))`,
+       and a registry that only ever appended did two wrong things at once: a
+       dead texture's plane pointer kept answering a draw call, and a plane
+       created at a NEW address took a NEW slot.  The eighth plane in a
+       session (GS_TEX_MAX is 8) was refused an address, eegs_texture()
+       counted a miss, and the GS drew the vertex colour -- the same flat
+       rectangle, reached from the other side of the API.
+
+       The two routes are why "OpenGL contexts are not totally separated" was
+       a right diagnosis and the wrong remedy.  The cure is not one context
+       per window -- there is one ZBuffer and one GS drawing environment, and
+       a context per window would cost a namespace per window -- it is one
+       context whose names outlive every surface but the last, plus a sampler
+       plane whose lifetime is exactly its texture's.
+
+  TWO CLAUSES THIS LANDING FORCED, both of them wrong in the first version:
+
+  - `s_n` is a HIGH-WATER MARK, never a rename.  A cleared slot is found by
+    scanning BELOW `s_n`, so writing `s_n = index + 1` from a reused index
+    shortens the registry to the height of the hole: every plane above it
+    stops answering gs_tex_find() while still holding a VRAM span -- a live
+    icon drawn flat, by the very rung meant to stop that.  Only the append
+    may grow it, and the case is gated by name.
+  - `gs_tex_t.byte` is an ADDRESS, not a flag.  gs_tex_register() publishes a
+    slot only when its take_tex() succeeded, so an entry with a live key
+    always owns a span, and byte 0 is a real address: a host link that never
+    calls gs_tex_init() starts its cursor at 0.  Guarding the release on
+    `byte != 0` therefore leaked the span of any plane planned at the arena's
+    own base -- which is what the fb-order suite does, so the guard came out
+    of the source rather than the test growing around it.
+
+  GATE   Three suites, and the one that matters reads painted pixels:
+
+  - `make test-gl-context` (30 rows) drives two surfaces through the real
+    dispatch and asserts the FRAME, not a counter: window A's 64x64 textured
+    quad is byte-identical in four situations -- A alone, A after B opened, A
+    after B closed and A was re-bound, and A in a session after a full close.
+    The atlas is a two-colour checkerboard and the vertex colour is the
+    selection blue the operator named, so the two answers cannot be confused
+    and cannot be a colour permutation in disguise: a live sampler gives a
+    checkerboard, an orphaned name gives ONE FLAT BLUE RECTANGLE.  The four
+    frames are written to .build/gl_iso_A_alone.ppm, _with_B.ppm,
+    _after_close.ppm and _second_session.ppm.  Byte-equality is permutation-
+    independent -- the assertion never needs to know whether a word is
+    0xRRGGBB or 0xAABBGGRR to know that a second window must not change what
+    the first one draws.
+  - `make test-ps2-gs-tex`, checks=129 failures=0, holds the registry law:
+    the next plane of a dead size takes the dead slot at the lowest cleared
+    index AND the address it abandoned, the tail is trimmed but the planes
+    above a middle hole still answer a draw call, a smaller plane is handed
+    the remainder of a bigger span instead of a fresh one, and a plane at the
+    arena's base returns the whole arena when it is freed.
+  - `make test-ps2-fb-order` is the only suite in the tree that compiles
+    src/gl/tinygl/texture.c with -DBTRON_PS2_TARGET and links the real
+    registry, so the publish/retire PAIR is gated at its call site rather
+    than on a hand-built entry: the scene's 16x16 glTexImage2D reaches the
+    registry, and glDeleteTextures gives back the key, the 16,384-byte span,
+    and the slot.  It runs inside the GL frame on purpose -- gl_frame_end()
+    closes the context and takes every texture with it, which was a
+    segfault at address 0x8 before it was a rule.
+
+  CONTROL  Six mutations, one landed clause each, each shown red and then
+           restored (checks=129 failures=0, both dumps byte-identical):
+
+           no cleared-slot scan in gs_tex_register()   6 failures
+           no first-fit over a freed span              5, incl. `at the
+             address it vacated got=3080192 want=1998848`
+           no gs_tex_compact() in gs_tex_free()        3, incl. the cursor
+             not coming home
+           `s_n` renamed to the reused index           5, incl. `and the
+             planes above the hole still answer a draw
+             call`
+           the `byte != 0` guard restored       [FBORDER] FAIL span retired
+           the retire call removed from         three rows: key, span, and
+             gl_texture_node_destroy()          `1 became 1`
+
+           The fourth control printed NOTHING the first time it was run: a
+           gate that crashes instead of reporting is not a gate, so the
+           registry's slot accessors are NULL-safe and a broken law must
+           yield a named [FAIL] row.
+
+  NOT DONE  `eegs_backend_init()` was asked for and is NOT the answer:
+            eegs_frame_begin() already resets s_tex_live, s_tex_switches and
+            s_tex_missing on every frame, so the eegs seam has a per-frame
+            lifecycle and needs no per-surface one.  The missing entry was on
+            the texture plane, and it now sits beside gl_tex_plane_publish()
+            in src/gl/tinygl/texture.c, where the pair reads as one law.
+
+  ON SCREEN  SKIP.  Every row above is host-side, against the real sources;
+             no image built from this landing has been run yet, so nothing
+             here claims the screenshot is cured.  What is certified around
+             it: `make test-ps2` 107/107, `make -k test` exit 0, and
+             `make arm64-elf` exit 0 -- the Pi 400 is untouched by
+             construction, because no arm64 source list holds a file under
+             src/gl/ or src/drivers/ps2/.
+
 =====================================================================
 PART THREE -- THE MEASURED MACHINE
 =====================================================================
@@ -3181,10 +3313,20 @@ PART FIVE -- THE PRESENTATION PLANE: THE EE/GS BACKEND
 
   LAW 15f (one GL target, process-wide).  g_gl is a single global
   (gl_dispatch.c:21) and TinyGL's ZBuffer is one static pair, so the image has
-  one GL target, "last surface created wins", and no per-window backend choice
-  exists to fall back on.  This is a limit of the port, not of the GS; it is
-  why a second GL window opened while a layer exists draws into the FIRST
-  window's rect, and why glgears stays on the CPU (fact 2).
+  one GL target and no per-window backend choice exists to fall back on.  What
+  LAW 7c changed is what one target COSTS a second window.  "Last surface
+  created wins" now means the one surface BOUND at any moment -- the context
+  and its namespaces are joined, and only the raster's pixel array and the
+  viewport move -- so two GL windows still cannot draw concurrently and every
+  paint has to bind its own surface; it no longer means the second window
+  erases the first, which is what it meant, and what both halves of the
+  operator's screenshot came from.  The viewport travels with the surface for
+  the same reason: glInit() used to re-take it as a side effect of the wipe it
+  no longer performs, so a join that took only the raster left a smaller
+  window scaled and clipped against the FIRST window's extent -- the list of
+  per-surface facts is exactly two, where the pixels go and what maps onto
+  them.  Still a limit of the port, not of the GS; still why glgears stays on
+  the CPU (fact 2).
 
   What 5c does not close, stated so nobody has to rediscover it: the pointer
   and any overlay that is not an opaque rectangle (increment 6); glClear(),
@@ -6136,7 +6278,13 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                                             sends: LANE 9's census closed 9b's
                                             caller as REFUTED, so this row is a
                                             gate on a tool and not on a saving.
-    make test-ps2-gs-tex         checks=103   failures=0
+    make test-ps2-gs-tex         checks=129   failures=0  the plane-release law of
+                                            LAW 7c: a cleared slot taken at the
+                                            lowest index, the abandoned span
+                                            handed to the next plane of that
+                                            size, the tail trimmed without
+                                            hiding the planes above a middle
+                                            hole
     make test-eegs-raster        checks=78    failures=0
     make test-eegs-present       checks=70    failures=0  64 are increment 5's,
                                             six are lane 10's yield: a present
@@ -6154,7 +6302,25 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
                                             948 distinct words in the GL scene
                                             (floor 200), 14 in the dp scene
                                             (floor 12) -- the suite is a
-                                            discriminator, not a tautology
+                                            discriminator, not a tautology.
+                                            It is also the ONLY place the GS
+                                            plane pair is gated at its call
+                                            site: it compiles src/gl/tinygl/
+                                            texture.c with the PS2 predicate
+                                            on and links the real registry, so
+                                            its four rows -- plane published,
+                                            key retired, span retired, slot
+                                            retired -- are LAW 7c's evidence
+                                            that a texture's death gives the
+                                            plane and its VRAM back
+    make test-gl-context         30 / 30   LAW 7c's pixel gate: window A's
+                                            textured 64x64 quad is byte-
+                                            identical alone, after a second
+                                            surface opened, after that surface
+                                            closed, and in a session after a
+                                            full close.  A flat blue square in
+                                            any of the four PPMs is the
+                                            operator's screenshot
     make test-ps2-pointer        59 / 59   the stroke-pair splitter, gated
                                             on the host because guest pixels
                                             are the integral of the counts the
@@ -6396,8 +6562,13 @@ PART SEVEN -- BUILDING, VERIFYING, RUNNING
        Inside a GL layer's rect the pointer is currently invisible (LAW 15d)
        and nothing headless can certify a z-order, so this one's gate is the
        user's eyes.
-     - one drawing environment and one frame buffer (LAW 15f): a second GL
-       window opened while a layer exists draws into the FIRST window's rect.
+     - one drawing environment and one frame buffer (LAW 15f).  The half that
+       used to sit here -- a second GL window erasing the first window's
+       textures -- is closed by LAW 7c and gated on painted pixels.  What
+       remains is that exactly one surface is bound at a time, so two GL
+       windows cannot draw in the same pass, and the app-side tidiness that
+       follows from it: a paint must bind its own wnd->gl_surf rather than
+       trust a file static to still name the window it belongs to (#164).
      - glClear() is TinyGL's own fill and not a primitive, so a layer's
        background is the canvas showing through -- invisible for the XMB's
        full mesh, a real gap for an app that clears and draws less.

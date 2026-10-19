@@ -124,9 +124,19 @@ WND* open_chokanji_kconv_window(void)       { return cab_no_win(); }
 WND* open_chokanji_xfconv_window(void)      { return cab_no_win(); }
 WND* open_chokanji_unpack_window(void)      { return cab_no_win(); }
 
-/* The same for the OpenGL bar and the demo, whose units are not in this link. */
-WND* open_xmb_window(void)                  { return cab_no_win(); }
-WND* open_lilcu64_demo_window(void)         { return cab_no_win(); }
+/* Real OpenGL applications: XMB and Lil Cu 64 Demoscene */
+extern WND* open_xmb_window(void);
+extern WND* open_lilcu64_demo_window(void);
+void uart_puts_raw(const char *s) { (void)s; }
+ER wup_tsk(ID tskid) { (void)tskid; return E_OK; }
+static SYSTIME s_sim_clock = 1000;
+ER get_tim(SYSTIME *p_time) {
+    if (p_time) {
+        s_sim_clock += 16;
+        *p_time = s_sim_clock;
+    }
+    return E_OK;
+}
 
 /* B-MSX paces its emulator with a 60 Hz task.  There is no task layer in this
  * link, so cre_tsk() fails the way it does on a target with no task slots left,
@@ -356,7 +366,7 @@ int main(int argc, char **argv) {
         WND *w_tv = open_gterm_window_rect(70, 180, 1120, 396,
                                            WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
         if (w_tv) {
-            gterm_exec(w_tv, "tv /SYS/CLU.md");
+            gterm_exec(w_tv, "tv /SYS/Heart_Sutra_Tibetan.txt");
             inval_wnd(w_tv);
             redraw_all_windows();
             dump_window_rect(dev, w_tv, "/tmp/btron_raw_screens/Commander_TV.raw");
@@ -377,6 +387,27 @@ int main(int argc, char **argv) {
         if (w_orch) {
             redraw_all_windows();
             dump_window_rect(dev, w_orch, "/tmp/btron_raw_screens/Orchestra_Application.raw");
+        }
+
+        /* Cross Media Bar (XMB) OpenGL Application Window */
+        reset_isolation_state(dev);
+        WND *w_xmb = open_xmb_window();
+        if (w_xmb) {
+            for (int f = 0; f < 30; f++) {
+                w_xmb->img_valid = FALSE;
+                redraw_all_windows();
+            }
+            dump_window_rect(dev, w_xmb, "/tmp/btron_raw_screens/XMB_Application.raw");
+            cls_wnd(w_xmb);
+        }
+
+        /* Lil Cu 64 Demoscene Window (Hopf Field & 3D Mascot) */
+        reset_isolation_state(dev);
+        WND *w_demo = open_lilcu64_demo_window();
+        if (w_demo) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_demo, "/tmp/btron_raw_screens/Demoscene_Application.raw");
+            cls_wnd(w_demo);
         }
 
         /* Chat Application Window (Strict Single Roster Window) */

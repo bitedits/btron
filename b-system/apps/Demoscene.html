@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demoscene – リル・キューブ 64 | B-System Specification</title>
+  <meta name="description" content="リル・キューブ 64（Lil Cu 64 Demoscene）は、B-Systemの仕様に準拠したC99/OpenGL実装のリアルタイム3Dデモシーン。4次元ホップ束（Hopf Fibration）の宇宙空間と確定論的プロシージャルDSPシンセサイザー。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="sticky" aria-label="Site navigation">
+    <div class="nav-container">
+        <ul class="nav-links">
+                <li><a href="../../b-media/index.html">B-Media</a></li>
+                <li><a href="../../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec</a></li>
+                <li><a href="../../virtio.html">VirtIO</a></li>
+                <li><a href="../../mobile.html">FOMA</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        </ul>
+    </div>
+  </nav>
+
+  <nav class="setting-nav">
+    <a href="../../index.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../index.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">Demoscene</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F9CA.svg" alt="🧊" width="64" height="64"></div>
+    <h1>デモシーン (Lil Cu 64)</h1>
+    <div class="setting-hero-badge">リアルタイム 3D デモシーン · BTRON3 3.20 準拠 · OpenGL ES 1.1 · 4D Hopf 束 · C99 実装</div>
+    <div class="subtitle">Lil Cu 64 Demoscene アプリケーションの機能仕様および内部構造<br><span style="font-size:0.9em; opacity:0.85;">"Functional and architectural specification of the Lil Cu 64 native OpenGL demoscene component."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>リル・キューブ 64（Lil Cu 64 Demoscene）</strong> — B-System公式マスコット「Lil Cube」が4次元ホップ束（Hopf Fibration）の数理幾何宇宙を浮遊・舞踏するC99/OpenGL ES 1.1ネイティブデモシーン。48音ポリフォニック・プロシージャルDSPシンセサイザーとキネマティクス同期。<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "Official technical specification for the Lil Cu 64 native OpenGL demoscene application within the B-System operating environment."
+      </span>
+    </div>
+
+            <!-- 画面プレビュー -->
+    <div class="section">
+      <h2>画面プレビュー (Screen Preview)</h2>
+      <div class="screen-preview">
+        <img src="../img/screens/Demoscene_Application.png" alt="Lil Cu 64 Demoscene 画面">
+        <p>実機描画フレームバッファより自動抽出された Lil Cu 64 ネイティブ 3D デモシーン画面 (4D Hopf Fibration & Procedural DSP Synth)</p>
+      </div>
+    </div>
+
+<div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        リル・キューブ 64（Lil Cu 64）は、B-Systemの仕様に準拠したC99/OpenGL ES 1.1ネイティブ実装のリアルタイム3Dデモシーンです。
+        Webフロントエンド（index.html）のThree.js/WebAudio版実装と1:1の数式モデルを共有し、4次元超球面 \(S^3 \subset \mathbb{R}^4\) から2次元リーマン球面 \(S^2\) へのファイバー束写像 \(p: S^3 \to S^2\) をリアルタイムパラメトリック演算して描画します。
+        公式マスコット「Lil Cube」は、等積呼吸・歩行・浮遊跳躍・歌唱・回転の各キネマティクス状態を持ち、マウス視線追従および48音ポリフォニック確定論的DSPシンセサイザー（44.1kHzステレオ）と完全同期して動作します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. マスコット・キネマティクスと操作体系 (Mascot Kinematics &amp; Controls)</h2>
+      <p>
+        Lil Cu 64 の状態機械、視線追従、4D幾何学、およびキーバインディング仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Kinematic state machine, 4D Hopf geometry parameters, and interactive key bindings."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>キネマティクス／機能</th>
+            <th>動作概要と数理モデル (Mathematical &amp; Behavioral Model)</th>
+            <th>キー操作・トリガー (Key Bindings)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>等積呼吸 (Idle Breath)</b></td>
+            <td>体積不変（Isovolumetric）を保ちながらY軸スケールとXZ軸スケールが逆位相で呼吸振動。</td>
+            <td>通常待機状態</td>
+          </tr>
+          <tr>
+            <td><b>歩行振動 (Waddle Walk)</b></td>
+            <td>左右の足部ゼロ交差に同期したリズミカルな左右揺動とキック音トリガー。</td>
+            <td><code>[W]</code> キー</td>
+          </tr>
+          <tr>
+            <td><b>浮遊跳躍 (Float Jump)</b></td>
+            <td>頂点アペックスでの微小浮遊滞空と着地時のボヨン弾性変形（Squash &amp; Stretch）。</td>
+            <td><code>[F]</code> キー</td>
+          </tr>
+          <tr>
+            <td><b>ピルエット (Pirouette Dance)</b></td>
+            <td>90度ごとの高速スピン旋回と16分音符アルペジオ同期。</td>
+            <td><code>[D]</code> キー</td>
+          </tr>
+          <tr>
+            <td><b>歌唱 (Sing / Sacred Pulse)</b></td>
+            <td>頭頂部ジェムの5倍速高速回転、サックスフルート音響と放射状パルス波の発生。</td>
+            <td><code>[Space]</code>, <code>[P]</code>, <code>[J]</code> またはマスコットクリック</td>
+          </tr>
+          <tr>
+            <td><b>視線追従 (Gaze Tracking)</b></td>
+            <td>マウスポインタのXY座標に応じた頭部クォータニオンと眼球3D追従。</td>
+            <td>マウス移動</td>
+          </tr>
+          <tr>
+            <td><b>4D Hopf Fibration 密度</b></td>
+            <td>ファイバー本数・ステップ密度の動的切り替え（Sparse / Medium / Dense）。</td>
+            <td><code>[&lt; / ,]</code> 前, <code>[&gt; / .]</code> 次</td>
+          </tr>
+          <tr>
+            <td><b>DSP 楽曲シーケンス</b></td>
+            <td>Track 1〜4（4つのテーマ楽曲）のリアルタイム即時切り替え、ミュート切り替え。</td>
+            <td><code>[1]</code>〜<code>[4]</code>, <code>[M]</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. 機能仕様とアーキテクチャ (Functional &amp; Architecture Specifications)</h2>
+      <p>
+        Lil Cu 64 アプリケーションの内部構造、DSP音響エンジン、およびシステムコール仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Audio synthesis pipeline, VU0/SIMD vector math acceleration, and OpenGL state machine."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>コンポーネント・機能名</th>
+            <th>動作概要と機能仕様 (Functional Specification)</th>
+            <th>技術仕様・C99構造体 (C99 Implementation)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>アーキテクチャ</b></td>
+            <td>BTRON3 Specification 3.20に完全準拠したC99/OpenGLクリーンルーム実装。</td>
+            <td><code>src/demo/lilcu64_demo.c</code></td>
+          </tr>
+          <tr>
+            <td><b>プロシージャルDSPシンセ</b></td>
+            <td>外部PCM非依存、48音ボイスプール、ノードオートメーション、VirtIO-Sound DMAパイプライン。</td>
+            <td><code>src/demo/lilcu64_synth.c</code></td>
+          </tr>
+          <tr>
+            <td><b>楽曲スコアトランスクリプション</b></td>
+            <td>Web Audio API版の4トラック全楽譜シーケンスを1:1でC99配列へ転写・確定論的再生。</td>
+            <td><code>src/demo/lilcu64_score.c</code></td>
+          </tr>
+          <tr>
+            <td><b>4D Hopf数理幾何エンジン</b></td>
+            <td>超球面 \(S^3\) の測地線リングバッチ演算、PS2 VU0 / SIMD ベクトル並列最適化。</td>
+            <td><code>src/drivers/ps2/ps2_vu0_kernel.c</code></td>
+          </tr>
+          <tr>
+            <td><b>2D BTRONダッシュボード</b></td>
+            <td>3Dサーフェス上に透過合成されるレトロフューチャーHUD、吹き出し、およびFPS計。</td>
+            <td><code>render_2d_dashboard</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>関連コンポーネント (Related Components)</h2>
+      <div class="related-apps">
+        <a href="XMB.html">🎮 クロスメディアバー</a>
+        <a href="Orchestra.html">🎼 管弦楽 (Orchestra)</a>
+        <a href="Cassette.html">📼 カセット (Cassette)</a>
+        <a href="MSX.html">🕹️ B-MSX エミュレータ</a>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div class="app-footer-top">
+      <a href="../../index.html">← B-System</a>
+      <span class="site-name">Applications</span>
+    </div>
+    <div class="app-footer-grid">
+      <div class="app-footer-col">
+        <h4>System</h4>
+        <ul>
+            <li><a href="Workbench.html">Workbench</a></li>
+            <li><a href="Terminal.html">Terminal</a></li>
+            <li><a href="Commander.html">Commander</a></li>
+            <li><a href="Commands.html">Commands</a></li>
+            <li><a href="Calculator.html">Calculator</a></li>
+            <li><a href="Clock.html">Clock</a></li>
+            <li><a href="Mail.html">Mail</a></li>
+            <li><a href="Preferences.html">Preferences</a></li>
+            <li><a href="Boot.html">Boot</a></li>
+            <li><a href="Volumes.html">Volumes</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>TAD</h4>
+        <ul>
+            <li><a href="Cabinet.html">Cabinet</a></li>
+            <li><a href="Editor.html">Editor</a></li>
+            <li><a href="Matrix.html">Matrix</a></li>
+            <li><a href="Clarity.html">Clarity</a></li>
+            <li><a href="Browser.html">Browser</a></li>
+            <li><a href="Notebook.html">Notebook</a></li>
+            <li><a href="Review.html">Review</a></li>
+            <li><a href="Chat.html">Chat</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Media</h4>
+        <ul>
+            <li><a href="Cassette.html">Cassette</a></li>
+            <li><a href="Paint.html">Paint</a></li>
+            <li><a href="Orchestra.html">Orchestra</a></li>
+            <li><a href="MSX.html">MSX</a></li>
+            <li><a href="MicroScript.html">MicroScript</a></li>
+            <li><a href="XMB.html">XMB</a></li>
+            <li><a href="Demoscene.html" class="active">Demoscene</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Settings</h4>
+        <ul>
+            <li><a href="../settings/Appearance.html">Appearance</a></li>
+            <li><a href="../settings/Desktop.html">Desktop</a></li>
+            <li><a href="../settings/Input.html">Input</a></li>
+            <li><a href="../settings/Language.html">Language</a></li>
+            <li><a href="../settings/Sound.html">Sound</a></li>
+            <li><a href="../settings/Network.html">Network</a></li>
+            <li><a href="../settings/Display.html">Display</a></li>
+            <li><a href="../settings/Media.html">Media</a></li>
+            <li><a href="../settings/System.html">System</a></li>
+            <li><a href="../settings/Security.html">Security</a></li>
+            <li><a href="../settings/Terminal.html">Terminal</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="app-footer-bottom">B-System &nbsp;·&nbsp; Synrc VE OS.1 &nbsp;·&nbsp; Technical Specification</div>
+  </footer>
+</body>
+</html>

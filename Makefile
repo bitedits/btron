@@ -3342,7 +3342,18 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/clarity_layout.c \
                        src/apps/clarity_render.c \
                        src/apps/clarity_export.c \
-                       src/font/font_mgr.c
+                       src/font/font_mgr.c \
+                       src/gl/gl_dispatch.c \
+                       src/gl/gl_backend_choice.c \
+                       src/gl/egl_surface.c \
+                       src/gl/backend_virgl.c \
+                       src/apps/xmb.c \
+                       src/apps/xmb_wave.c \
+                       src/demo/lilcu64_wa.c \
+                       src/demo/lilcu64_score.c \
+                       src/demo/lilcu64_synth.c \
+                       src/demo/lilcu64_demo.c \
+                       src/drivers/ps2/ps2_vu0_kernel.c
 
 CAPTURE_SCREENS_OBJS = $(CAPTURE_SCREENS_SRCS:.c=.test.o)
 

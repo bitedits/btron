@@ -152,8 +152,8 @@ APPS_MAP = {
         },
         {
             "screen": "../img/screens/Commander_TV.png",
-            "caption": "実機描画フレームバッファより自動抽出された Terminal Vision (tv) 高速テキスト/テーブルビューア (Terminal Vision Table/Text Viewer)",
-            "alt": "Terminal Vision (tv) テキスト閲覧画面"
+            "caption": "実機描画フレームバッファより自動抽出された Terminal Vision (tv) テキスト閲覧画面 (Heart Sutra Tibetan)",
+            "alt": "Terminal Vision (tv) テキスト閲覧画面 (Heart Sutra)"
         },
         {
             "screen": "../img/screens/Commander_Exit.png",
@@ -275,6 +275,20 @@ APPS_MAP = {
             "screen": "../img/screens/B_MSX_Menu_Opened.png",
             "caption": "B-MSX ファイルメニュー展開画面 (ROM カセット・カスケードメニューより動的カートリッジ装填・切り替え)",
             "alt": "B-MSX カスケードメニュー展開 (ROM Cascade Menu Opened)"
+        }
+    ],
+    "XMB.html": [
+        {
+            "screen": "../img/screens/XMB_Application.png",
+            "caption": "実機描画フレームバッファより自動抽出された Cross Media Bar (XMB) メディアランチャー画面 (Dynamic Wave & Real-Time Category Navigation)",
+            "alt": "Cross Media Bar (XMB) 画面"
+        }
+    ],
+    "Demoscene.html": [
+        {
+            "screen": "../img/screens/Demoscene_Application.png",
+            "caption": "実機描画フレームバッファより自動抽出された Lil Cu 64 ネイティブ 3D デモシーン画面 (4D Hopf Fibration & Procedural DSP Synth)",
+            "alt": "Lil Cu 64 Demoscene 画面"
         }
     ]
 }

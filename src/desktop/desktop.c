@@ -391,6 +391,7 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
     const RECT panel_rows = { 0, 0, w, 28 };
     wnd_gl_cover_add(&panel_rows);
 
+#if !defined(BTRON_PS2_TARGET)
     /* Color Test Bar (bottom 40px) */
     COLOR bars[8] = {
         COLOR_WHITE,
@@ -416,6 +417,7 @@ void redraw_baremetal_desktop(GDEV *screen, H w, H h) {
      * opaque fill each, so they are one cover rect.  Same reason the panel above adds one rect. */
     wnd_gl_cover_add(&bar_rows);
     btron_render_stat_max(&g_render_stats.bars_us, btron_render_perf_us() - t_mark);
+#endif
     btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);
 
     /* Dynamic Classic B-TRON Mouse Cursor Rendering */
@@ -465,6 +467,7 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
         wnd_gl_cover_add(&panel_rows);
     }
 
+#if !defined(BTRON_PS2_TARGET)
     H bar_y = screen->height - 40;
     if (d.bottom > bar_y) {
         t_mark = btron_render_perf_us();
@@ -482,6 +485,7 @@ static void redraw_baremetal_desktop_mode(GDEV *screen, const RECT *damage, BOOL
         const RECT bar_rows = { 0, bar_y, screen->width, screen->height };
         wnd_gl_cover_add(&bar_rows);
     }
+#endif
     set_clip(screen, NULL);
     btron_render_stat_max(&g_render_stats.comp_us, btron_render_perf_us() - t_all);
 #if defined(__aarch64__)

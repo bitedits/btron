@@ -399,14 +399,19 @@ static void draw_octahedron(float radius, bool wireframe, float r, float g, floa
     glColor3f(r, g, b);
 
     if (wireframe) {
-        for (int i = 0; i < 8; i++) {
-            glBegin(GL_LINE_LOOP);
-            for (int j = 0; j < 3; j++) {
-                int vi = faces[i][j];
-                glVertex3f(vertices[vi][0] * radius, vertices[vi][1] * radius, vertices[vi][2] * radius);
-            }
-            glEnd();
+        static const int edges[12][2] = {
+            { 0, 2 }, { 2, 1 }, { 1, 3 }, { 3, 0 },
+            { 0, 4 }, { 1, 4 }, { 2, 4 }, { 3, 4 },
+            { 0, 5 }, { 1, 5 }, { 2, 5 }, { 3, 5 }
+        };
+        glBegin(GL_LINES);
+        for (int i = 0; i < 12; i++) {
+            int v0 = edges[i][0];
+            int v1 = edges[i][1];
+            glVertex3f(vertices[v0][0] * radius, vertices[v0][1] * radius, vertices[v0][2] * radius);
+            glVertex3f(vertices[v1][0] * radius, vertices[v1][1] * radius, vertices[v1][2] * radius);
         }
+        glEnd();
     } else {
         glBegin(GL_TRIANGLES);
         for (int i = 0; i < 8; i++) {
@@ -442,36 +447,36 @@ static void draw_saint_hex_halo(float time, float intensity) {
 
     /* 1. Outer Golden Hexagon Ring (R = 2.50 * sc, frames the full character body) */
     glColor3f(1.0f * intensity, 0.84f * intensity, 0.0f * intensity); /* Pure Gold */
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i < 6; i++) {
-        float a = (float)i * (float)(M_PI / 3.0) + rot1;
+    glBegin(GL_LINE_STRIP);
+    for (int i = 0; i <= 6; i++) {
+        float a = (float)(i % 6) * (float)(M_PI / 3.0) + rot1;
         glVertex3f(cosf(a) * (2.50f * sc), sinf(a) * (2.50f * sc), 0.0f);
     }
     glEnd();
 
     /* 2. Concentric Interlocking Hexagon (R = 2.35 * sc, rotated 30 deg / Sacred Hexagram) */
     glColor3f(1.0f * intensity, 0.93f * intensity, 0.45f * intensity); /* Luminous Chi Gold */
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i < 6; i++) {
-        float a = (float)i * (float)(M_PI / 3.0) + (float)(M_PI / 6.0) + rot2;
+    glBegin(GL_LINE_STRIP);
+    for (int i = 0; i <= 6; i++) {
+        float a = (float)(i % 6) * (float)(M_PI / 3.0) + (float)(M_PI / 6.0) + rot2;
         glVertex3f(cosf(a) * (2.35f * sc), sinf(a) * (2.35f * sc), 0.0f);
     }
     glEnd();
 
     /* 3. Mid Sacred Hexagon (R = 1.85 * sc) */
     glColor3f(0.98f * intensity, 0.75f * intensity, 0.12f * intensity); /* Deep Amber Gold */
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i < 6; i++) {
-        float a = (float)i * (float)(M_PI / 3.0) + rot3;
+    glBegin(GL_LINE_STRIP);
+    for (int i = 0; i <= 6; i++) {
+        float a = (float)(i % 6) * (float)(M_PI / 3.0) + rot3;
         glVertex3f(cosf(a) * (1.85f * sc), sinf(a) * (1.85f * sc), 0.0f);
     }
     glEnd();
 
     /* 4. Inner Concentric Hexagon (R = 1.40 * sc) */
     glColor3f(1.0f * intensity, 0.96f * intensity, 0.70f * intensity); /* Brilliant White-Gold */
-    glBegin(GL_LINE_LOOP);
-    for (int i = 0; i < 6; i++) {
-        float a = (float)i * (float)(M_PI / 3.0) + rot1 * 1.4f;
+    glBegin(GL_LINE_STRIP);
+    for (int i = 0; i <= 6; i++) {
+        float a = (float)(i % 6) * (float)(M_PI / 3.0) + rot1 * 1.4f;
         glVertex3f(cosf(a) * (1.40f * sc), sinf(a) * (1.40f * sc), 0.0f);
     }
     glEnd();
@@ -511,27 +516,30 @@ static void draw_anime_eye(float squish_y, bool is_left) {
 
     /* 1. Pupil: Disc radius 0.18, height 0.24 in 0x081226 (0.031, 0.070, 0.149) */
     glColor3f(0.031f, 0.070f, 0.149f);
-    glBegin(GL_POLYGON);
-    for (int a = 0; a < 16; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 16.0f;
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(0.0f, 0.0f, 0.0f);
+    for (int a = 0; a <= 16; a++) {
+        float rad = (float)(a % 16) * 2.0f * (float)M_PI / 16.0f;
         glVertex3f(cosf(rad) * 0.18f, sinf(rad) * 0.24f * squish_y, 0.0f);
     }
     glEnd();
 
     /* 2. Iris: Disc radius 0.15 at (0, -0.11, 0.005) in 0x00e5ff (0.0, 0.898, 1.0) */
     glColor3f(0.0f, 0.898f, 1.0f);
-    glBegin(GL_POLYGON);
-    for (int a = 0; a < 14; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 14.0f;
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(0.0f, -0.11f * squish_y, 0.005f);
+    for (int a = 0; a <= 14; a++) {
+        float rad = (float)(a % 14) * 2.0f * (float)M_PI / 14.0f;
         glVertex3f(cosf(rad) * 0.15f, -0.11f * squish_y + sinf(rad) * 0.15f * squish_y, 0.005f);
     }
     glEnd();
 
     /* 3. Specular highlight: Circle radius 0.09 at (-0.04, 0.11, 0.010) in 0xffffff */
     glColor3f(1.0f, 1.0f, 1.0f);
-    glBegin(GL_POLYGON);
-    for (int a = 0; a < 10; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 10.0f;
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(-0.04f, 0.11f * squish_y, 0.010f);
+    for (int a = 0; a <= 10; a++) {
+        float rad = (float)(a % 10) * 2.0f * (float)M_PI / 10.0f;
         glVertex3f(-0.04f + cosf(rad) * 0.09f, 0.11f * squish_y + sinf(rad) * 0.09f * squish_y, 0.010f);
     }
     glEnd();
@@ -542,9 +550,10 @@ static void draw_anime_eye(float squish_y, bool is_left) {
 /* Cheeks: Blush discs radius 0.22 in 0xff4081 (1:1 with index.html lines 6002-6012) */
 static void draw_cheek_blush(void) {
     glColor3f(1.0f, 0.251f, 0.506f);
-    glBegin(GL_POLYGON);
-    for (int a = 0; a < 14; a++) {
-        float rad = (float)a * 2.0f * (float)M_PI / 14.0f;
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(0.0f, 0.0f, 0.0f);
+    for (int a = 0; a <= 14; a++) {
+        float rad = (float)(a % 14) * 2.0f * (float)M_PI / 14.0f;
         glVertex3f(cosf(rad) * 0.22f, sinf(rad) * 0.22f, 0.0f);
     }
     glEnd();
@@ -664,20 +673,9 @@ static void render_hopf_fibration(float time, int density_mode) {
 
             glColor3f(r * 0.75f, g * 0.75f, b * 0.75f);
 
-            vu0_vec4_t s3_pts[64];
             vu0_vec4_t r3_pts[64];
-            for (int p = 0; p <= num_pts; p++) {
-                float xi = (float)p * 2.0f * (float)M_PI / (float)num_pts;
-
-                /* 4D Coordinates on S³ */
-                s3_pts[p].x = cos_eta * cosf(xi + beta * 0.5f + psi);
-                s3_pts[p].y = cos_eta * sinf(xi + beta * 0.5f + psi);
-                s3_pts[p].z = sin_eta * cosf(xi - beta * 0.5f + psi * 0.8f);
-                s3_pts[p].w = sin_eta * sinf(xi - beta * 0.5f + psi * 0.8f);
-            }
-
-            /* Offload projection S³ → ℝ³ and 3D rotation to VU0 SIMD kernel */
-            ps2_vu0_hopf_project_batch(s3_pts, (size_t)(num_pts + 1), &params, r3_pts);
+            /* Offload complete S³ coordinates synthesis, stereographic projection, and 3D rotation to VU0 SIMD kernel */
+            ps2_vu0_hopf_fiber_full_batch(cos_eta, sin_eta, beta, psi, num_pts, &params, r3_pts);
 
             glBegin(GL_LINE_STRIP);
             for (int p = 0; p <= num_pts; p++) {
@@ -705,21 +703,23 @@ static void render_radiant_waves(void) {
         float r = 0.3f + ease * (s_waves[i].max_r - 0.3f);
         float alpha = (1.0f - p);
 
+        vu0_vec4_t ring_pts[37];
+        /* Offload ring vertex generation to VU0 batch kernel */
+        ps2_vu0_circle_ring_batch(r, 36, ring_pts);
+
         /* 1. Golden Crest Ring */
         glColor3f(1.0f * alpha, 0.84f * alpha, 0.0f * alpha);
-        glBegin(GL_LINE_LOOP);
-        for (int a = 0; a < 36; a++) {
-            float ang = (float)a * 2.0f * (float)M_PI / 36.0f;
-            glVertex3f(cosf(ang) * r, sinf(ang) * r, 0.0f);
+        glBegin(GL_LINE_STRIP);
+        for (int a = 0; a <= 36; a++) {
+            glVertex3f(ring_pts[a].x, ring_pts[a].y, 0.0f);
         }
         glEnd();
 
         /* 2. Turquoise Resonance Rim */
         glColor3f(0.0f * alpha, 0.94f * alpha, 1.0f * alpha);
-        glBegin(GL_LINE_LOOP);
-        for (int a = 0; a < 36; a++) {
-            float ang = (float)a * 2.0f * (float)M_PI / 36.0f;
-            glVertex3f(cosf(ang) * (r * 0.95f), sinf(ang) * (r * 0.95f), 0.0f);
+        glBegin(GL_LINE_STRIP);
+        for (int a = 0; a <= 36; a++) {
+            glVertex3f(ring_pts[a].x * 0.95f, ring_pts[a].y * 0.95f, 0.0f);
         }
         glEnd();
     }
@@ -1318,49 +1318,46 @@ static void update_kinematics(float dt) {
     t_scale_x += s_impact_squash * 0.5f;
     t_scale_z += s_impact_squash * 0.5f;
 
-    /* Critically Damped Exponential Blend toward Target Pose (Zero Pops) */
-    s_pose.root_x = smooth_damp(s_pose.root_x, t_root_x, 18.0f, dt);
-    s_pose.root_y = smooth_damp(s_pose.root_y, t_root_y, 18.0f, dt);
-    s_pose.root_z = smooth_damp(s_pose.root_z, t_root_z, 18.0f, dt);
-    s_pose.root_rot_x = smooth_damp_angle(s_pose.root_rot_x, t_root_rot_x, 16.0f, dt);
-    s_pose.root_rot_y = smooth_damp_angle(s_pose.root_rot_y, t_root_rot_y, 16.0f, dt);
-    s_pose.root_rot_z = smooth_damp_angle(s_pose.root_rot_z, t_root_rot_z, 16.0f, dt);
+    /* Critically Damped Exponential Blend toward Target Pose (Vectorized on VU0 Kernel) */
+    float cur_trans[6] = { s_pose.root_x, s_pose.root_y, s_pose.root_z, s_pose.body_x, s_pose.body_y, s_pose.body_z };
+    const float tgt_trans[6] = { t_root_x, t_root_y, t_root_z, t_body_x, t_body_y, t_body_z };
+    ps2_vu0_damp_batch(cur_trans, tgt_trans, 18.0f, dt, 6);
+    s_pose.root_x = cur_trans[0]; s_pose.root_y = cur_trans[1]; s_pose.root_z = cur_trans[2];
+    s_pose.body_x = cur_trans[3]; s_pose.body_y = cur_trans[4]; s_pose.body_z = cur_trans[5];
 
-    s_pose.body_x = smooth_damp(s_pose.body_x, t_body_x, 18.0f, dt);
-    s_pose.body_y = smooth_damp(s_pose.body_y, t_body_y, 18.0f, dt);
-    s_pose.body_z = smooth_damp(s_pose.body_z, t_body_z, 18.0f, dt);
-    s_pose.body_rot_x = smooth_damp_angle(s_pose.body_rot_x, t_body_rot_x, 16.0f, dt);
-    s_pose.body_rot_y = smooth_damp_angle(s_pose.body_rot_y, t_body_rot_y, 16.0f, dt);
-    s_pose.body_rot_z = smooth_damp_angle(s_pose.body_rot_z, t_body_rot_z, 16.0f, dt);
+    float cur_rot[6] = { s_pose.root_rot_x, s_pose.root_rot_y, s_pose.root_rot_z, s_pose.body_rot_x, s_pose.body_rot_y, s_pose.body_rot_z };
+    const float tgt_rot[6] = { t_root_rot_x, t_root_rot_y, t_root_rot_z, t_body_rot_x, t_body_rot_y, t_body_rot_z };
+    ps2_vu0_damp_angle_batch(cur_rot, tgt_rot, 16.0f, dt, 6);
+    s_pose.root_rot_x = cur_rot[0]; s_pose.root_rot_y = cur_rot[1]; s_pose.root_rot_z = cur_rot[2];
+    s_pose.body_rot_x = cur_rot[3]; s_pose.body_rot_y = cur_rot[4]; s_pose.body_rot_z = cur_rot[5];
 
-    s_pose.scale_x = smooth_damp(s_pose.scale_x, t_scale_x, 22.0f, dt);
-    s_pose.scale_y = smooth_damp(s_pose.scale_y, t_scale_y, 22.0f, dt);
-    s_pose.scale_z = smooth_damp(s_pose.scale_z, t_scale_z, 22.0f, dt);
+    float cur_scale[3] = { s_pose.scale_x, s_pose.scale_y, s_pose.scale_z };
+    const float tgt_scale[3] = { t_scale_x, t_scale_y, t_scale_z };
+    ps2_vu0_damp_batch(cur_scale, tgt_scale, 22.0f, dt, 3);
+    s_pose.scale_x = cur_scale[0]; s_pose.scale_y = cur_scale[1]; s_pose.scale_z = cur_scale[2];
 
-    s_pose.lhand_rot_x = smooth_damp_angle(s_pose.lhand_rot_x, t_lhand_rot_x, 15.0f, dt);
-    s_pose.lhand_rot_y = smooth_damp_angle(s_pose.lhand_rot_y, t_lhand_rot_y, 15.0f, dt);
-    s_pose.lhand_rot_z = smooth_damp_angle(s_pose.lhand_rot_z, t_lhand_rot_z, 15.0f, dt);
+    float cur_hands[6] = { s_pose.lhand_rot_x, s_pose.lhand_rot_y, s_pose.lhand_rot_z, s_pose.rhand_rot_x, s_pose.rhand_rot_y, s_pose.rhand_rot_z };
+    const float tgt_hands[6] = { t_lhand_rot_x, t_lhand_rot_y, t_lhand_rot_z, t_rhand_rot_x, t_rhand_rot_y, t_rhand_rot_z };
+    ps2_vu0_damp_angle_batch(cur_hands, tgt_hands, 15.0f, dt, 6);
+    s_pose.lhand_rot_x = cur_hands[0]; s_pose.lhand_rot_y = cur_hands[1]; s_pose.lhand_rot_z = cur_hands[2];
+    s_pose.rhand_rot_x = cur_hands[3]; s_pose.rhand_rot_y = cur_hands[4]; s_pose.rhand_rot_z = cur_hands[5];
 
-    s_pose.rhand_rot_x = smooth_damp_angle(s_pose.rhand_rot_x, t_rhand_rot_x, 15.0f, dt);
-    s_pose.rhand_rot_y = smooth_damp_angle(s_pose.rhand_rot_y, t_rhand_rot_y, 15.0f, dt);
-    s_pose.rhand_rot_z = smooth_damp_angle(s_pose.rhand_rot_z, t_rhand_rot_z, 15.0f, dt);
+    float cur_feet_pos[6] = { s_pose.left_foot_x, s_pose.lfoot_y, s_pose.left_foot_z, s_pose.right_foot_x, s_pose.rfoot_y, s_pose.right_foot_z };
+    const float tgt_feet_pos[6] = { t_left_foot_x, t_lfoot_y, t_left_foot_z, t_right_foot_x, t_rfoot_y, t_right_foot_z };
+    ps2_vu0_damp_batch(cur_feet_pos, tgt_feet_pos, 20.0f, dt, 6);
+    s_pose.left_foot_x = cur_feet_pos[0]; s_pose.lfoot_y = cur_feet_pos[1]; s_pose.left_foot_z = cur_feet_pos[2];
+    s_pose.right_foot_x = cur_feet_pos[3]; s_pose.rfoot_y = cur_feet_pos[4]; s_pose.right_foot_z = cur_feet_pos[5];
 
-    s_pose.left_foot_x = smooth_damp(s_pose.left_foot_x, t_left_foot_x, 20.0f, dt);
-    s_pose.lfoot_y = smooth_damp(s_pose.lfoot_y, t_lfoot_y, 20.0f, dt);
-    s_pose.left_foot_z = smooth_damp(s_pose.left_foot_z, t_left_foot_z, 20.0f, dt);
-    s_pose.lfoot_rot_x = smooth_damp_angle(s_pose.lfoot_rot_x, t_lfoot_rot_x, 20.0f, dt);
-    s_pose.lfoot_rot_y = smooth_damp_angle(s_pose.lfoot_rot_y, t_lfoot_rot_y, 20.0f, dt);
-    s_pose.lfoot_rot_z = smooth_damp_angle(s_pose.lfoot_rot_z, t_lfoot_rot_z, 20.0f, dt);
+    float cur_feet_rot[6] = { s_pose.lfoot_rot_x, s_pose.lfoot_rot_y, s_pose.lfoot_rot_z, s_pose.rfoot_rot_x, s_pose.rfoot_rot_y, s_pose.rfoot_rot_z };
+    const float tgt_feet_rot[6] = { t_lfoot_rot_x, t_lfoot_rot_y, t_lfoot_rot_z, t_rfoot_rot_x, t_rfoot_rot_y, t_rfoot_rot_z };
+    ps2_vu0_damp_angle_batch(cur_feet_rot, tgt_feet_rot, 20.0f, dt, 6);
+    s_pose.lfoot_rot_x = cur_feet_rot[0]; s_pose.lfoot_rot_y = cur_feet_rot[1]; s_pose.lfoot_rot_z = cur_feet_rot[2];
+    s_pose.rfoot_rot_x = cur_feet_rot[3]; s_pose.rfoot_rot_y = cur_feet_rot[4]; s_pose.rfoot_rot_z = cur_feet_rot[5];
 
-    s_pose.right_foot_x = smooth_damp(s_pose.right_foot_x, t_right_foot_x, 20.0f, dt);
-    s_pose.rfoot_y = smooth_damp(s_pose.rfoot_y, t_rfoot_y, 20.0f, dt);
-    s_pose.right_foot_z = smooth_damp(s_pose.right_foot_z, t_right_foot_z, 20.0f, dt);
-    s_pose.rfoot_rot_x = smooth_damp_angle(s_pose.rfoot_rot_x, t_rfoot_rot_x, 20.0f, dt);
-    s_pose.rfoot_rot_y = smooth_damp_angle(s_pose.rfoot_rot_y, t_rfoot_rot_y, 20.0f, dt);
-    s_pose.rfoot_rot_z = smooth_damp_angle(s_pose.rfoot_rot_z, t_rfoot_rot_z, 20.0f, dt);
-
-    s_pose.smile_scale = smooth_damp(s_pose.smile_scale, t_smile_scale, 24.0f, dt);
-    s_pose.omouth_scale = smooth_damp(s_pose.omouth_scale, t_omouth_scale, 24.0f, dt);
+    float cur_mouth[2] = { s_pose.smile_scale, s_pose.omouth_scale };
+    const float tgt_mouth[2] = { t_smile_scale, t_omouth_scale };
+    ps2_vu0_damp_batch(cur_mouth, tgt_mouth, 24.0f, dt, 2);
+    s_pose.smile_scale = cur_mouth[0]; s_pose.omouth_scale = cur_mouth[1];
 
     if (s_anim_state != ANIM_SING) {
         s_sing_halo_curve *= expf(-10.0f * dt);
@@ -1463,7 +1460,7 @@ static void demo_paint(WND *wnd, GDEV *dev) {
 
     glViewport(0, 0, dev->width, dev->height);
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
     glEnable(GL_COLOR_MATERIAL);
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
@@ -1703,9 +1700,9 @@ WND* open_lilcu64_demo_window_rect(int x, int y, int w, int h) {
     lilcu64_synth_init(LILCU64_AUDIO_RATE);
     lilcu64_synth_play_track(1);
 
-    /* OpenGL initial state */
+    /* OpenGL initial state: DoubleSide rendering matching Three.js */
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
     glShadeModel(GL_SMOOTH);
 
     static const GLfloat light_pos[4]     = { 4.0f, 8.0f, 6.0f, 1.0f };

@@ -61,6 +61,29 @@ void ps2_vu0_ribbon_lattice_batch(float phase, float amplitude, float frequency,
                                   uint32_t cols, uint32_t rows,
                                   vu0_vec4_t *out_grid);
 
+/*
+ * Evaluates a complete 4D Hopf fibration fiber directly into ℝ³ projected vertices:
+ * S³ coordinates synthesis + stereographic projection + Euler rotation in a single SIMD pass.
+ */
+void ps2_vu0_hopf_fiber_full_batch(float cos_eta, float sin_eta, float beta, float psi,
+                                   int num_pts, const vu0_hopf_params_t *params,
+                                   vu0_vec4_t *out_r3);
+
+/*
+ * Vectorized critical spring-damper exponential relaxation for pose variables.
+ */
+void ps2_vu0_damp_batch(float *current, const float *target, float lambda, float dt, size_t count);
+
+/*
+ * Vectorized angular critical spring-damper relaxation with angle unwrapping [-PI, PI].
+ */
+void ps2_vu0_damp_angle_batch(float *current, const float *target, float lambda, float dt, size_t count);
+
+/*
+ * Vectorized 2D ring perimeter vertex generation for radiant pulse waves and halos.
+ */
+void ps2_vu0_circle_ring_batch(float r, size_t num_segments, vu0_vec4_t *out_pts);
+
 #ifdef __cplusplus
 }
 #endif

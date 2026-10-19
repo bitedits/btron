@@ -114,7 +114,7 @@ The 3D coordinate system matches the HTML5 camera configuration:
   └── Contact Shadow Pedestal (Soft alpha ellipse at y = -1.25)
 
 2.2 BTRON Window Lifecycle & Scheduler Integration
-- Window Creation: `opn_wnd("Lil Cu 64 — B-System Alpha 1 [Ceremony]", ...)`
+- Window Creation: `opn_wnd("Lil Cu 64", ...)`
 - Surface Creation: `egl_create_window_surface(wnd)` wrapping the window's client pixmap.
 - Task Creation: Registered via `cre_tsk` and `sta_tsk`, sleeping 16ms (`dly_tsk(16)`) for a rock-solid
   60 FPS render cadence driven by the Local APIC / POSIX timer tick.

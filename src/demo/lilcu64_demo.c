@@ -1638,7 +1638,7 @@ WND* open_lilcu64_demo_window_rect(int x, int y, int w, int h) {
         x = 180; y = 40; w = 720; h = 540;
     }
 
-    s_demo_wnd = opn_wnd("Lil Cu 64 — B-System Alpha 1 [Ceremony]",
+    s_demo_wnd = opn_wnd("Lil Cu 64",
                          x, y, w, h,
                          WND_ATTR_TITLE | WND_ATTR_BORDER | WND_ATTR_CLOSE | WND_ATTR_RESIZE);
     if (!s_demo_wnd) {

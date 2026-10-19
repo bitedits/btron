@@ -92,7 +92,18 @@ static void quake_paint(WND *wnd, GDEV *dev) {
     }
 
 #if defined(BTRON_PS2_TARGET)
-    SV_ServerFrame(1.0f / 60.0f);
+    static SYSTIME s_quake_last_paint = 0;
+    SYSTIME qnow = 0;
+    get_tim(&qnow);
+    float qdt = 1.0f / 60.0f;
+    if (s_quake_last_paint > 0 && qnow > s_quake_last_paint) {
+        uint32_t diff_ms = (uint32_t)(qnow - s_quake_last_paint);
+        qdt = (float)(int)diff_ms / 1000.0f;
+        if (qdt > 0.1f) qdt = 0.1f;
+        if (qdt < 0.001f) qdt = 0.001f;
+    }
+    s_quake_last_paint = qnow;
+    SV_ServerFrame(qdt);
 #endif
 
     R_BeginFrame();

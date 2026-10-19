@@ -25,6 +25,10 @@ GL_BACKEND gl_active_backend(void) {
     return s_active_backend;
 }
 
+void gl_set_active_backend(GL_BACKEND b) {
+    s_active_backend = b;
+}
+
 /* Which pipeline is installed, asked as one question because two backends share it.  The
  * GS rasterises the geometry but the vertex transform, the state and the record of what to
  * draw are TinyGL's, so an EEGS image dispatches through the same ops table a TINYGL image

@@ -16080,11 +16080,28 @@ static void ps2_gui_pass(GDEV *screen)
 #if BTRON_HID_TRACE
     ps2_log_usb_state('G');
 #endif
-    /* Stepping animation for interactive desktop GL apps (XMB, GLGears, Quake) */
+    /* RTOS cooperative scheduler for interactive desktop GL apps:
+     * - Dedicated EEGS hardware layer (XMB) updates smoothly every pass
+     * - Software rasterized companion windows (GL Gears, Quake) are time-sliced /
+     *   interleaved across passes to prevent rasterizer congestion, maintaining high
+     *   frame rates and zero input latency across all quadrants.
+     */
+    static uint32_t s_sched_turn = 0;
+    WND *sw_windows[4];
+    int sw_count = 0;
+
     for (WND *gw = get_wnd_list(); gw; gw = gw->next) {
-        if (gw->visible && gw->gl_surf) {
+        if (!gw->visible || !gw->gl_surf) continue;
+        if (gw->gl_layer) {
             inval_wnd(gw);
+        } else {
+            if (sw_count < 4) sw_windows[sw_count++] = gw;
         }
+    }
+
+    if (sw_count > 0) {
+        uint32_t idx = (s_sched_turn++) % (uint32_t)sw_count;
+        inval_wnd(sw_windows[idx]);
     }
 
     ps2_bands_for_pass(&set);

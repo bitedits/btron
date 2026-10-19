@@ -122,6 +122,8 @@ const char *gl_backend_name(GL_BACKEND b);
  * resize, shutdown, fill accounting, whether a surface may be blitted -- answers the same
  * for both.  Ask this instead of `gl_active_backend() == GL_BACKEND_TINYGL` wherever the
  * question is "which pipeline is installed" rather than "what is its name". */
+GL_BACKEND gl_active_backend(void);
+void       gl_set_active_backend(GL_BACKEND b);
 int gl_tinygl_pipeline(void);
 
 /* ── Fill accounting ─────────────────────────────────────────────────

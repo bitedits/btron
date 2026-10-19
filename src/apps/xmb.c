@@ -3045,6 +3045,8 @@ static void xb_paint(WND *wnd, GDEV *dev)
     if (!wnd || !dev || !s_surf)
         return;
 
+    egl_make_current(s_surf);
+
     probing = (s_probe_left != 0u);
     if (probing)
         s_probe_left--;

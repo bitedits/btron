@@ -521,7 +521,7 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
 
 #if defined(BTRON_PS2_TARGET)
     btron_desktop_note_size(w, h);
-    gl_backend_select(GL_BACKEND_TINYGL);
+    gl_backend_select(GL_BACKEND_EEGS);
     /* 4 OpenGL apps opened in Tile mode:
      * Quadrant 0 (Top-Left): Terminal (392x276, client 384x248)
      * Quadrant 1 (Top-Right): XMB (392x276, client 384x248)

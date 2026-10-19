@@ -183,6 +183,8 @@ static void glgears_task_fn(VW exinf) {
 static void glgears_paint(WND *wnd, GDEV *dev) {
     if (!wnd || !dev || !s_surf) return;
 
+    egl_make_current(s_surf);
+
     if (s_surf->width != dev->width || s_surf->height != dev->height) {
         egl_surface_resize(s_surf, dev->width, dev->height);
     }

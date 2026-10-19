@@ -14,6 +14,7 @@
 #include <btron/btron.h>
 #include <btron/dp.h>        /* btron_render_perf_us(), the overlay's clock */
 #include <stdlib.h>
+#include <string.h>
 
 /* A per-window frames-per-second readout written into the TITLE BAR of every
  * OpenGL window -- XMB, Lil Cu, glgears, Quake, and any future GL client -- at
@@ -195,7 +196,18 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
      * no TinyGL linked resolves EEGS to a software backend, and that window's pixmap is the
      * picture and must keep being blitted. */
     if (gl_active_backend() == GL_BACKEND_EEGS) {
+#if defined(BTRON_PS2_TARGET)
+        /* Under EEGS on PS2, the hardware GS stream owns one designated layer window (XMB).
+         * Concurrent companion windows (GL Gears, Quake) are rendered into their client
+         * pixmaps via TinyGL software rasterization so all desktop quadrants remain visible. */
+        if (!wnd || !wnd->title || !(strstr(wnd->title, "Cross Media Bar") || strstr(wnd->title, "XMB"))) {
+            wnd->gl_layer = FALSE;
+        } else {
+            wnd->gl_layer = TRUE;
+        }
+#else
         wnd->gl_layer = TRUE;
+#endif
     }
 
     /* And make THIS surface current before handing it back, because EGL's own contract is that
@@ -220,6 +232,13 @@ void egl_make_current(EGL_SURFACE *surf) {
     }
 #if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_tinygl_pipeline()) {
+#if defined(BTRON_PS2_TARGET)
+        if (surf->wnd && surf->wnd->gl_layer) {
+            gl_set_active_backend(GL_BACKEND_EEGS);
+        } else {
+            gl_set_active_backend(GL_BACKEND_TINYGL);
+        }
+#endif
         tinygl_backend_make_current_ctx(&surf->gl_ctx, surf->width, surf->height,
                                         surf->pixels);
         return;

@@ -435,13 +435,6 @@ static void v9938_reg_write(v9938_t *v, uint8_t reg, uint8_t val)
 {
     if (reg >= V9938_REG_COUNT) return;
     v->regs[reg] = val;
-    {
-        extern uint16_t msx_get_pc(void);
-        uint16_t pc = msx_get_pc();
-        if (pc >= 0xE000) {
-            printf("[REG %d] pc=%04X val=%02X\n", reg, pc, val);
-        }
-    }
     if (reg == 16) {
         v->pal_pending = 0;
         v->pal_sub_idx = 0;
@@ -621,8 +614,8 @@ void v9938_write(v9938_t *v, uint8_t port, uint8_t val)
         break;
     }
     case 2: { /* Port 0x9A: Palette */
-        if (v->regs[20] & 0x01) {
-            /* V9968 Extended Palette (EPAL): 3 bytes per entry (R, G, B in 0..31) */
+        if (v->regs[20] & 0x10) {
+            /* V9968 Extended Palette (EPAL, R#20 bit 4): 3 bytes per entry (R, G, B in 0..31) */
             uint8_t pidx = v->regs[16];
             if (v->pal_sub_idx == 0) {
                 v->pal_r_latch = (uint8_t)(val & 0x1Fu);
@@ -717,7 +710,7 @@ int v9938_vblank_taken(v9938_t *v)
 void v9938_render(v9938_t *v, uint16_t *fb)
 {
     uint8_t m = v9938_mode(v);
-    int use_epal = (v->regs[20] & 0x01) != 0;
+    int use_epal = (v->regs[20] & 0x10) != 0;
     uint8_t bg_idx = (uint8_t)(v->regs[7] & ((m == 0x1C && use_epal) ? 0xFFu : 0x0Fu));
     uint16_t bg = (m == 0x1C && use_epal) ? v->pal256[bg_idx] : v->pal[bg_idx];
     uint16_t y, x;

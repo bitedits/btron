@@ -249,6 +249,7 @@ typedef struct virgl_context_s {
     /* GL Flags */
     int lighting_enabled;
     int light0_enabled;
+    int color_material_enabled;
     int depth_test_enabled;
     int cull_face_enabled;
     int blend_enabled;
@@ -286,6 +287,7 @@ static virgl_context_t s_default_ctx = {
     .light0_ambient = {0.2f, 0.2f, 0.2f, 1.0f},
     .lighting_enabled = 0,
     .light0_enabled = 1,
+    .color_material_enabled = 0,
     .depth_test_enabled = 0,
     .cull_face_enabled = 0,
     .blend_src = GL_ONE,
@@ -324,6 +326,7 @@ static virgl_context_t *s_ctx = &s_default_ctx;
 #define s_light0_ambient     (s_ctx->light0_ambient)
 #define s_lighting_enabled   (s_ctx->lighting_enabled)
 #define s_light0_enabled     (s_ctx->light0_enabled)
+#define s_color_material_enabled (s_ctx->color_material_enabled)
 #define s_depth_test_enabled (s_ctx->depth_test_enabled)
 #define s_cull_face_enabled  (s_ctx->cull_face_enabled)
 #define s_blend_enabled      (s_ctx->blend_enabled)
@@ -719,14 +722,23 @@ static void rasterize_tri(const virgl_tri_t *tri, const mat4_t *mv, const mat4_t
             float n_dot_l = tnx * lx + tny * ly + tnz * lz;
             if (n_dot_l < 0.0f) n_dot_l = 0.0f;
 
-            /* Material diffuse comes from vertex color modulated with material diffuse */
-            float mat_r = tri->v[i].r * tri->mat_diffuse[0];
-            float mat_g = tri->v[i].g * tri->mat_diffuse[1];
-            float mat_b = tri->v[i].b * tri->mat_diffuse[2];
-
-            float amb_r = mat_r * 0.25f;
-            float amb_g = mat_g * 0.25f;
-            float amb_b = mat_b * 0.25f;
+            float mat_r, mat_g, mat_b;
+            float amb_r, amb_g, amb_b;
+            if (s_color_material_enabled) {
+                mat_r = tri->v[i].r;
+                mat_g = tri->v[i].g;
+                mat_b = tri->v[i].b;
+                amb_r = mat_r * s_light0_ambient[0];
+                amb_g = mat_g * s_light0_ambient[1];
+                amb_b = mat_b * s_light0_ambient[2];
+            } else {
+                mat_r = tri->mat_diffuse[0];
+                mat_g = tri->mat_diffuse[1];
+                mat_b = tri->mat_diffuse[2];
+                amb_r = tri->mat_ambient[0] * s_light0_ambient[0];
+                amb_g = tri->mat_ambient[1] * s_light0_ambient[1];
+                amb_b = tri->mat_ambient[2] * s_light0_ambient[2];
+            }
 
             lr = amb_r + mat_r * s_light0_diffuse[0] * n_dot_l;
             lg = amb_g + mat_g * s_light0_diffuse[1] * n_dot_l;
@@ -1161,21 +1173,23 @@ static void virgl_clear_color(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
 }
 
 static void virgl_enable(GLenum cap) {
-    if (cap == GL_LIGHTING)   s_lighting_enabled = 1;
-    if (cap == GL_LIGHT0)     s_light0_enabled = 1;
-    if (cap == GL_DEPTH_TEST) s_depth_test_enabled = 1;
-    if (cap == GL_CULL_FACE)  s_cull_face_enabled = 1;
-    if (cap == GL_BLEND)      s_blend_enabled = 1;
-    if (cap == GL_TEXTURE_2D) s_tex_enabled = 1;
+    if (cap == GL_LIGHTING)       s_lighting_enabled = 1;
+    if (cap == GL_LIGHT0)         s_light0_enabled = 1;
+    if (cap == GL_COLOR_MATERIAL) s_color_material_enabled = 1;
+    if (cap == GL_DEPTH_TEST)     s_depth_test_enabled = 1;
+    if (cap == GL_CULL_FACE)      s_cull_face_enabled = 1;
+    if (cap == GL_BLEND)          s_blend_enabled = 1;
+    if (cap == GL_TEXTURE_2D)     s_tex_enabled = 1;
 }
 
 static void virgl_disable(GLenum cap) {
-    if (cap == GL_LIGHTING)   s_lighting_enabled = 0;
-    if (cap == GL_LIGHT0)     s_light0_enabled = 0;
-    if (cap == GL_DEPTH_TEST) s_depth_test_enabled = 0;
-    if (cap == GL_CULL_FACE)  s_cull_face_enabled = 0;
-    if (cap == GL_BLEND)      s_blend_enabled = 0;
-    if (cap == GL_TEXTURE_2D) s_tex_enabled = 0;
+    if (cap == GL_LIGHTING)       s_lighting_enabled = 0;
+    if (cap == GL_LIGHT0)         s_light0_enabled = 0;
+    if (cap == GL_COLOR_MATERIAL) s_color_material_enabled = 0;
+    if (cap == GL_DEPTH_TEST)     s_depth_test_enabled = 0;
+    if (cap == GL_CULL_FACE)      s_cull_face_enabled = 0;
+    if (cap == GL_BLEND)          s_blend_enabled = 0;
+    if (cap == GL_TEXTURE_2D)     s_tex_enabled = 0;
 }
 
 static void virgl_blend_func(GLenum src, GLenum dst) {
@@ -1191,10 +1205,21 @@ static void virgl_light_fv(GLenum light, GLenum pname, const GLfloat *params) {
     if (!params) return;
     if (light == GL_LIGHT0) {
         if (pname == GL_POSITION) {
-            /* Transform light position by current modelview matrix */
-            mat4_transform_vec4(&s_modelview_stack[s_mv_top],
-                                params[0], params[1], params[2],
-                                &s_light0_pos[0], &s_light0_pos[1], &s_light0_pos[2], &s_light0_pos[3]);
+            const mat4_t *m = &s_modelview_stack[s_mv_top];
+            float w = params[3];
+            if (w == 0.0f) {
+                /* Directional light: transform direction vector by 3x3 (no translation) */
+                s_light0_pos[0] = m->m[0][0] * params[0] + m->m[0][1] * params[1] + m->m[0][2] * params[2];
+                s_light0_pos[1] = m->m[1][0] * params[0] + m->m[1][1] * params[1] + m->m[1][2] * params[2];
+                s_light0_pos[2] = m->m[2][0] * params[0] + m->m[2][1] * params[1] + m->m[2][2] * params[2];
+                s_light0_pos[3] = 0.0f;
+            } else {
+                /* Positional light: transform point by 4x4 */
+                s_light0_pos[0] = m->m[0][0] * params[0] + m->m[0][1] * params[1] + m->m[0][2] * params[2] + m->m[0][3] * w;
+                s_light0_pos[1] = m->m[1][0] * params[0] + m->m[1][1] * params[1] + m->m[1][2] * params[2] + m->m[1][3] * w;
+                s_light0_pos[2] = m->m[2][0] * params[0] + m->m[2][1] * params[1] + m->m[2][2] * params[2] + m->m[2][3] * w;
+                s_light0_pos[3] = w;
+            }
         } else if (pname == GL_DIFFUSE) {
             memcpy(s_light0_diffuse, params, sizeof(s_light0_diffuse));
         } else if (pname == GL_AMBIENT) {
@@ -1209,6 +1234,9 @@ static void virgl_material_fv(GLenum face, GLenum pname, const GLfloat *params) 
     if (pname == GL_DIFFUSE) {
         memcpy(s_mat_diffuse, params, sizeof(s_mat_diffuse));
     } else if (pname == GL_AMBIENT) {
+        memcpy(s_mat_ambient, params, sizeof(s_mat_ambient));
+    } else if (pname == GL_AMBIENT_AND_DIFFUSE) {
+        memcpy(s_mat_diffuse, params, sizeof(s_mat_diffuse));
         memcpy(s_mat_ambient, params, sizeof(s_mat_ambient));
     }
 }
@@ -1463,6 +1491,7 @@ void virgl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf)
         ctx->light0_ambient[0] = 0.2f; ctx->light0_ambient[1] = 0.2f; ctx->light0_ambient[2] = 0.2f; ctx->light0_ambient[3] = 1.0f;
         ctx->lighting_enabled = 0;
         ctx->light0_enabled = 1;
+        ctx->color_material_enabled = 0;
         ctx->depth_test_enabled = 0;
         ctx->cull_face_enabled = 0;
         ctx->depth_buf = (float *)malloc((size_t)w * h * sizeof(float));

@@ -92,15 +92,39 @@ void ps2_vu0_hopf_fiber_full_batch(float cos_eta, float sin_eta, float beta, flo
     const float psi_scaled = psi * 0.8f;
     const float inv_pts = (2.0f * (float)M_PI) / (float)num_pts;
 
-    for (int p = 0; p <= num_pts; p++) {
-        const float xi = (float)p * inv_pts;
-        const float a1 = xi + beta_half + psi;
-        const float a2 = xi - beta_half + psi_scaled;
+    const float c1 = beta_half + psi;
+    const float c2 = -beta_half + psi_scaled;
+    const float cos_c1 = cosf(c1);
+    const float sin_c1 = sinf(c1);
+    const float cos_c2 = cosf(c2);
+    const float sin_c2 = sinf(c2);
 
-        const float x0 = cos_eta * cosf(a1);
-        const float x1 = cos_eta * sinf(a1);
-        const float x2 = sin_eta * cosf(a2);
-        const float x3 = sin_eta * sinf(a2);
+    static float s_cached_cos_xi[65];
+    static float s_cached_sin_xi[65];
+    static int s_cached_pts = 0;
+
+    if (s_cached_pts != num_pts) {
+        for (int p = 0; p <= num_pts && p <= 64; p++) {
+            const float xi = (float)p * inv_pts;
+            s_cached_cos_xi[p] = cosf(xi);
+            s_cached_sin_xi[p] = sinf(xi);
+        }
+        s_cached_pts = num_pts;
+    }
+
+    for (int p = 0; p <= num_pts; p++) {
+        const float cos_xi = s_cached_cos_xi[p];
+        const float sin_xi = s_cached_sin_xi[p];
+
+        const float cos_a1 = cos_xi * cos_c1 - sin_xi * sin_c1;
+        const float sin_a1 = sin_xi * cos_c1 + cos_xi * sin_c1;
+        const float cos_a2 = cos_xi * cos_c2 - sin_xi * sin_c2;
+        const float sin_a2 = sin_xi * cos_c2 + cos_xi * sin_c2;
+
+        const float x0 = cos_eta * cos_a1;
+        const float x1 = cos_eta * sin_a1;
+        const float x2 = sin_eta * cos_a2;
+        const float x3 = sin_eta * sin_a2;
 
         float denom = 1.08f - x3;
         if (denom < min_d) denom = min_d;

@@ -146,21 +146,21 @@ static void init_gears_scene(void) {
     /* Gear 1 (Red) */
     gear1 = glGenLists(1);
     glNewList(gear1, GL_COMPILE);
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, red);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, red);
     build_gear(1.0f, 4.0f, 1.0f, 20, 0.7f);
     glEndList();
 
     /* Gear 2 (Green) */
     gear2 = glGenLists(1);
     glNewList(gear2, GL_COMPILE);
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, green);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, green);
     build_gear(0.5f, 2.0f, 2.0f, 10, 0.7f);
     glEndList();
 
     /* Gear 3 (Blue) */
     gear3 = glGenLists(1);
     glNewList(gear3, GL_COMPILE);
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, blue);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, blue);
     build_gear(1.3f, 2.0f, 0.5f, 10, 0.7f);
     glEndList();
 
@@ -197,10 +197,15 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
     glEnable(GL_CULL_FACE);
+    glDisable(GL_COLOR_MATERIAL);
     glDisable(GL_BLEND);
     glShadeModel(GL_SMOOTH);
-    static GLfloat pos[4] = { 5.0f, 5.0f, 10.0f, 0.0f };
-    glLightfv(GL_LIGHT0, GL_POSITION, pos);
+    static const GLfloat pos[4]   = { 5.0f, 5.0f, 10.0f, 0.0f };
+    static const GLfloat white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    static const GLfloat amb[4]   = { 0.2f, 0.2f, 0.2f, 1.0f };
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, white);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, white);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, amb);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -209,9 +214,10 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    glLightfv(GL_LIGHT0, GL_POSITION, pos);
     glTranslatef(0.0f, 0.0f, -40.0f);
 
-    glClearColor(0.06f, 0.08f, 0.12f, 1.0f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glPushMatrix();

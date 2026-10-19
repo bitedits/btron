@@ -32,6 +32,12 @@
 #endif
 
 extern void uart_puts_raw(const char *s);
+#if defined(BTRON_PS2_TARGET)
+extern int ps2_kprintf(const char *fmt, ...);
+#else
+#define ps2_kprintf(...) ((void)0)
+#endif
+extern uint32_t btron_render_perf_us(void);
 
 /* ── Global Window & Surface State ───────────────────────────────── */
 
@@ -150,12 +156,12 @@ static char s_quote_text[256] = "ボクはリル・キューブ64… 低ポリ�
 
 /* ── Math Utilities & Damping ─────────────────────────────────────── */
 
-static inline float smooth_damp(float cur, float target, float speed, float dt) {
+static inline float __attribute__((unused)) smooth_damp(float cur, float target, float speed, float dt) {
     float factor = 1.0f - expf(-speed * dt);
     return cur + (target - cur) * factor;
 }
 
-static inline float smooth_damp_angle(float cur, float target, float speed, float dt) {
+static inline float __attribute__((unused)) smooth_damp_angle(float cur, float target, float speed, float dt) {
     float diff = fmodf(target - cur, (float)(2.0 * M_PI));
     if (diff > (float)M_PI) diff -= (float)(2.0 * M_PI);
     if (diff < (float)-M_PI) diff += (float)(2.0 * M_PI);
@@ -728,10 +734,61 @@ static void render_radiant_waves(void) {
     glEnable(GL_LIGHTING);
 }
 
+/* ── Pedestal Luminous Shadow (1:1 with index.html lines 707-720) ─── */
+
+static void draw_pedestal_shadow(float root_x, float root_z, float char_y) {
+    float h = char_y > 0.0f ? char_y : 0.0f;
+    float alpha = 1.0f / (1.0f + 1.2f * h);
+    float sx = 0.85f * (1.0f + 0.20f * h);
+    float sz = 0.32f * (1.0f + 0.20f * h);
+
+    static const float cos_tbl[17] = {
+        1.00000f, 0.92388f, 0.70711f, 0.38268f, 0.00000f, -0.38268f, -0.70711f, -0.92388f,
+        -1.00000f, -0.92388f, -0.70711f, -0.38268f, 0.00000f, 0.38268f, 0.70711f, 0.92388f, 1.00000f
+    };
+    static const float sin_tbl[17] = {
+        0.00000f, 0.38268f, 0.70711f, 0.92388f, 1.00000f, 0.92388f, 0.70711f, 0.38268f,
+        0.00000f, -0.38268f, -0.70711f, -0.92388f, -1.00000f, -0.92388f, -0.70711f, -0.38268f, 0.00000f
+    };
+
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+    /* Inner cyan core */
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(0.0f, 0.95f, 1.0f, 0.60f * alpha);
+    glVertex3f(root_x, -1.15f, root_z);
+    for (int i = 0; i <= 16; i++) {
+        glColor4f(1.0f, 0.84f, 0.25f, 0.35f * alpha);
+        glVertex3f(root_x + cos_tbl[i] * (sx * 0.55f), -1.15f, root_z + sin_tbl[i] * (sz * 0.55f));
+    }
+    glEnd();
+
+    /* Outer fade ring */
+    glBegin(GL_QUAD_STRIP);
+    for (int i = 0; i <= 16; i++) {
+        glColor4f(1.0f, 0.84f, 0.25f, 0.35f * alpha);
+        glVertex3f(root_x + cos_tbl[i] * (sx * 0.55f), -1.15f, root_z + sin_tbl[i] * (sz * 0.55f));
+        glColor4f(0.0f, 0.0f, 0.0f, 0.0f);
+        glVertex3f(root_x + cos_tbl[i] * sx, -1.15f, root_z + sin_tbl[i] * sz);
+    }
+    glEnd();
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+}
+
 /* ── Lil Cu 64 Mascot Renderer (1:1 with index.html lines 6055-6113) ─ */
 
 static void render_lilcu64(const AnimPose *pose, float time) {
     (void)time;
+
+    /* Ground pedestal shadow beneath character */
+    draw_pedestal_shadow(pose->root_x, pose->root_z, pose->root_y + pose->body_y);
+
     glPushMatrix();
 
     /* Root Group (balances optical center at (0, 0, 0), scale (0.60, 0.60, 0.60)) */
@@ -757,12 +814,19 @@ static void render_lilcu64(const AnimPose *pose, float time) {
     glRotatef(pose->body_rot_z * 57.29578f, 0.0f, 0.0f, 1.0f);
     glScalef(pose->scale_x, pose->scale_y, pose->scale_z);
 
+#if defined(BTRON_PS2_TARGET)
+    uint32_t tm0 = btron_render_perf_us();
+#endif
+
     /* 1. Main Faceted Gem Cube at (0, 0.12, 0), color 0x85e8ff (0.522, 0.910, 1.0) — Lit */
     glEnable(GL_LIGHTING);
     glEnable(GL_COLOR_MATERIAL);
     glPushMatrix();
     glTranslatef(0.0f, 0.12f, 0.0f);
     draw_faceted_gem_cube(0.522f, 0.910f, 1.0f);
+#if defined(BTRON_PS2_TARGET)
+    uint32_t tm_gem = btron_render_perf_us();
+#endif
 
     /* 2. Internal rotating Octahedron Core at (0, 0.12, 0), radius 0.78, solid white — Unlit */
     glDisable(GL_LIGHTING);
@@ -780,6 +844,9 @@ static void render_lilcu64(const AnimPose *pose, float time) {
     glPopMatrix();
 
     glPopMatrix(); /* End main cube & octahedra */
+#if defined(BTRON_PS2_TARGET)
+    uint32_t tm_octa = btron_render_perf_us();
+#endif
 
     /* 4. Facial Features (Unlit for pure anime brilliance, matching Three.js MeshBasicMaterial) */
     glDisable(GL_LIGHTING);
@@ -815,6 +882,9 @@ static void render_lilcu64(const AnimPose *pose, float time) {
     glTranslatef(0.76f, -0.06f, 1.075f);
     draw_cheek_blush();
     glPopMatrix();
+#if defined(BTRON_PS2_TARGET)
+    uint32_t tm_face = btron_render_perf_us();
+#endif
 
     /* 5. Little Cube Hands at pivots (-1.26, 0.05, 0.1) and (1.26, 0.05, 0.1) — Lit */
     glEnable(GL_LIGHTING);
@@ -863,6 +933,18 @@ static void render_lilcu64(const AnimPose *pose, float time) {
     glTranslatef(0.0f, -0.20f, 0.06f);
     draw_box(0.72f, 0.48f, 0.88f, 1.0f, 0.302f, 0.553f);
     glPopMatrix();
+
+#if defined(BTRON_PS2_TARGET)
+    uint32_t tm_feet = btron_render_perf_us();
+    static uint32_t s_mascot_cnt = 0;
+    if ((++s_mascot_cnt % 30) == 1) {
+        ps2_kprintf("  [MASCOT BREAKDOWN] gem=%u octa=%u face=%u limbs=%u us\n",
+                    (unsigned)(tm_gem - tm0),
+                    (unsigned)(tm_octa - tm_gem),
+                    (unsigned)(tm_face - tm_octa),
+                    (unsigned)(tm_feet - tm_face));
+    }
+#endif
 
     glPopMatrix(); /* End Root Group */
 }
@@ -1371,6 +1453,7 @@ static void update_kinematics(float dt) {
 
 static void render_2d_dashboard(WND *wnd, GDEV *dev) {
     if (!dev) return;
+    (void)wnd;
 
     /* Top banner tag */
     drw_tc_string(dev, 24, 14, "🌸 BTRON3 × Synrc VE OS.1 次世代コンシューマOS仕様", COLOR_CYAN, 0);
@@ -1408,13 +1491,15 @@ static void render_2d_dashboard(WND *wnd, GDEV *dev) {
             /* Blit bottom speech bubble / hint area (dev->height - 68 .. dev->height) to screen */
             H y0 = dev->height > 68 ? dev->height - 68 : 0;
             H y1 = dev->height;
-            for (H y = y0; y < y1; y++) {
-                H sy = dest_y + y;
-                if (sy < 0 || sy >= screen->height) continue;
-                for (H x = 0; x < dev->width; x++) {
-                    H sx = dest_x + x;
-                    if (sx < 0 || sx >= screen->width) continue;
-                    screen->pixels[sy * screen->width + sx] = dev->pixels[y * dev->width + x];
+            H clip_w = (dest_x + dev->width <= screen->width) ? dev->width : (screen->width - dest_x);
+            if (clip_w > 0 && dest_x >= 0) {
+                for (H y = y0; y < y1; y++) {
+                    H sy = dest_y + y;
+                    if (sy >= 0 && sy < screen->height) {
+                        memcpy(&screen->pixels[sy * screen->width + dest_x],
+                               &dev->pixels[y * dev->width],
+                               (size_t)clip_w * sizeof(COLOR));
+                    }
                 }
             }
             RECT r_bubble = { dest_x, dest_y + y0, dest_x + dev->width, dest_y + y1 };
@@ -1422,13 +1507,14 @@ static void render_2d_dashboard(WND *wnd, GDEV *dev) {
 
             /* Blit top banner area (0 .. 48) to screen */
             H top_h = dev->height < 48 ? dev->height : 48;
-            for (H y = 0; y < top_h; y++) {
-                H sy = dest_y + y;
-                if (sy < 0 || sy >= screen->height) continue;
-                for (H x = 0; x < dev->width; x++) {
-                    H sx = dest_x + x;
-                    if (sx < 0 || sx >= screen->width) continue;
-                    screen->pixels[sy * screen->width + sx] = dev->pixels[y * dev->width + x];
+            if (clip_w > 0 && dest_x >= 0) {
+                for (H y = 0; y < top_h; y++) {
+                    H sy = dest_y + y;
+                    if (sy >= 0 && sy < screen->height) {
+                        memcpy(&screen->pixels[sy * screen->width + dest_x],
+                               &dev->pixels[y * dev->width],
+                               (size_t)clip_w * sizeof(COLOR));
+                    }
                 }
             }
             RECT r_banner = { dest_x, dest_y, dest_x + dev->width, dest_y + top_h };
@@ -1453,10 +1539,19 @@ static void demo_paint(WND *wnd, GDEV *dev) {
         egl_surface_resize(surf, dev->width, dev->height);
     }
 
+#if defined(BTRON_PS2_TARGET)
+    static uint32_t s_paint_frame_cnt = 0;
+    uint32_t t0 = btron_render_perf_us();
+#endif
+
     update_kinematics(s_dt);
 
     /* Pump VirtIO sound PCM buffer */
     lilcu64_synth_pump_virtio(735); /* ~16.6ms of audio at 44.1kHz */
+
+#if defined(BTRON_PS2_TARGET)
+    uint32_t t_kin = btron_render_perf_us();
+#endif
 
     glViewport(0, 0, dev->width, dev->height);
     glEnable(GL_DEPTH_TEST);
@@ -1467,12 +1562,11 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     glDisable(GL_BLEND);
     glShadeModel(GL_SMOOTH);
 
-    static const GLfloat light_pos[4]     = { 4.0f, 8.0f, 6.0f, 1.0f };
+    static const GLfloat light_pos[4]     = { 4.0f, 8.0f, 6.0f, 0.0f };
     static const GLfloat light_white[4]   = { 0.95f, 0.95f, 0.95f, 1.0f };
-    static const GLfloat ambient_light[4] = { 0.75f, 0.75f, 0.75f, 1.0f };
+    static const GLfloat ambient_light[4] = { 0.40f, 0.45f, 0.55f, 1.0f };
 
     glLightfv(GL_LIGHT0, GL_AMBIENT, (GLfloat *)ambient_light);
-    glLightfv(GL_LIGHT0, GL_POSITION, (GLfloat *)light_pos);
     glLightfv(GL_LIGHT0, GL_DIFFUSE, (GLfloat *)light_white);
     glLightfv(GL_LIGHT0, GL_SPECULAR, (GLfloat *)light_white);
 
@@ -1485,30 +1579,61 @@ static void demo_paint(WND *wnd, GDEV *dev) {
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    glLightfv(GL_LIGHT0, GL_POSITION, (GLfloat *)light_pos);
     /* Camera at (0, 0.08, 9.2) looking at (0, 0.08, 0) */
     glTranslatef(0.0f, -0.08f, -9.2f);
 
-    glClearColor(0.035f, 0.045f, 0.085f, 1.0f);
+    /* Deep celestial sapphire background (matching index.html line 489 #131c36) */
+    glClearColor(0.075f, 0.110f, 0.212f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glPushMatrix();
 
     /* 1. Render 4D Hopf Fibration Background */
     render_hopf_fibration(s_time, s_density_mode);
+#if defined(BTRON_PS2_TARGET)
+    uint32_t t_hopf = btron_render_perf_us();
+#endif
 
     /* 2. Render Spherical Radiant Pulse Waves */
     render_radiant_waves();
 
     /* 3. Render Lil Cu 64 Mascot (1:1 with index.html) */
     render_lilcu64(&s_pose, s_time);
+#if defined(BTRON_PS2_TARGET)
+    uint32_t t_mascot = btron_render_perf_us();
+#endif
 
     glPopMatrix();
 
     /* Swap OpenGL buffer to window client area */
     egl_swap_buffers(surf);
+#if defined(BTRON_PS2_TARGET)
+    uint32_t t_swap = btron_render_perf_us();
+#endif
 
     /* Draw 2D BTRON Dashboard & Speech Bubble */
     render_2d_dashboard(wnd, dev);
+
+    /* Restore default lighting and material states for companion windows */
+    glDisable(GL_COLOR_MATERIAL);
+    static const GLfloat def_amb[4] = { 0.2f, 0.2f, 0.2f, 1.0f };
+    glLightfv(GL_LIGHT0, GL_AMBIENT, (const GLfloat *)def_amb);
+#if defined(BTRON_PS2_TARGET)
+    uint32_t t_dash = btron_render_perf_us();
+
+    s_paint_frame_cnt++;
+    if ((s_paint_frame_cnt % 30) == 1) {
+        ps2_kprintf("[LILCU PERF #%u] kin=%u hopf=%u mascot=%u swap=%u dash=%u total=%u us\n",
+                    (unsigned)s_paint_frame_cnt,
+                    (unsigned)(t_kin - t0),
+                    (unsigned)(t_hopf - t_kin),
+                    (unsigned)(t_mascot - t_hopf),
+                    (unsigned)(t_swap - t_mascot),
+                    (unsigned)(t_dash - t_swap),
+                    (unsigned)(t_dash - t0));
+    }
+#endif
 }
 
 /* ── Window Event Callback ────────────────────────────────────────── */

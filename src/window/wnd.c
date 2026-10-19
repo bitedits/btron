@@ -1214,6 +1214,7 @@ BOOL wnd_mgr_handle_event(const EVT *ev) {
             s_wnd_resize_pending_h = s_wnd_resize_orig_h + (ev->pos.y - s_wnd_resize_start_y);
             if (s_wnd_resize_pending_w < 160) s_wnd_resize_pending_w = 160;
             if (s_wnd_resize_pending_h < 100) s_wnd_resize_pending_h = 100;
+            wnd_mgr_flush_resize();
             return TRUE;
         }
         if (s_wnd_dragging && s_wnd_drag_target) {
@@ -1230,11 +1231,16 @@ BOOL wnd_mgr_handle_event(const EVT *ev) {
 
     if (ev->type == EV_BUT_UP) {
         BOOL was_interacting = (s_wnd_dragging || s_wnd_sliding_tab || s_wnd_resizing);
+        if (s_wnd_resizing) {
+            s_wnd_resizing = FALSE;
+            wnd_mgr_flush_resize();
+        }
         s_wnd_dragging = FALSE;
         s_wnd_drag_target = NULL;
         s_wnd_sliding_tab = FALSE;
         s_wnd_slide_target = NULL;
         s_wnd_resizing = FALSE;
+        s_wnd_resize_target = NULL;
 
         if (was_interacting) return TRUE;
         WND *top = get_top_wnd();

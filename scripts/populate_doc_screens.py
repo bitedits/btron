@@ -227,6 +227,38 @@ APPS_MAP = {
             "caption": "実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Paint)",
             "alt": "ペイント バージョン情報 (About Paint)"
         }
+    ],
+    "MSX.html": [
+        {
+            "screen": "../img/screens/MSX_LodeRunner.png",
+            "caption": "実機描画フレームバッファより自動抽出された Lode Runner (TMS9918A VDP / VRAM 16KB / PSG 音源・アセンブラ直叩き)",
+            "alt": "Lode Runner (MSX Game Cartridge Preview)"
+        },
+        {
+            "screen": "../img/screens/MSX_LodeRunner2.png",
+            "caption": "実機描画フレームバッファより自動抽出された Lode Runner II (Japan) (32KB ROM カセット・V9938 / TMS9918A 互換描画)",
+            "alt": "Lode Runner II (MSX Game Cartridge Preview)"
+        },
+        {
+            "screen": "../img/screens/MSX_Bullrush.png",
+            "caption": "実機描画フレームバッファより自動抽出された BULLRUSH (MSX2/turboR C-BIOS 高速描画・MegaROM カートリッジ)",
+            "alt": "BULLRUSH (MSX MegaROM Preview)"
+        },
+        {
+            "screen": "../img/screens/MSX_NeonRevenant.png",
+            "caption": "実機描画フレームバッファより自動抽出された NEON REVENANT (Geo3D 256KB 3次元ワイヤーフレーム/ポリゴン演算エンジン)",
+            "alt": "NEON REVENANT (MSX Geo3D Engine Preview)"
+        },
+        {
+            "screen": "../img/screens/MSX_NightRaven.png",
+            "caption": "実機描画フレームバッファより自動抽出された NIGHT RAVEN GEO3D (V9938 ハードウェアパレット・リアルタイム3Dフライト)",
+            "alt": "NIGHT RAVEN GEO3D (MSX Geo3D Hardware Pipeline Preview)"
+        },
+        {
+            "screen": "../img/screens/B_MSX_Menu_Opened.png",
+            "caption": "B-MSX ファイルメニュー展開画面 (ROM カセット・カスケードメニューより動的カートリッジ装填・切り替え)",
+            "alt": "B-MSX カスケードメニュー展開 (ROM Cascade Menu Opened)"
+        }
     ]
 }
 

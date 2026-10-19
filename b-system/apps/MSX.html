@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MSX – ゲームシステム | B-System Specification</title>
+  <meta name="description" content="ゲームシステム（MSX / B-MSX）は、B-Systemの仕様に準拠したC99実装アプリケーション。Z80/R800 CPU、V9938/TMS9918A VDP、PSG音源、C-BIOS、Geo3Dハードウェアパイプラインを統合したMSX/MSX2/turboRネイティブエミュレーション環境。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="sticky" aria-label="Site navigation">
+    <div class="nav-container">
+        <ul class="nav-links">
+                <li><a href="../../b-media/index.html">B-Media</a></li>
+                <li><a href="../../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec</a></li>
+                <li><a href="../../virtio.html">VirtIO</a></li>
+                <li><a href="../../mobile.html">FOMA</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        </ul>
+    </div>
+  </nav>
+
+  <nav class="setting-nav">
+    <a href="../../index.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../index.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">MSX</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F3AE.svg" alt="🎮" width="64" height="64"></div>
+    <h1>ゲームシステム (MSX)</h1>
+    <div class="setting-hero-badge">MSX / MSX2 / turboR C-BIOS 準拠 · Geo3D パイプライン · C99 実装 · リアルタイムゲームシステム</div>
+    <div class="subtitle">MSX/MSX2/turboR カートリッジ実行環境およびリアルタイム 3D 幾何学演算エンジン<br><span style="font-size:0.9em; opacity:0.85;">"Comprehensive MSX/MSX2/turboR game emulation system and Geo3D pipeline integrated directly into B-System window environment."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>ゲームシステム（MSX）</strong> — B-MSX は、B-System ワークベンチ空間上で動作する C99 純実装の MSX / MSX2 / MSX2+ / MSX turbo R 統合エミュレーション環境です。オープンソース C-BIOS を内蔵し、TMS9918A / V9938 VDP 互換描画、PSG (AY-3-8910) 音源、MegaROM カートリッジマッパー、および 3次元幾何学リアルタイム演算エンジン Geo3D をネイティブサポートします。<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "Official technical specification for the B-MSX game emulation environment, cartridge subsystem, and Geo3D accelerator within B-System."
+      </span>
+    </div>
+
+        <!-- 画面プレビュー -->
+    <div class="section">
+      <h2>画面プレビュー (Screen Preview)</h2>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_LodeRunner.png" alt="Lode Runner (MSX Game Cartridge Preview)">
+        <p>実機描画フレームバッファより自動抽出された Lode Runner (TMS9918A VDP / VRAM 16KB / PSG 音源・アセンブラ直叩き)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_LodeRunner2.png" alt="Lode Runner II (MSX Game Cartridge Preview)">
+        <p>実機描画フレームバッファより自動抽出された Lode Runner II (Japan) (32KB ROM カセット・V9938 / TMS9918A 互換描画)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_Bullrush.png" alt="BULLRUSH (MSX MegaROM Preview)">
+        <p>実機描画フレームバッファより自動抽出された BULLRUSH (MSX2/turboR C-BIOS 高速描画・MegaROM カートリッジ)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_NeonRevenant.png" alt="NEON REVENANT (MSX Geo3D Engine Preview)">
+        <p>実機描画フレームバッファより自動抽出された NEON REVENANT (Geo3D 256KB 3次元ワイヤーフレーム/ポリゴン演算エンジン)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_NightRaven.png" alt="NIGHT RAVEN GEO3D (MSX Geo3D Hardware Pipeline Preview)">
+        <p>実機描画フレームバッファより自動抽出された NIGHT RAVEN GEO3D (V9938 ハードウェアパレット・リアルタイム3Dフライト)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/B_MSX_Menu_Opened.png" alt="B-MSX カスケードメニュー展開 (ROM Cascade Menu Opened)">
+        <p>B-MSX ファイルメニュー展開画面 (ROM カセット・カスケードメニューより動的カートリッジ装填・切り替え)</p>
+      </div>
+    </div>
+
+    <!-- 概要 -->
+    <div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        MSX規格は、1980年代初頭にアスキーの西和彦氏とマイクロソフトによって提唱され、世界的な統一ホームコンピュータ規格として普及しました。TRONプロジェクト提唱者の坂村健教授が目指した「あらゆる機器への組込みコンピュータの普及とオープンアーキテクチャ」の思想とも深く共鳴し、日本のホビー・エンターテインメント・パーソナルコンピューティングの基盤を築きました。<br>
+        B-System の <strong>B-MSX</strong> は、この歴史的遺産を最新の μITRON マイクロカーネルおよび BTRON3 ワークベンチ空間に完全統合した C99 純実装エミュレーションエンジンです。外部共有ライブラリに一切依存せず、組込み μITRON タスクスケジューラ（<code>cre_tsk</code> / <code>sta_tsk</code>）直結の 60Hz 確定論的フレーム同期駆動により、ジッターのない滑らかなゲーム描画と PSG リアルタイム音声合成を実現します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. サポートタイトルとカートリッジ仕様 (Supported Games &amp; ROM Cartridges)</h2>
+      <p>
+        B-MSX が標準サポートする代表的 ROM カートリッジおよび Geo3D 拡張タイトルの仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Cartridge specifications, memory mappers, and VDP modes for supported game titles."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>ゲームタイトル</th>
+            <th>ROM 容量 / マッパー</th>
+            <th>VDP 描画モード / 音源</th>
+            <th>技術仕様・エミュレーション特徴 (C99 Architecture)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>1) Lode Runner</b><br>(1984, Sony / Brøderbund)</td>
+            <td>32 KiB フラット ROM<br>(<code>0x4000-0xBFFF</code>)</td>
+            <td>TMS9918A Screen 2 (256×192)<br>PSG AY-3-8910 (3ch 矩形波)</td>
+            <td>アクションパズルの不朽の名作。Z80 アセンブラ直叩きによる正確なクロックタイミング、スプライト走査線制限（4枚/ライン）の忠実な再現。</td>
+          </tr>
+          <tr>
+            <td><b>2) Lode Runner II</b><br>(Japan)</td>
+            <td>32 KiB ROM<br>(<code>0x4000-0xBFFF</code>)</td>
+            <td>TMS9918A / V9938 互換<br>PSG 3ch ステレオ合成</td>
+            <td>続編ステージ集。緻密なキャラクターアニメーションとトラップ判定ルーチンを完全実行。カラーパレットおよびフォントアトラスの動的マッピング。</td>
+          </tr>
+          <tr>
+            <td><b>3) BULLRUSH</b></td>
+            <td>1,024 KiB MegaROM<br>(Konami SCC / ASCII 16K)</td>
+            <td>MSX2 Screen 4 / 5<br>PSG + 拡張音源エミュレーション</td>
+            <td>大規模 MegaROM バンク切り替えに対応。高速ラスタースクロールと多重スプライト合成をサポート。C-BIOS MSX2/turboR モードで瞬時起動。</td>
+          </tr>
+          <tr>
+            <td><b>4) NEON RAVENANT</b><br>(Geo3D-256 v0.2.0)</td>
+            <td>4,096 KiB MegaROM<br>(ASCII 8K / 16K バンキング)</td>
+            <td>V9938 Screen 7 / 8<br>Geo3D リアルタイムポリゴンエンジン</td>
+            <td>256KB Geo3D 3次元ワイヤーフレーム/ポリゴンジオメトリ演算エンジン内蔵。サイバーパンク空間を高速 3D レンダリングする次世代 MSX デモ。</td>
+          </tr>
+          <tr>
+            <td><b>5) NIGHT RAVEN GEO3D</b></td>
+            <td>1,024 KiB MegaROM<br>(ASCII バンク切替)</td>
+            <td>V9938 パレット最適化<br>リアルタイム 3D フライトシミュレーション</td>
+            <td>高速マトリクス幾何学変換と陰面消去パイプライン。夜間フライトコックピット計器と立体地形ポリゴンのリアルタイム描画。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. メニュー構造と操作体系 (Menu Architecture &amp; Operations)</h2>
+      <p>
+        B-MSX は、BTRON3 標準の 3D ベベルメニューバーおよびカスケードサブメニューを備え、カートリッジの動的装填やゲームリセットを直感的に操作できます。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Standard BTRON3 cascade menu bindings and real-time cartridge swapping system."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>メニュー項目</th>
+            <th>サブ項目 / 機能</th>
+            <th>技術仕様・C99実装 (C99 Architecture)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>ファイル (File)</b></td>
+            <td><b>ROM カセット ▶</b> (カスケード一覧)<br>リセット (Reset)<br>閉じる (Close)</td>
+            <td><code>assets/msx/</code> または <code>/SYS/msx/</code> 内の ROM を走査して動的メニュー生成。選択時に <code>msx_load()</code> と <code>msx_reset()</code> を即時実行。</td>
+          </tr>
+          <tr>
+            <td><b>表示 (View)</b></td>
+            <td>等倍表示 (256×212)<br>2倍拡大 (512×424)<br>アスペクト比固定 (4:3)</td>
+            <td>フレームバッファスケーリング（最近傍法 / リニア補間）、BTRON ウィンドウ枠自動追従リサイズ。</td>
+          </tr>
+          <tr>
+            <td><b>操作 (Input)</b></td>
+            <td>ジョイスティック 1 / 2<br>キーボードバインド<br>ポーズ / 再開 (Pause)</td>
+            <td>PSG Port A/B レジスタ（<code>MSX_JOY_*</code>）経由のジョイスティック入力マッピング。スペースキー/M/Nキーによるボタン割当。</td>
+          </tr>
+          <tr>
+            <td><b>ヘルプ (Help)</b></td>
+            <td>バージョン情報 (About B-MSX)</td>
+            <td><code>app_menu_create_about_dialog</code> による透過バージョンダイアログ表示。コアバージョンおよびハッシュ表示。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>3. ハードウェアエミュレーション・コア (Hardware Emulation Architecture)</h2>
+      <p>
+        B-MSX のコアは、実機 MSX/MSX2/turboR のハードウェアアーキテクチャを C99 で正確にモデリングしています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Cycle-accurate CPU emulation, VDP rasterizer, and C-BIOS clean-room runtime."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>サブシステム</th>
+            <th>対象ハードウェア</th>
+            <th>実装詳細 (Implementation Details)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>CPU コア</b></td>
+            <td>Zilog Z80A (3.58 MHz)<br>ASCII R800 (28.6 MHz 相当)</td>
+            <td>全非公開命令（Undocumented opcodes）、フラグ計算、割込みモード 1/2（IM1/IM2）、リフレッシュレジスタ（R）の完全エミュレーション。</td>
+          </tr>
+          <tr>
+            <td><b>VDP ビデオ</b></td>
+            <td>TI TMS9918A<br>Yamaha V9938</td>
+            <td>SCREEN 0〜8、カラーテーブル、パターンジェネレータ、32枚スプライトプレーン、ライン割込み、コマンドエンジン（HMMV/LMMV/HMMC等）。</td>
+          </tr>
+          <tr>
+            <td><b>音源システム</b></td>
+            <td>General Instrument AY-3-8910 (PSG)<br>Yamaha YM2149</td>
+            <td>3ch 矩形波発振器、プログラマブルホワイトノイズ発生器、16段階音量包絡線（エンベロープジェネレータ）、VirtIO-Sound / DMA 出力。</td>
+          </tr>
+          <tr>
+            <td><b>BIOS</b></td>
+            <td>オープンソース C-BIOS<br>(MSX / MSX2 / turboR)</td>
+            <td>商用 ROM 不要のクリーンルーム BIOS 実装。カートリッジのヘッダ解析、初期化ベクタディスパッチ、DOS コール互換レイヤ。</td>
+          </tr>
+          <tr>
+            <td><b>メモリマッパー</b></td>
+            <td>Flat 32K / Konami / ASCII 8K / ASCII 16K</td>
+            <td>最大 4 MiB までの MegaROM バンク切り替えレジスタ監視。スロットセレクト（PPI 8255 ポート A）エミュレーション。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>4. B-System ウィンドウマネージャ統合 (B-System GUI Integration)</h2>
+      <p>
+        B-MSX は独立した外部プログラムではなく、B-System のウィンドウマネージャと完全に一体化しています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Native BTRON window manager event dispatch, multi-window compositing, and headless screenshot automation."</span>
+      </p>
+      <ul>
+        <li><b>独立 μITRON タスク駆動:</b> <code>msx_task</code> がバックグラウンドタスクとして独立稼働し、ウィンドウメッセージキューをブロックすることなく 60fps でフレームを更新。</li>
+        <li><b>ゼロコピー描画:</b> VDP の 256×212 ピクセルバッファから B-System の GDEV フレームバッファへダイレクトスケーリング転送。</li>
+        <li><b>自動テスト＆スクリーンショット自動抽出:</b> <code>src/tools/capture_screens.c</code> により、ヘッドレス環境で実機描画パイプラインを起動し、カートリッジ画面およびメニュー展開状態をピクセルパーフェクトに PNG 抽出。</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

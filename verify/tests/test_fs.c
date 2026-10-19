@@ -25,7 +25,7 @@
 #include <btron/tad.h>
 
 /* Include CLU header for test 10 */
-#include "apps/clu.h"
+#include "clu/clu.h"
 
 /* clu.c's launcher table takes the address of every app the shell can open.  An
  * opener that is not linked reads NULL there on ELF, which is what lets one table

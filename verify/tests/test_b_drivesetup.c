@@ -82,7 +82,7 @@ void* Icalloc(size_t nmemb, size_t sz) { return calloc(nmemb, sz); }
 void  Ifree(void *ptr) { free(ptr); }
 
 #include <btron/file.h>
-#include "../../src/apps/clu.h"
+#include "../../src/clu/clu.h"
 
 extern Volume *g_sys_vol;
 extern Volume *g_anders_vol;

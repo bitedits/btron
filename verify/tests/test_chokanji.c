@@ -19,7 +19,7 @@
 #include <btron/file.h>
 #include <btron/fs/fs_internal.h>
 #include <btron/tad.h>
-#include "apps/clu.h"
+#include "clu/clu.h"
 
 static int g_pass = 0;
 static int g_fail = 0;

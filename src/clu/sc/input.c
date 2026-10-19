@@ -5,7 +5,7 @@
  */
 #define SC_INTERNAL 1
 #include "sokhatsky.h"
-#include "../../apps/clu.h"
+#include "../clu.h"
 
 typedef struct {
     char  *buf;

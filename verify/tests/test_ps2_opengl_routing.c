@@ -25,7 +25,7 @@
 #include <btron/btron.h>
 #include <btron/wnd.h>
 #include <btron/apps.h>
-#include "../../src/apps/clu.h"
+#include "../../src/clu/clu.h"
 #include "../../src/gl/gl_dispatch.h"
 #include "../../src/gl/gl_backend_choice.h"
 #include "../../src/gl/backend_eegs.h"

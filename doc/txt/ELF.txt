@@ -1,0 +1,183 @@
+ELF.txt — B-System External ELF Dynamic Application Architecture
+====================================================================
+
+Document version: 1.0
+Target: B-System (BTRON 3.20 clean-room)
+Date: 2026-10-19
+Status: Specification & Roadmap for External One-Shot Binaries
+
+1. Executive Architecture Overview
+----------------------------------
+
+In traditional B-System and early micro-BTRON implementations, all core applications
+and shell utilities were statically compiled into the monolithic kernel image.
+While efficient for initial bootstrapping and constrained ROM footprints, this model
+faces scaling limits when integrating heavyweight applications (e.g. Quake 3D with
+large heap requirements, XMB, GLGears, Lil Cu 64 demoscene) and complex CLI tooling.
+
+B-System ELF architecture defines the external execution model where applications
+are stored as standalone ELF (Executable and Linkable Format) binaries inside
+BTRON Real Bodies (Jisshi) and dynamically loaded into isolated task spaces.
+
+  +--------------------------------------------------------------------------+
+  |                   B-System Desktop & Shell Layer                         |
+  |  Tracker (Deskbar) | gterm (Terminal) | clu (Shell Dispatcher)           |
+  +--------------------------------------------------------------------------+
+  |              One-Shot External ELF Binary Applications                   |
+  |  /SYS/bin/quake.elf  /SYS/bin/xmb.elf      /SYS/bin/gears.elf            |
+  |  /SYS/bin/lilcu.elf  /SYS/bin/sc.elf       /SYS/bin/tv.elf               |
+  |  /SYS/bin/ls.elf     /SYS/bin/cp.elf       /SYS/bin/rm.elf ...           |
+  +--------------------------------------------------------------------------+
+  |                     BTRON ELF Program Loader                             |
+  |  - ELF32/ELF64 Header Verification (e_ident, e_type == ET_EXEC)          |
+  |  - PT_LOAD Segment Mapping (.text, .rodata, .data, .bss zero-fill)       |
+  |  - Task Memory Map & Page Table Binding                                  |
+  |  - Entry Point Transfer (_start -> main(argc, argv))                     |
+  +--------------------------------------------------------------------------+
+  |              BTRON3 Multi-Record Virtual File System (B-VFS)             |
+  |  - Real Body Type 9 (RT_PROG): ELF payload storage in record index 0     |
+  |  - opn_fil, opn_rec, rd_rec, cls_rec, cls_fil                            |
+  +--------------------------------------------------------------------------+
+  |                  T-Kernel Core & Hardware Abstraction                    |
+  |  - Task Lifecycle (cre_tsk, sta_tsk, ter_tsk, del_tsk)                   |
+  |  - Memory Pools & MMU Context Switching                                  |
+  |  - Hardware Drivers: MIPS R5900, ARM32/ARM64, x86_64, M68k               |
+  +--------------------------------------------------------------------------+
+
+
+2. Targeted One-Shot External Application Suite
+-----------------------------------------------
+
+The external ELF application suite comprises both heavy graphical/interactive programs
+and the entire POSIX/CLU command-line suite documented in b-system/apps/Commands.html:
+
+2.1. Heavy Graphical & Interactive Applications
+  - Quake 3D (/SYS/bin/quake.elf):
+      Full id Software Quake 1 engine port. Utilizes dual TinyGL software and
+      VirtIO-GPU / Emotion Engine GS hardware acceleration. Dynamic allocation
+      isolated to task heap; automatically reclaimed on exit.
+  - Cross Media Bar (/SYS/bin/xmb.elf):
+      Full-screen categorized application launcher with animated wave backdrop,
+      icon atlas texture streaming, and dual-axis navigation.
+  - GLGears (/SYS/bin/gears.elf):
+      OpenGL ES 1.1 / TinyGL performance benchmarking and 3D pipeline validation.
+  - Lil Cu 64 Demoscene (/SYS/bin/lilcu.elf):
+      Real-time mathematical 4D Hopf fibration visualization with procedural
+      sound synthesis.
+  - Graphical Terminal (/SYS/bin/gterm.elf):
+      Stand-alone ANSI / VT100 / TRON-Code terminal emulator surface.
+
+2.2. Interactive Terminal UI (TUI) Suite
+  - Sokhatsky Commander (/SYS/bin/sc.elf):
+      Dual-pane terminal file manager (NASA/JPL Power of Ten compliant) with
+      VFS drawer browsing and file attributes management.
+  - Terminal Vision (/SYS/bin/tv.elf):
+      Multilingual editor supporting CJK double-width glyphs, Tibetan combining
+      characters, Kinsoku line-breaking rules, and syntax display.
+  - Be Editor (/SYS/bin/be.elf):
+      Lightweight byte and binary structure editor for low-level record editing.
+
+2.3. POSIX & CLU Filesystem Commands Suite (from Commands.html)
+  Every command runs as a deterministic, bounded one-shot binary:
+  - /SYS/bin/ls.elf    : Directory and Real Body listing with color typing.
+  - /SYS/bin/fs.elf    : Real Body record index & drawer tree introspection.
+  - /SYS/bin/stat.elf  : Comprehensive FID block allocation and metadata readout.
+  - /SYS/bin/cp.elf    : Multi-record Real Body duplication.
+  - /SYS/bin/mv.elf    : Real Body renaming and path relocation.
+  - /SYS/bin/rm.elf    : Real Body and link deletion.
+  - /SYS/bin/ln.elf    : Hypermedia Virtual Body (RT_LINK) creation.
+  - /SYS/bin/df.elf    : Mounted volume statistics and capacity reporting.
+  - /SYS/bin/sync.elf  : Cache and journal buffer commit.
+  - /SYS/bin/tp.elf    : File payload type/dump (TAD text, hex, ASCII).
+  - /SYS/bin/cd.elf    : Working volume and container navigation.
+  - /SYS/bin/mkf.elf   : Container and Real Body creation.
+  - /SYS/bin/empf.elf  : Record truncation while preserving container identity.
+  - /SYS/bin/chmod.elf : Real Body protection attribute manipulation.
+  - /SYS/bin/touch.elf : Timestamp update and touch creation.
+  - /SYS/bin/chtime.elf: Fine-grained BTRON epoch timestamp adjustment.
+
+
+3. BTRON Real Body Storage Format (RT_PROG)
+-------------------------------------------
+
+Unlike traditional Unix systems where an executable is a raw unformatted byte
+sequence on a directory inode, BTRON represents executable programs as structured
+Real Bodies:
+
+  - File Header:
+      ATYPE : 0x0001 (Application / Executable)
+      Flags : OBJ_EXEC (0x8000) | ELF_FLAG (0x0001)
+      Name  : Printable ASCII/TRON program name (e.g. "quake", "ls")
+  - Record Index:
+      Record 0: Kind = 0x9F00 (RT_PROG), Type = 0x0001
+                Offset = block-aligned offset
+                Size = Exact ELF binary size
+      Record 1..N: Optional resource records (icons, localized TAD help strings,
+                   default configuration parameters, digital signatures).
+
+When a program is launched:
+  1. The shell or tracker resolves the path to an FID.
+  2. The loader opens Record 0 (RT_PROG) using opn_rec().
+  3. The ELF magic bytes (\x7fELF) are verified at offset 0.
+
+
+4. ELF Program Loading & Execution Flow
+---------------------------------------
+
+The B-System ELF loader (src/kernel/elf_loader.c) executes the following sequence:
+
+  +--------------------------------------------------------------------------+
+  | 1. Read ELF Header (Elf32_Ehdr / Elf64_Ehdr)                             |
+  |    - Verify e_ident[EI_MAG0..3] == { 0x7F, 'E', 'L', 'F' }               |
+  |    - Check architecture compatibility:                                   |
+  |        EM_MIPS    (PS2 Emotion Engine R5900, 32-bit LE)                  |
+  |        EM_ARM     (Raspberry Pi ARM32, 32-bit LE)                        |
+  |        EM_AARCH64 (Raspberry Pi ARM64, 64-bit LE)                        |
+  |        EM_X86_64  (x86_64 PC/UEFI, 64-bit LE)                            |
+  |        EM_68K     (Motorola 68000, 32-bit BE)                            |
+  +--------------------------------------------------------------------------+
+  | 2. Parse Program Headers (Elf32_Phdr / Elf64_Phdr)                       |
+  |    - Iterate through phdr[0..e_phnum - 1]                                |
+  |    - For each PT_LOAD segment:                                           |
+  |        * Allocate physical/virtual memory at p_vaddr                     |
+  |        * Read p_filesz bytes from RT_PROG record into memory             |
+  |        * Zero-fill remainder up to p_memsz (BSS clear)                   |
+  |        * Set protection flags (PF_R, PF_W, PF_X)                         |
+  +--------------------------------------------------------------------------+
+  | 3. Task Context Initialization                                           |
+  |    - Set up user stack pointer at top of allocated task envelope         |
+  |    - Push argument strings and pointer array (argc, argv, envp)          |
+  |    - Initialize thread context with PC = e_entry                         |
+  +--------------------------------------------------------------------------+
+  | 4. Task Execution & Dispatch                                             |
+  |    - Call cre_tsk() and sta_tsk() under T-Kernel scheduler               |
+  |    - Monitor task termination via tk_wai_tsk / event loop                |
+  |    - Upon exit: release all mapped memory and close file descriptors     |
+  +--------------------------------------------------------------------------+
+
+
+5. Cross-Architecture Portability Matrix
+----------------------------------------
+
+| Architecture | CPU / Platform       | ELF Machine | Endian | ABI / Features        |
+|--------------|----------------------|-------------|--------|-----------------------|
+| MIPS-II/III  | Sony PS2 EE (R5900)  | EM_MIPS (8) | Little | O32, Soft-float / COP1|
+| ARMv6/v7     | Raspberry Pi 1/2     | EM_ARM (40) | Little | EABI, Hard/Soft float |
+| AArch64      | Raspberry Pi 3/4/5   | EM_AARCH64  | Little | LP64, NEON SIMD       |
+| x86_64       | UEFI / Hosted POSIX  | EM_X86_64   | Little | SysV AMD64 ABI        |
+| M68k         | Motorola 68000       | EM_68K (4)  | Big    | 16-bit word alignment |
+
+
+6. Memory Safety & Isolation Guarantees
+---------------------------------------
+
+By executing applications as external one-shot ELF binaries:
+  1. Kernel BSS Cleanliness: Heavy static allocations (such as Quake's 64MB hunk
+     buffer or Lil Cu's wave tables) no longer reside in kernel BSS, preventing
+     memory exhaustion on embedded platforms.
+  2. Fault Containment: An application crash or out-of-bounds pointer in Quake or
+     a user script terminates only the child task, leaving the BTRON Workbench
+     desktop and VFS completely uncorrupted.
+  3. NASA/JPL Compliance: While individual applications have dynamic freedom, the
+     kernel loader itself strictly follows Power of Ten rules with fixed loop
+     bounds and deterministic error recovery.

@@ -2742,7 +2742,7 @@ static unsigned s_now_ms = 0;
  * target's source list.  The real definition in kagee.c wins when linked. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak)) WND* open_kagee_window(void) { return (void*)0; }
-/* Same for B-MSX, whose real definitions are in src/apps/msx_app.c.  That file is
+/* Same for B-MSX, whose real definitions are in src/emulators/msx/msx_app.c.  That file is
  * in the hosted and PS2 lists, where these are simply outranked by the strong
  * definitions; the targets that carry no MSX core -- uefi, pc98, m68k, mips --
  * still need them to keep the launcher linking, and on those a Games row opens

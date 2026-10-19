@@ -10,7 +10,7 @@
 #include <btron/desktop.h>
 #include <btron/fs/vol_api.h>
 #include <btron/itron.h>            /* btron_task_row_text(): `ps` reads the kernel's task table */
-#include "clu.h"
+#include "../clu/clu.h"
 #include "../clu/term.h"
 #include "../clu/lang.h"
 #include "../clu/sc/sokhatsky.h"

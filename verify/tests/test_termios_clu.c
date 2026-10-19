@@ -19,7 +19,7 @@
 #include "clu/tv/tv.h"
 #define SC_INTERNAL 1
 #include "clu/sc/sokhatsky.h"
-#include "apps/clu.h"
+#include "clu/clu.h"
 
 static int g_pass = 0;
 static int g_fail = 0;

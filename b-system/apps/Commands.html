@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commands – POSIX コマンド | B-System Specification</title>
+  <meta name="description" content="POSIX Commands（CLUツール群）は、BTRON3ハイパーメディア実身／仮身ファイルシステムに完全準拠したネイティブCLIユーティリティ群。独立ELF実行可能バイナリ体系。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="sticky" aria-label="Site navigation">
+    <div class="nav-container">
+        <ul class="nav-links">
+                <li><a href="../../b-media/index.html">B-Media</a></li>
+                <li><a href="../../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec</a></li>
+                <li><a href="../../virtio.html">VirtIO</a></li>
+                <li><a href="../../mobile.html">FOMA</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        </ul>
+    </div>
+  </nav>
+
+  <nav class="setting-nav">
+    <a href="../../index.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../index.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">Commands</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F4DC.svg" alt="📜" width="64" height="64"></div>
+    <h1>POSIX コマンド (POSIX Commands)</h1>
+    <div class="setting-hero-badge">CLU ツール群 · BTRON3 3.20 準拠 · 独立 ELF 形式 · NASA/JPL Power of Ten</div>
+    <div class="subtitle">BTRON3 実身／仮身マルチレコード体系に最適化されたネイティブ CLI コマンド仕様<br><span style="font-size:0.9em; opacity:0.85;">"High-assurance native POSIX &amp; CLU command suite implemented as standalone ELF binaries."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>POSIX コマンド（POSIX Commands / CLU Suite）</strong> — B-Systemの仕様に準拠したC99実装のネイティブコマンドラインユーティリティ群。BusyBoxやchimerautils等の汎用Unix移植層に依存せず、実身（Real Body）／仮身（Virtual Body）マルチレコード構造を直接駆動するゼロヒープ・決定論的ツールスイート。<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "Official technical specification for the native CLU/POSIX application suite within the B-System operating environment."
+      </span>
+    </div>
+
+    <div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        B-System CLU（Command Line Utilities）ツール群は、POSIX標準の操作感を保ちながら、BTRON3実身／仮身ネットワーク型ファイルシステムを直感的に操作するためにゼロから設計されたネイティブC99コマンド群です。
+        各コマンドは将来的に独立したワンショットELF実行バイナリ（<code>/SYS/bin/*.elf</code>）として配置・実行されるアーキテクチャを持ち、MIPS R5900 (PS2)、ARM32/ARM64 (Raspberry Pi)、x86_64、M68kの全CPUコアで同一の決定論的動作を保証します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. なぜBusyBoxやchimerautilsではなくネイティブBTRONアプリを採用したのか<br><span style="font-size:0.85em; opacity:0.85;">(Architectural Rationale: Native BTRON vs. BusyBox / chimerautils)</span></h2>
+      <p>
+        B-Systemの設計において、一般的な組込みLinuxで用いられる <b>BusyBox</b> や BSD系ツール集 <b>chimerautils</b> をそのまま移植するのではなく、独自のネイティブCLUツール群を構築した理由は、以下の4つの決定的なアーキテクチャ要件に基づいています。
+      </p>
+      
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>比較項目 (Evaluation Criteria)</th>
+            <th>B-System ネイティブ CLU</th>
+            <th>BusyBox / chimerautils</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>ファイルシステムモデル (FS Model)</b></td>
+            <td><b>BTRON 実身／仮身マルチレコード (B-FS / TAD)</b><br>1つの実身内に複数のレコード（データ、属性、ハイパーリンク、実行バイナリ、ベクトル埋め込み）を保持。<code>opn_fil</code>, <code>opn_rec</code>, <code>fil_get_rec_link_info</code> 等のTRON VFS APIを直接駆動。</td>
+            <td><b>フラットな単一ストリーム POSIX Inode</b><br>Unixの単一バイトストリームモデルを前提としており、BTRONのマルチレコード構造やハイパーメディアリンクを透過的に認識・操作できない。</td>
+          </tr>
+          <tr>
+            <td><b>安全基準と決定性 (Safety &amp; Determinism)</b></td>
+            <td><b>NASA/JPL "Power of Ten" 厳格準拠</b><br>実行時の動的ヒープ割当禁止（静的メモリバッファ運用）、全ループの上限固定、有界再帰深さ（&lt;16）、エラー戻り値の100%検証。</td>
+            <td><b>未拘束のヒープ消費 (malloc/realloc 多用)</b><br>動的メモリ再確保や未拘束の再帰が多く、組込みスタック（8KB〜64KB）環境や低メモリ環境（PS2 32MB RDRAM）で意図せぬクラッシュを引き起こす。</td>
+          </tr>
+          <tr>
+            <td><b>OS依存性とランタイム (OS Dependencies)</b></td>
+            <td><b>純粋 C99 フリースタンディング (Zero Host Portaling)</b><br><code>libc_shim.h</code> と T-Kernel / BTRON コアのみで動作。fork/execve、Unixシグナル、pthreads、/proc、/dev などのUnix擬似抽象化レイヤを一切必要としない。</td>
+            <td><b>重厚な POSIX エミュレーション層が必要</b><br>glibc/musl、Unixドメインソケット、procfs、シグナルハンドリングを要求し、カーネル空間に巨大なオーバーヘッドと脆弱性境界をもたらす。</td>
+          </tr>
+          <tr>
+            <td><b>多言語文字コード (Multilingual TRON Code)</b></td>
+            <td><b>TRON Code &amp; UTF-8 ネイティブ対応</b><br>ファイル名やレコードヘッダ内の2バイトTRONコード、漢字、チベット文字、仮名文字を外部ロケールファイルなしでネイティブ展開。</td>
+            <td><b>Unix ロケール (setlocale / glibc gconv) 依存</b><br>TRON文字体系を解釈できず、文字化けや名前解決の不整合が発生する。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. コマンド仕様体系 (CLU Command Reference)</h2>
+      <p>
+        CLUツール群は、BTRONの実身レコード構造を操作するためのPOSIX互換コマンドおよび拡張コマンドで構成されています。
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>コマンド</th>
+            <th>構文 (Syntax)</th>
+            <th>機能説明 (Description)</th>
+            <th>実装ファイル (C99 Source)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>ls</b></td>
+            <td><code>ls [-l|-t] [path]</code></td>
+            <td>実身一覧の表示。属性（ATYPE/ATR）、レコード数、総サイズ、タイムスタンプ、ELF/実行フラグに応じたカラー表示。</td>
+            <td><code>src/clu/ls.c</code></td>
+          </tr>
+          <tr>
+            <td><b>fs</b></td>
+            <td><code>fs [-l|-a|-g|-t|-r] [target]</code></td>
+            <td>実身レコードインデックス構造および引き出し（Drawer）木構造グラフの完全検証・ダンプ。</td>
+            <td><code>src/clu/fs.c</code></td>
+          </tr>
+          <tr>
+            <td><b>stat</b></td>
+            <td><code>stat &lt;file|FID&gt;</code></td>
+            <td>実身のブロック配置、DID/PDID、レコードメタデータ、TRONコード文字列の完全詳細診断。</td>
+            <td><code>src/clu/st.c</code></td>
+          </tr>
+          <tr>
+            <td><b>cp</b></td>
+            <td><code>cp &lt;src&gt; &lt;dst&gt;</code></td>
+            <td>実身の全レコード複製（マルチレコード構造、属性、ペイロード完全保持）。</td>
+            <td><code>src/clu/cp.c</code></td>
+          </tr>
+          <tr>
+            <td><b>mv</b></td>
+            <td><code>mv &lt;old&gt; &lt;new&gt;</code></td>
+            <td>実身の移動および名称変更（アトミックなボリューム更新とキャッシュ同期）。</td>
+            <td><code>src/clu/mv.c</code></td>
+          </tr>
+          <tr>
+            <td><b>rm</b></td>
+            <td><code>rm &lt;path&gt;</code></td>
+            <td>実身の削除（所属ブロックの回収およびリンク整合性更新）。</td>
+            <td><code>src/clu/rm.c</code></td>
+          </tr>
+          <tr>
+            <td><b>ln</b></td>
+            <td><code>ln &lt;src&gt; &lt;linkname&gt;</code></td>
+            <td>ハイパーメディア仮身レコード（<code>RT_LINK</code>）の生成。</td>
+            <td><code>src/clu/ln.c</code></td>
+          </tr>
+          <tr>
+            <td><b>df</b></td>
+            <td><code>df [volume]</code></td>
+            <td>マウント済みボリュームの総ブロック数、空き容量、使用率、最大FID数の表示。</td>
+            <td><code>src/clu/df.c</code></td>
+          </tr>
+          <tr>
+            <td><b>sync</b></td>
+            <td><code>sync</code></td>
+            <td>全マウントボリュームのダーティブロックおよびFIDテーブルキャッシュをディスクへ完全フラッシュ。</td>
+            <td><code>src/clu/df.c</code></td>
+          </tr>
+          <tr>
+            <td><b>tp</b></td>
+            <td><code>tp [-x|-a] &lt;file&gt;</code></td>
+            <td>実身レコードの内容出力（TAD文書セグメント展開、ELFプレビュー、16進数/ASCIIダンプ）。</td>
+            <td><code>src/clu/tp.c</code></td>
+          </tr>
+          <tr>
+            <td><b>cd</b></td>
+            <td><code>cd [/SYS|path]</code></td>
+            <td>カレントワーキングボリュームおよび実身パスの切り替え。プロンプト自動同期。</td>
+            <td><code>src/clu/fs.c</code></td>
+          </tr>
+          <tr>
+            <td><b>mkf</b></td>
+            <td><code>mkf &lt;path&gt;</code></td>
+            <td>新規実身レコードコンテナの生成。</td>
+            <td><code>src/clu/fs.c</code></td>
+          </tr>
+          <tr>
+            <td><b>empf</b></td>
+            <td><code>empf &lt;path&gt;</code></td>
+            <td>実身内の全レコード削除（ヘッダを保持した初期化）。</td>
+            <td><code>src/clu/rm.c</code></td>
+          </tr>
+          <tr>
+            <td><b>chmod</b></td>
+            <td><code>chmod -a# &lt;path&gt;</code></td>
+            <td>実身保護属性（書込禁止・削除禁止）の動的変更。</td>
+            <td><code>src/clu/st.c</code></td>
+          </tr>
+          <tr>
+            <td><b>touch</b></td>
+            <td><code>touch &lt;path&gt;</code></td>
+            <td>実身のアクセス／変更日時の現在時刻更新（存在しない場合は空実身生成）。</td>
+            <td><code>src/clu/st.c</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>3. 独立 ELF バイナリ実行モデル (External ELF Execution Model)</h2>
+      <p>
+        B-System では将来的に、すべての CLU コマンドおよびワンショットアプリケーション（Quake, Sokhatsky Commander, Terminal Vision, GLGears, XMB, Demoscene 等）をカーネル内静的リンクから分離し、独立した <b>ELF 32/64-bit 実行バイナリ</b> として実行するアーキテクチャを採用します（詳細は <code>doc/txt/ELF.txt</code> 参照）。
+      </p>
+      <ul>
+        <li><b>ストレージ形式</b>: B-FS ボリューム内の <code>RT_PROG</code>（実身種別 9）レコードに ELF バイナリが直接格納されます。</li>
+        <li><b>ロード・実行パイプライン</b>: <code>exec_elf()</code> が ELF プログラムヘッダ（<code>PT_LOAD</code>）を解釈し、仮想メモリページをマップしてエントリポイントへジャンプします。</li>
+        <li><b>メモリ分離と安全性</b>: 各コマンドは独立したタスク空間で実行され、実行完了とともに全リソースが自動解放されます。</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

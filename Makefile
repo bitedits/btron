@@ -166,7 +166,7 @@ IME_SRCS    = src/tip/mozc_kkc.c       \
               src/tip/wylie.c          \
               src/tip/tibetan_dict.c
 
-# ── tronMSX core: the machine src/apps/msx_app.c drives ───────────────────
+# ── tronMSX core: the machine src/emulators/msx/msx_app.c drives ───────────────────
 MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/r800.c       \
            src/emulators/msx/v9938.c      \
@@ -181,6 +181,20 @@ MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/kbd.c        \
            src/emulators/msx/geo3d.c      \
            src/emulators/msx/tronmsx.c
+
+# ── CLU Applications (POSIX commands) ─────────────────────────────
+CLU_APPS_SRCS = src/clu/fs.c \
+                src/clu/ls.c \
+                src/clu/cp.c \
+                src/clu/rm.c \
+                src/clu/mv.c \
+                src/clu/ln.c \
+                src/clu/df.c \
+                src/clu/st.c \
+                src/clu/tp.c
+
+CLU_APPS_HOST_OBJS = $(CLU_APPS_SRCS:.c=.host.o)
+CLU_APPS_POSIX_OBJS = $(CLU_APPS_SRCS:.c=.posix.o)
 
 # ── Common SDL2-hosted app sources ────────────────────────────────
 COMMON_SRCS = src/graphics/dp_core.c   \
@@ -225,7 +239,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/orchestra.c     \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
-              src/apps/msx_app.c       \
+              src/emulators/msx/msx_app.c       \
               $(MSX_SRCS)              \
               src/settings/language.c  \
               src/settings/control_panel.c \
@@ -262,7 +276,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/clu/sc/menus.c       \
               src/clu/sc/sc.c          \
               src/clu/tv/tv.c          \
-              src/apps/clu.c
+              $(CLU_APPS_SRCS)         \
+              src/clu/clu.c
 
 QUAKE_SRCS = \
     src/quake/core/mathlib.c \
@@ -458,7 +473,8 @@ FOMA_SRCS = $(FOMA_STARTUP)             \
             src/fs/blk_file.c           \
             src/fs/vol.c                \
             src/fs/file.c               \
-            src/apps/clu.c
+            $(CLU_APPS_SRCS)            \
+            src/clu/clu.c
 
 # Bare-metal: SDL-free subset only
 COMMON_NO_SDL_SRCS = \
@@ -506,7 +522,8 @@ COMMON_NO_SDL_SRCS = \
     src/fs/vol.c           \
     src/fs/file.c          \
     src/clu/vfs.c          \
-    src/apps/clu.c
+    $(CLU_APPS_SRCS)       \
+    src/clu/clu.c
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
@@ -612,7 +629,7 @@ FS_OBJS  = $(FS_SRCS:.c=.host.o)
 %.host.o: %.c
 	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
 
-src/apps/clu.host.o: src/apps/clu.c
+src/clu/clu.host.o: src/clu/clu.c
 	$(CC) $(CFLAGS) -DBTRON_TARGET=0 -MMD -MP -c $< -o $@
 
 # Header dependencies recorded by the -MMD flags above: editing src/clu/vfs.h or
@@ -654,7 +671,7 @@ btron_anders.vol: mkbtronfs src/tools/manifest_anders.txt
 
 # ── FS unit tests ──────────────────────────────────────────────────────
 TEST_FS_BIN = ./.build/test_fs
-$(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/apps/clu.host.o
+$(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS)
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
 test-fs: $(TEST_FS_BIN) btron_sys.vol
@@ -672,7 +689,7 @@ CHOKANJI_GOLDEN   ?= $(if $(wildcard hda.golden),hda.golden,hda.qcow2)
 CHOKANJI_RW_IMAGE  = ./.build/hda.rw.qcow2
 
 TEST_CHOKANJI_BIN = ./.build/test_chokanji
-$(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/apps/clu.host.o
+$(TEST_CHOKANJI_BIN): verify/tests/test_chokanji.c $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS)
 	$(CC) $(CFLAGS) -Isrc $^ -o $@
 
 test-chokanji: $(TEST_CHOKANJI_BIN)
@@ -710,12 +727,12 @@ bin/tv: src/clu/tv/tv.c $(CLU_CORE_OBJS) $(FS_OBJS)
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -DTV_STANDALONE -Isrc -Iinclude $^ -o $@
 
-bin/sc: $(SC_OBJS) src/clu/sc/sc.standalone.o src/clu/tv/tv.host.o $(CLU_CORE_OBJS) src/apps/clu.host.o $(FS_OBJS)
+bin/sc: $(SC_OBJS) src/clu/sc/sc.standalone.o src/clu/tv/tv.host.o $(CLU_CORE_OBJS) $(CLU_APPS_HOST_OBJS) src/clu/clu.host.o $(FS_OBJS)
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -Isrc -Iinclude $^ -o $@
 
 TEST_TERMIOS_BIN = ./.build/test_termios
-$(TEST_TERMIOS_BIN): verify/tests/test_termios_clu.c $(CLU_CORE_OBJS) src/clu/sc/files.host.o src/clu/sc/input.host.o src/clu/sc/menus.host.o src/clu/sc/sc.host.o src/clu/tv/tv.host.o src/apps/clu.host.o $(FS_OBJS)
+$(TEST_TERMIOS_BIN): verify/tests/test_termios_clu.c $(CLU_CORE_OBJS) src/clu/sc/files.host.o src/clu/sc/input.host.o src/clu/sc/menus.host.o src/clu/sc/sc.host.o src/clu/tv/tv.host.o $(CLU_APPS_HOST_OBJS) src/clu/clu.host.o $(FS_OBJS)
 	@mkdir -p .build
 	$(CC) $(CFLAGS) -Isrc -Iinclude $^ -o $@
 
@@ -728,7 +745,7 @@ test-termios: $(TEST_TERMIOS_BIN) btron_sys.vol btron_anders.vol
 
 # ── Clarity DTP Frame & Control tests ────────────────────────────────
 TEST_CLARITY_BIN = ./.build/test_clarity_frames
-$(TEST_CLARITY_BIN): verify/tests/test_clarity_frames.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o src/apps/clu.posix.o
+$(TEST_CLARITY_BIN): verify/tests/test_clarity_frames.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@ $(LDFLAGS) $(SDL_LIBS)
 
 test-clarity: $(TEST_CLARITY_BIN)
@@ -737,7 +754,7 @@ test-clarity: $(TEST_CLARITY_BIN)
 
 # ── Clarity Hypermedia & DND tests ──────────────────────────────────
 TEST_CLARITY_HYPERMEDIA_BIN = ./.build/test_clarity_hypermedia
-$(TEST_CLARITY_HYPERMEDIA_BIN): verify/tests/test_clarity_hypermedia.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o src/apps/clu.posix.o
+$(TEST_CLARITY_HYPERMEDIA_BIN): verify/tests/test_clarity_hypermedia.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
 	$(CC) $(CFLAGS) -Iinclude -Isrc $^ -o $@ $(LDFLAGS) $(SDL_LIBS)
 
 test-clarity-hypermedia: $(TEST_CLARITY_HYPERMEDIA_BIN)
@@ -1170,7 +1187,7 @@ PS2_MSX         := $(if $(filter eegs,$(PS2_GL)),0,1)
 else
 PS2_MSX         ?= 1
 endif
-PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/apps/msx_app.c,)
+PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/emulators/msx/msx_app.c,)
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -1767,13 +1784,13 @@ test-ps2-opengl-routing: $(TEST_PS2ROUTING_BIN)
 	@echo "=========================================================="
 	@./$(TEST_PS2ROUTING_BIN)
 
-$(TEST_PS2ROUTING_BIN): verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/apps/clu.host.o \
+$(TEST_PS2ROUTING_BIN): verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS) \
                         src/gl/backend_eegs.c src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_tex.c \
                         src/drivers/ps2/ps2_vu1_geom.c src/drivers/ps2/ps2_vu0_kernel.c \
                         src/gl/gscube_nexus.c src/drivers/ps2/ps2_gs_env.c src/drivers/ps2/ps2_gs_vram.c \
                         src/drivers/ps2/ps2_gif_ring.c
 	@mkdir -p ./.build
-	$(CC) $(CFLAGS) -Isrc verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/apps/clu.host.o src/gl/backend_eegs.c src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_tex.c -o $@ $(LDFLAGS) -lm
+	$(CC) $(CFLAGS) -Isrc verify/tests/test_ps2_opengl_routing.c $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS) src/gl/backend_eegs.c src/drivers/ps2/ps2_gs_rec.c src/drivers/ps2/ps2_gs_tex.c -o $@ $(LDFLAGS) -lm
 
 
 # LANE 9b: the flat-colour SPRITE batch, the poster half of row 9.  Same #include idiom as the three
@@ -2973,8 +2990,8 @@ test-drivesetup: $(TEST_DRIVESETUP_BIN)
 	@echo "=========================================================="
 	@./$(TEST_DRIVESETUP_BIN)
 
-$(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o
-	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/apps/clu.host.o -o $@ $(LDFLAGS) -lm
+$(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS)
+	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS) -o $@ $(LDFLAGS) -lm
 
 # ═══════════════════════════════════════════════════════════════════
 # ZEXALL — Z80 instruction exerciser against the vendored MSX core
@@ -3262,7 +3279,7 @@ clean:
 # ===================================================================
 CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
-                       src/apps/msx_app.c \
+                       src/emulators/msx/msx_app.c \
                        $(MSX_SRCS) \
                        src/window/dnd.c \
                        src/graphics/image_decode.c \
@@ -3309,7 +3326,8 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/fs/blk_part.c \
                        src/fs/vol.c \
                        src/fs/file.c \
-                       src/apps/clu.c \
+                       $(CLU_APPS_SRCS) \
+                       src/clu/clu.c \
                        src/apps/b_drivesetup.c \
                        src/apps/clarity.c \
                        src/apps/clarity_layout.c \
@@ -3375,7 +3393,8 @@ CAPTURE_FOMA_SRCS = src/tools/capture_foma.c \
                     src/fs/blk_file.c \
                     src/fs/vol.c \
                     src/fs/file.c \
-                    src/apps/clu.c
+                    $(CLU_APPS_SRCS) \
+                    src/clu/clu.c
 
 CAPTURE_FOMA_OBJS = $(CAPTURE_FOMA_SRCS:.c=.test.o)
 

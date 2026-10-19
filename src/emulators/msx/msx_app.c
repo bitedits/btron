@@ -15,8 +15,8 @@
 #include <btron/app_menu.h>
 #include <btron/troncode.h>
 #include <emulators/tronmsx.h>
-#include "../emulators/msx/msx_kbd.h"
-#include "../clu/vfs.h"          /* the /SYS catalogue: src/clu/vfs.c */
+#include "msx_kbd.h"
+#include "../../clu/vfs.h"          /* the /SYS catalogue: src/clu/vfs.c */
 #include <stdint.h>
 
 #include <btron/libc_shim.h>

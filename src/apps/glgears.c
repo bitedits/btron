@@ -181,12 +181,15 @@ static void glgears_task_fn(VW exinf) {
 }
 
 static void glgears_paint(WND *wnd, GDEV *dev) {
-    if (!wnd || !dev || !s_surf) return;
+    if (!wnd || !dev) return;
+    EGL_SURFACE *surf = (EGL_SURFACE *)wnd->gl_surf;
+    if (!surf) surf = s_surf;
+    if (!surf) return;
 
-    egl_make_current(s_surf);
+    egl_make_current(surf);
 
-    if (s_surf->width != dev->width || s_surf->height != dev->height) {
-        egl_surface_resize(s_surf, dev->width, dev->height);
+    if (surf->width != dev->width || surf->height != dev->height) {
+        egl_surface_resize(surf, dev->width, dev->height);
     }
 
     glViewport(0, 0, dev->width, dev->height);
@@ -251,7 +254,7 @@ static void glgears_paint(WND *wnd, GDEV *dev) {
     glPopMatrix();
 
     /* Swap / present */
-    egl_swap_buffers(s_surf);
+    egl_swap_buffers(surf);
 }
 
 static void glgears_event(WND *wnd, const EVT *evt) {

@@ -3042,10 +3042,14 @@ static void xb_paint(WND *wnd, GDEV *dev)
     int probing;
     unsigned canvas_px;
 
-    if (!wnd || !dev || !s_surf)
+    if (!wnd || !dev)
         return;
 
-    egl_make_current(s_surf);
+    EGL_SURFACE *surf = (EGL_SURFACE *)wnd->gl_surf;
+    if (!surf) surf = s_surf;
+    if (!surf) return;
+
+    egl_make_current(surf);
 
     probing = (s_probe_left != 0u);
     if (probing)
@@ -3055,8 +3059,8 @@ static void xb_paint(WND *wnd, GDEV *dev)
         s_phase_t0 = t_draw0;
     canvas_px = (unsigned)dev->width * (unsigned)dev->height;
 
-    if (s_surf->width != dev->width || s_surf->height != dev->height) {
-        egl_surface_resize(s_surf, dev->width, dev->height);
+    if (surf->width != dev->width || surf->height != dev->height) {
+        egl_surface_resize(surf, dev->width, dev->height);
         xb_layout(dev->width, dev->height);
         xb_layout_nodes();
     }
@@ -3195,7 +3199,7 @@ static void xb_paint(WND *wnd, GDEV *dev)
         xb_phase("f_menu", 0);
 
     t_swap = btron_render_perf_us();
-    egl_swap_buffers(s_surf);
+    egl_swap_buffers(surf);
     xb_frame(t_swap - t_draw0, btron_render_perf_us() - t_swap);
 }
 

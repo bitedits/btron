@@ -199,7 +199,9 @@ void tinygl_backend_init(int w, int h, void *pixel_buf) {
         s_surfaces++;
         uart_puts_raw("[GL] TinyGL: second window surface joins the one context -- textures and "
                       "lists kept, raster re-pointed\n");
-        tinygl_backend_resize(w, h, pixel_buf);
+        if (gl_current_context == &gl_ctx) {
+            tinygl_backend_resize(w, h, pixel_buf);
+        }
         return;
     }
 
@@ -359,7 +361,7 @@ void tinygl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf
     s_width = w;
     s_height = h;
 
-    if (ctx->w != w || ctx->h != h || ctx->pixel_buf != pixel_buf) {
+    if (!ctx->zb->pbuf || ctx->zb->pbuf != pixel_buf || ctx->w != w || ctx->h != h || ctx->pixel_buf != pixel_buf) {
         ctx->w = w;
         ctx->h = h;
         ctx->pixel_buf = pixel_buf;
@@ -371,6 +373,8 @@ void tinygl_backend_make_current_ctx(void **p_ctx, int w, int h, void *pixel_buf
         }
         glViewport(0, 0, w, h);
     }
+    ctx->zb->pbuf = pixel_buf;
+    ctx->gl.zb = ctx->zb;
 }
 
 void tinygl_backend_destroy_ctx(void *ctx_ptr) {
@@ -392,6 +396,9 @@ void tinygl_backend_destroy_ctx(void *ctx_ptr) {
         ctx->zb = NULL;
     }
     free(ctx);
+    if (s_surfaces > 1) {
+        s_surfaces--;
+    }
 }
 
 /* ── TinyGL GL wrappers ───────────────────────────────────────────── */

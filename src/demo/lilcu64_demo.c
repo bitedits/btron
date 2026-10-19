@@ -1402,13 +1402,16 @@ static void render_2d_dashboard(GDEV *dev) {
 /* ── Window Paint & Render Callback ───────────────────────────────── */
 
 static void demo_paint(WND *wnd, GDEV *dev) {
-    if (!wnd || !dev || !s_surf) return;
+    if (!wnd || !dev) return;
+    EGL_SURFACE *surf = (EGL_SURFACE *)wnd->gl_surf;
+    if (!surf) surf = s_surf;
+    if (!surf) return;
 
     /* CRITICAL: restore EGL surface so OpenGL operations target this window's buffer */
-    egl_make_current(s_surf);
+    egl_make_current(surf);
 
-    if (s_surf->width != dev->width || s_surf->height != dev->height) {
-        egl_surface_resize(s_surf, dev->width, dev->height);
+    if (surf->width != dev->width || surf->height != dev->height) {
+        egl_surface_resize(surf, dev->width, dev->height);
     }
 
     update_kinematics(s_dt);
@@ -1463,7 +1466,7 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     glPopMatrix();
 
     /* Swap OpenGL buffer to window client area */
-    egl_swap_buffers(s_surf);
+    egl_swap_buffers(surf);
 
     /* Draw 2D BTRON Dashboard & Speech Bubble */
     render_2d_dashboard(dev);

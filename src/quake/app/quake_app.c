@@ -81,12 +81,16 @@ static void quake_task_fn(VW exinf) {
 /* ── Paint callback (called by compositor on inval_wnd) ──────────── */
 static void quake_paint(WND *wnd, GDEV *dev) {
     /* Guard against paint arriving after destroy (race between task & compositor) */
-    if (!wnd || !dev || !s_surf || s_shutdown_req) return;
+    if (!wnd || !dev || s_shutdown_req) return;
 
-    egl_make_current(s_surf);
+    EGL_SURFACE *surf = (EGL_SURFACE *)wnd->gl_surf;
+    if (!surf) surf = s_surf;
+    if (!surf) return;
 
-    if (s_surf->width != dev->width || s_surf->height != dev->height) {
-        egl_surface_resize(s_surf, dev->width, dev->height);
+    egl_make_current(surf);
+
+    if (surf->width != dev->width || surf->height != dev->height) {
+        egl_surface_resize(surf, dev->width, dev->height);
         /* Only re-init the GL viewport/projection, NOT the full engine */
         R_Resize(dev->width, dev->height);
     }
@@ -110,7 +114,7 @@ static void quake_paint(WND *wnd, GDEV *dev) {
     R_RenderView();
     R_EndFrame();
 
-    egl_swap_buffers(s_surf);
+    egl_swap_buffers(surf);
 }
 
 #include "../include/quake_ui.h"

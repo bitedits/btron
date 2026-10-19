@@ -43,9 +43,8 @@
 
 
 
-/* Communication speed -> frequency dividing count value */
-//#define	MU_LINE_SPEED(bps)	( ((_CLOCK) / 8 / (bps)) - 1 )
-#define	MU_LINE_SPEED(bps)	 ( (((_CLOCK)/8) + ((bps)/2)) / bps - 1 ) /* 四捨五入 */
+/* Communication speed -> frequency dividing count value (rounded) */
+#define	MU_LINE_SPEED(bps)	 ( (((_CLOCK)/8) + ((bps)/2)) / bps - 1 )
 
 
 /* regAUXIRQ (R), Auxilialy Interrupt status register */
@@ -143,11 +142,3 @@
 #define	FC_FIFO		IS_FIFO		/* Enable FIFO */
 #define	FIFO_SIZE	8			/* FIFO size */
 
-
-/*----------------------------------------------------------------------
-#|History of "miniuart.h"
-#|=======================
-#|* 2016/08/27	It's made by making reference to "ns16450.h" for [tef_em1d].
-#|* 2016/09/06	LC_BLEN 0x01→0x03 bit1は必ず1にする事(正誤表に記述あり)
-#|
-*/

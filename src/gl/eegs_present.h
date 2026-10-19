@@ -1,21 +1,24 @@
 /*
- * eegs_present.h — the recorded GIF stream, put on the bus after the canvas is
+ * eegs_present.h — Staged GIF stream presentation for PS2 Graphics Synthesizer
  *
- * Increment 5c of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Everything that
- * *decides* what the stream holds is upstream and gated on a host: the geometry is recorded by
- * ps2_gs_rec.c, the environment words are built by ps2_gs_env.c, and the texture trio is emitted
- * mid-stream by backend_eegs.c.  This file is the one step that cannot be gated there, because it
- * is an ordering rule about hardware:
+ * Architecture & Hardware Invariants:
+ * In the hybrid 2D/3D presentation model, the desktop backbuffer and hardware-accelerated
+ * OpenGL primitives are synthesized onto the GS framebuffer in strict order:
  *
- *   The canvas upload goes first, then the environment, then the primitives.
+ *   1. Framebuffer Canvas Upload (Host-to-Local IMAGE DMA stream).
+ *   2. Graphics Synthesizer Environment Setup (GS_REG_FRAME, SCISSOR, TEST, ALPHA).
+ *   3. Staged Primitive Geometry Bursts (Direct GIF DMA packets).
  *
- * Both halves of that order are forced.  The upload has to precede the stream because the GS
- * blends into the pixels already in VRAM -- a layer drawn under the upload would be painted over
- * by it -- and the stream has to follow the paint callback because the callback is what produces
- * it, while the callback runs inside the composite that the upload is of.  Those two facts
- * overlap: no DMA can happen during the paint, so the groups are staged here and sent after.
+ * Hardware Pipeline Constraints:
+ * 1. Ordering Law: The software canvas upload must strictly precede primitive rendering
+ *    because hardware fragments blend directly into existing framebuffer pixels in VRAM.
+ *    Any primitive drawn before the canvas upload would be completely overwritten.
+ * 2. Deferred DMA Staging: Because application paint callbacks execute inside the compositing
+ *    pass while software rasterisation is ongoing, direct hardware DMAs cannot be issued
+ *    interleaved with canvas writes. Geometry and state packets are recorded into a contiguous
+ *    staging buffer and dispatched to the GIF ring buffer in batch upon frame completion.
  *
- * Zero proprietary Sony SDK code: the field tables are in ps2_gs_pack.h and doc/txt/PS2.txt.
+ * Zero proprietary Sony SDK code: register encodings follow ps2_gs_pack.h.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -25,161 +28,101 @@
 
 #include <btron/types.h>
 
-/* Start a frame's staging: reset the buffer and open the recorder on it.  Call before the
- * composite pass that runs the layer window's paint callback. */
+/* Start frame staging: resets staging pointer and initializes packet recording. */
 void eegs_present_begin(void);
 
-/* Close the recorder's last group.  The words are staged, not sent -- see the ordering rule
- * above -- so this makes no DMA. */
+/* Finalize frame staging: closes the active packet group without initiating DMA. */
 void eegs_present_end(void);
 
-/* Send what this frame staged, over the window client rect `client` in screen pixels: one
- * environment packet addressed at that rect, then one DMAC start per staged group.  Returns the
- * number of staged groups sent -- the environment is one further DMA and is not in that count,
- * which is why the console prints it as `groups=` and not as a bus call total.  -1 when the
- * environment could not be built from `client` (a rect the GS cannot address), in which case
- * nothing was sent at all.
- *
- * A frame that staged nothing sends nothing and returns 0, which is the honest answer for a
- * layer that did not repaint: there is no stream to put on the bus, and the canvas standing
- * alone is what the screen should show. */
+/*
+ * Dispatches all staged GIF groups to the hardware GIF DMA ring buffer.
+ * Precedes primitives with an environment packet scissored to the window's `client` rect.
+ * Returns the number of staged primitive groups dispatched, or -1 on environment failure.
+ */
 int eegs_present_send(const RECT *client);
 
-/* What the last send did, for the bench row.  Read after eegs_present_send(). */
+/* Frame presentation and hardware pipeline diagnostic statistics */
 typedef struct {
-    uint32_t groups;         /* GIF groups put on the bus */
-    uint32_t qw;             /* quadwords they carried */
-    uint32_t verts;          /* vertices recorded this frame */
-    uint32_t prims;          /* primitives recorded this frame */
-    uint32_t dropped;        /* groups the staging buffer could not hold: must read 0 */
-    uint32_t unsplittable;   /* the recorder refused a split: must read 0 */
-    /* LANE 19 rung 12v: the recorder writes PRIM as an AD group in front of every vertex group, because
-     * rung 12u measured that a GIF tag's PRIM field with PRE set does not program the register on this
-     * GS.  One write per vertex group, so `prim_writes` IS the frame's count of chains that went out and
-     * `groups - prim_writes` is the groups that carry state rather than geometry -- the texture switches
-     * `texsw=` names.  A frame whose `pwr=` is zero draws nothing, and one whose `pwr=` exceeds `groups=`
-     * would be a counter lying about a packet. */
+    uint32_t groups;         /* Total GIF packet groups dispatched to DMAC */
+    uint32_t qw;             /* Total 128-bit quadwords transferred */
+    uint32_t verts;          /* Total vertices processed this frame */
+    uint32_t prims;          /* Total primitives rasterised this frame */
+    uint32_t dropped;        /* Packets dropped due to staging overflow (must be 0) */
+    uint32_t unsplittable;   /* Refused packet splits (must be 0) */
+
+    /*
+     * Hardware Register Invariant:
+     * On physical GS hardware, the GIF tag's embedded PRIM field with PRE=1 does not
+     * reliably configure the primitive mode across packet boundaries. To ensure
+     * deterministic rasterisation, the recorder precedes every vertex burst with an explicit
+     * A+D packed register write to GS_REG_PRIM (`prim_writes`).
+     */
     uint32_t prim_writes;
-    uint32_t tex_switches;   /* mid-stream texture register groups */
-    uint32_t tex_missing;    /* a textured primitive with no plane: must read 0 */
-    /* LANE 12e's survivor: every PRIM re-declaration closes a group, so this is the rate at which
-     * the group budget `EEGS_MAX_GROUPS` is spent, and `dropped` is what it costs to outrun it.  The
-     * four `chain_*` this row grew for the strip continuation are gone with the rung; its measured
-     * verdict, and the `verts`/`prims` ratio that shows a re-lived one, are in doc/txt/PS2.txt. */
-    uint32_t prim_moves;     /* PRIM words actually re-sent, each of which closes a group */
-    /* LANE 19 rung 11: the vertex-colour census.  `colour_changes` against `colour_verts` is the
-     * answer to "did the frame's colours reach the stream", and `colour_first`/`colour_last` name
-     * the two ends of it.  A flat page with a high ratio is the GS not interpolating; a flat page
-     * with a zero ratio is the application's per-vertex colour never having got here. */
-    uint32_t colour_changes;
-    uint32_t colour_verts;
-    uint32_t colour_first;
-    uint32_t colour_last;
-    /* LANE 19 rung 11's other half: the shading modes the frame's PRIM declarations asked for. */
-    uint32_t prim_iip;
-    uint32_t prim_tme;
-    uint32_t prim_decl;
-    /* LANE 19 rung 12b: the wide triangles, selected by area so the background layer is the one
-     * being described.  `wide_flat == wide_tri` says no triangle big enough to be the gradient
-     * carried three colours, which puts the flatness on the EE side; three different `big_c*` with
-     * `big_smooth=1` puts it on the GS.  See backend_eegs.h for the whole pair. */
+    uint32_t tex_switches;   /* Mid-stream texture register state transitions */
+    uint32_t tex_missing;    /* Textured primitive missing texture plane (must be 0) */
+    uint32_t prim_moves;     /* PRIM re-declarations requiring new group boundary */
+
+    /* Shading and vertex colour telemetry */
+    uint32_t colour_changes; /* Vertex color transitions across primitives */
+    uint32_t colour_verts;   /* Vertices carrying explicit RGBAQ color */
+    uint32_t colour_first;   /* First vertex color word */
+    uint32_t colour_last;    /* Last vertex color word */
+
+    /* Shading modes requested in PRIM descriptors */
+    uint32_t prim_iip;       /* Flat (0) vs Gouraud (1) shading modes */
+    uint32_t prim_tme;       /* Texture mapping enabled count */
+    uint32_t prim_decl;      /* Total PRIM declarations */
+
+    /* Triangle coverage analysis */
     uint32_t wide_tri, wide_flat;
     uint32_t big_area, big_c0, big_c1, big_c2, big_smooth;
-    /* LANE 12f rung (ii): the two exits a retained mesh has at `eegs_grid_strip()`.  `grid_batch` is
-     * a mesh recorded as one strip, `grid_slow` a mesh the batch refused -- an uncapturable context
-     * or a mapped point outside the GS's vertex range -- so the application drew it through the
-     * immediate-mode walk instead.  They are columns rather than an assertion because the entry does
-     * not clip: the ratio is the only headless evidence that the gate is refusing the frames it
-     * should and no others. */
-    uint32_t grid_batch, grid_slow;
-    /* Which condition made the last `grid_slow` (a `TGL_GRID_REFUSE_*` code, 0 when nothing has
-     * refused this frame).  It travels with the pair because the pair is not actionable on its own:
-     * `slow=` from a mesh too big for the vertex word and `slow=` from a stale matrix product are
-     * the same number about opposite problems. */
-    uint32_t grid_why;
-    /* The points this frame's TAKEN batches left the clip rect: the amount of clipping the GS's
-     * SCISSOR is being asked to do, which is what turns `batch=` from a hope into a reading.  The
-     * XMB ribbon's is 32 a frame -- its last column, projected with the window's width and drawn
-     * into the client area's -- and `over=` nonzero with the sheet's edge intact on the monitor is
-     * the pair that says the reliance is real. */
-    uint32_t grid_over;
-    /* Does the stream plate its own rect?  The canvas upload precedes it, so wherever the stream
-     * does not rasterise the screen shows the canvas, and the compositor is entitled to stop
-     * filling the plate under a layer only while that is a null statement.  `clip_w`/`clip_h` are
-     * the rect the environment packet scissors, in local pixels; `b0` is the rect the frame's first
-     * vertex group provably reaches, in the same units, inclusive at both ends and valid only when
-     * `has_bbox` is set.  `plate_covers` is the comparison done where the rect is known: 1 when the
-     * first group spans the clip on all four edges, so the reading side has one word to trust
-     * rather than four numbers to subtract. */
+
+    /* Retained mesh batch fast-path telemetry */
+    uint32_t grid_batch;     /* Meshes successfully dispatched via fast-path batching */
+    uint32_t grid_slow;      /* Meshes falling back to immediate-mode vertex walk */
+    uint32_t grid_why;       /* Refusal reason code (TGL_GRID_REFUSE_*) for last fallback */
+    uint32_t grid_over;      /* Vertices clipped by GS hardware SCISSOR rect */
+
+    /* Framebuffer plating coverage */
     uint32_t clip_w, clip_h;
     int32_t  b0_l, b0_t, b0_r, b0_b;
     uint32_t has_bbox;
     uint32_t plate_covers;
-    /* LANE 12h's deciding row, and it is compiled only under `PS2_IDENT=1` -- with the dial at 0
-     * these read 0 and no hash is folded anywhere.  The unit is the staged group, because a group
-     * is what a replay would re-send: this frame's group `i` is compared with the previous
-     * presented frame's group `i` by a 64-bit hash folded over its quadwords as the sink copies
-     * them.  Identical bytes always hash identical, so `same_*` can only be wrong by a collision
-     * while `diff_*` is exact, which is what makes the pair usable as a decision.  `tail_*` counts
-     * the groups only one of the two frames has: the compare is positional on purpose, since a
-     * replay can only re-send a span that sits at the same index, and an inserted group shifts
-     * every later one.  `ident_frames` is which presentation this is -- the first has no
-     * predecessor and is not evidence. */
+
+    /*
+     * Inter-Frame Invariance Telemetry (Active when compiled with PS2_IDENT=1):
+     * Computes dual 32-bit FNV-1a hashes per staged group to determine whether consecutive
+     * frames contain identical geometry, rigid translations, or dynamic deformations.
+     */
     uint32_t ident_frames;
-    uint32_t ident_groups_prev;   /* groups the previous presented frame staged */
+    uint32_t ident_groups_prev;   /* Group count of previous frame */
     uint32_t same_groups, same_qw;
     uint32_t diff_groups, diff_qw;
     uint32_t tail_groups, tail_qw;
     uint32_t diff_first, diff_last;
-    uint32_t diff_more;           /* differences past the eight `eegs_present_ident_at()` names */
-    /* The same positional compare split by GS register, over the aligned prefix: how many groups had
-     * an invariant XYZ2 (the drawing kick), RGBAQ (the colour) or ST (the texels) lane on its own,
-     * whether or not the rest of the group moved.  Only vertex groups -- a tag whose NREG field is 4,
-     * whose data quadwords are PRIM, RGBAQ, ST, XYZ2 from quadword 1 -- are in these; an AD group is
-     * counted by `same_*`/`diff_*` and folds no lane.  `ident_shape` is the XYZ2 lane read as the
-     * DIFFERENCE between consecutive vertices instead of the coordinate, so a group counts in it
-     * exactly when it is a rigid translation of last frame's same-index group -- the column that
-     * tells a re-solved mesh apart from a moved one.  Each lane is one 32-bit FNV lane, so a lane's
-     * INVARIANT claim can only be wrong by a 2^-32 collision while its differing claim is exact, the
-     * same one-directional rule the 64-bit group pair holds at 2^-64.  `ident_vertex_groups` is this
-     * frame's own vertex-group count -- `groups` minus it is the AD groups -- which is what lets the
-     * four lane columns be read as arithmetic against the meshes rather than against all the groups. */
+    uint32_t diff_more;
+
+    /* Per-register lane invariance (XYZ2 coordinate, RGBAQ colour, ST texels) */
     uint32_t ident_xyz, ident_rgb, ident_st, ident_shape;
     uint32_t ident_vertex_groups;
 } eegs_present_stats;
 
+/* Retrieve statistics for the most recently presented frame */
 void eegs_present_get_stats(eegs_present_stats *out);
 
-/* The indices of this frame's groups whose hash differs from the same-index group of the previous
- * presented frame, as a short comma list ending in `+n` when there were more than eight.  A static
- * buffer owned by the present, valid until the next send; `""` when the dial is off or nothing
- * differs. */
+/* Returns comma-separated list of group indices that differed from the prior frame */
 const char *eegs_present_ident_at(void);
 
-/* Groups this frame has handed to the stage so far -- the recorder's running total, readable from
- * inside the paint callback.  It is what attributes a `[GSTID]` `at=` index to a named stage, so a
- * caller that marks the phase boundaries needs no second model of the stream. */
+/* Number of packet groups currently staged for the active frame */
 uint32_t eegs_present_groups_staged(void);
 
-/* How many groups the last `eegs_present_send()` put on the bus -- and therefore how many it left a
- * word snapshot of.  Pair it with `eegs_present_group_peek()` below, NOT with
- * `eegs_present_groups_staged()`: the send clears the staged count as its last act, so at the send
- * seam the only honest "how many were there" is the number the snapshot left behind.  (That seam is
- * where rung 25 reads, because it is the last moment the stage still holds this frame's words.) */
+/* Number of packet groups dispatched in the last eegs_present_send() call */
 uint32_t eegs_present_groups_sent(void);
 
-/* LANE 20 rung 25's word-level look at the stage.  Copy the staged group `group`'s own GIF
- * quadwords into `out` -- `max_u64` 64-bit words of them, which is `max_u64/2` GIF quadwords -- and
- * return how many were copied (0 for an index past the frame's groups, and 0 for a null buffer).
- *
- * This exists because the chain table can only report what the recorder was ASKED to draw: its
- * bbox is built from the `x_px`/`y_px` integers handed to `emit_vertex()`, and the words that go on
- * the bus are built downstream of that, in `gs_rec_vertex()`'s packing and the group's tag.  A
- * stream whose ink lands in the wrong rows is therefore either a bad ask or a bad packet, and only
- * the second of those is decodable -- the tag's NLOOP/NREG/FLG and the register stride decide which
- * 128-bit unit each vertex word actually is.  The stage is stable here for exactly the same reason
- * the ring's descriptors can point into it: nothing writes it again before the next
- * `eegs_present_begin()`, which reaps first. */
+/*
+ * Diagnostic inspection: copies up to `max_u64` words of raw GIF quadwords from
+ * staged group `group` into `out`. Returns the number of words copied.
+ */
 uint32_t eegs_present_group_peek(uint32_t group, uint64_t *out, uint32_t max_u64);
 
 #endif /* BTRON_GL_EEGS_PRESENT_H */

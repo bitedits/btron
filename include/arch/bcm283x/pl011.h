@@ -221,9 +221,4 @@
 /* regTDR (RW), test data register */
 
 
-/*----------------------------------------------------------------------
-#|History of "pl011.h"
-#|=======================
-#|* 2016/07/25	It's made by making reference to "ns16450.h" for [tef_em1d].
-#|
-*/
+

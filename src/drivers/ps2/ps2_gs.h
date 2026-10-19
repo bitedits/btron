@@ -80,11 +80,10 @@ int  ps2_gs_get_width(void);
 int  ps2_gs_get_height(void);
 void ps2_gs_set_bgcolor(uint8_t r, uint8_t g, uint8_t b);
 void ps2_gs_vsync(void);
-/* Waits for the frame boundary and says whether it saw one: 1 = CSR.SYNC/VSYNC really arrived,
-   0 = the bounded spin ran out.  The second answer is not a slow wait, it is a different machine --
-   a flip that timed out is a DISPFB store at an unknown point of the raster, which is exactly the
-   case rung 4's measurement has to be able to tell apart from the aligned one.  Every caller that
-   cares takes the value; the ones that do not may ignore it, as before. */
+/*
+ * Waits for vertical blanking interrupt (VSYNC) via GS CSR register.
+ * Returns 1 if VSYNC was captured, or 0 if bounded spin-wait timed out.
+ */
 int ps2_gs_wait_vsync(void);
 void ps2_gs_swap_buffers(void);
 void ps2_gs_flush(void);
@@ -137,12 +136,9 @@ typedef enum {
  * either, because the receipt it is waiting for belongs to a packet that has to be the only thing on
  * the pipe (see ps2_gif_hw_busy() and ps2_gif_pending(), both refused on here).
  *
- * (x, y, w, h) are canvas pixels in the page the PCRTC is showing, which ps2_gs_vram.h's
- * gs_disp_shown() names -- today page 0 in PSMCT32, and whatever LANE 21 dials it into tomorrow.
- * The read follows that page's own base, width field and format, so a census cannot be taken against
- * a page nobody is scanning.  The rectangle still has to satisfy the builder's laws, and those laws
- * are the page's: a quadword is 16 bytes, so a 32-bit page wants x and w as multiples of 4 px and a
- * 16-bit page multiples of 8.  PSMCT32 and PSMCT16 both answer, because a 16-bit download is
+ * (x, y, w, h) are canvas pixels in the active display page currently scanned by PCRTC
+ * (managed via ps2_gs_vram.h). The transfer follows that page's base address, width,
+ * and pixel format (PSMCT32 or PSMCT16).
  * expanded to canvas words in the destination before this returns (gs_unpack_5551_image()), and a
  * format that is neither -- CT24's 3-byte pixels, or a swizzled page that is not row-major at all --
  * is refused with GS_READ_BUS_E_PAGE rather than mis-read as CT32.
@@ -165,13 +161,11 @@ gs_read_bus_err ps2_gs_vram_read_err(void);
  * have the same picture and opposite fixes.  Reading the plane distinguishes them, because a
  * populated atlas is a field of distinct texels where an un-uploaded one is transparent black. */
 int32_t ps2_gs_plane_read(uint32_t index, int x, int y, int w, int h, uint32_t *dst);
-/* The one DMAC channel-2 sender that still blocks, shared by every producer whose buffer the port
- * cannot promise survives until the next yield: the canvas blit stream above, and everything the
- * boot path sends before a ring exists to hold a packet.  Declared rather than left accidentally
- * global, because a second copy of the STR poll is the thing this exists to prevent and the next
- * producer needs to find the first one.  The producer that CAN make that promise posts to
- * ps2_gif_ring.h instead -- see LANE 10 in doc/txt/PS2.txt -- and the ring's hardware seam is
- * defined next to this sender, in this file. */
+/*
+ * Synchronous DMAC channel-2 GIF packet dispatch.
+ * Blocks until the transfer completes. Used for early boot transfers and synchronous blits.
+ * For asynchronous streaming, use the GIF ring buffer (ps2_gif_ring.h).
+ */
 void ps2_gs_gif_send(const void *packet, uint32_t qwc);
 uint32_t *ps2_gs_get_framebuffer(void);
 /* Install the canvas the GS is fed from.  core_ps2.c calls this with its desktop
@@ -181,30 +175,21 @@ uint32_t *ps2_gs_get_framebuffer(void);
  * GS's byte order -- see BTRON_PIXEL_FB in include/btron/types.h -- which is what
  * lets ps2_gs_upload() stream it without a conversion pass. */
 void ps2_gs_set_framebuffer(uint32_t *canvas);
-/* LANE 21 rung 4's present: make the page that has just been drawn the page the PCRTC reads.
+/*
+ * Hardware Double-Buffering Page Flip:
+ * Swaps active drawn and shown framebuffer pages in VRAM and updates PCRTC DISPFB registers.
  *
- * The order is the whole of it, and every step is there to keep one specific race out:
+ * Sequence of Operations:
+ *   1. Drain and reap GIF ring buffer (ensures all in-flight rendering is complete).
+ *   2. If `aligned` is set, wait for VSYNC to perform the store during vertical blanking.
+ *   3. Commit page flip in VRAM allocator (gs_disp_flip_commit).
+ *   4. Program GS DISPFB1 / DISPFB2 hardware registers with new display base address.
  *
- *   1. drain the GIF ring and reap it -- the page is not a picture until its last quadword has
- *      landed, and a flip that beats the stream shows a half-updated page instead of the old one;
- *   2. with `aligned`, wait for the frame boundary, so the store happens in blanking rather than
- *      at whatever row the raster had reached.  This is the step that turns "the page changed" into
- *      "the page changed between two frames", and it is the one a passing desktop can afford to
- *      pay for: ui_period_us is already 16,667 us, so a vsync wait is the display's own clock, not
- *      a new tax;
- *   3. gs_disp_flip_commit() -- move the shown/drawn pair, the single owner of which page is whose;
- *   4. ps2_gs_dispfb_store() -- write DISPFB1/2 for the page that is now shown.
- *
- * It does nothing at all while the display is single-buffered, which is the port's shipped
- * behaviour, and returns 0 when it did.  `aligned` 0 is for the callers that must not be throttled
- * to the frame rate (a console flush at the prompt); a mid-frame store is still a complete page
- * made visible, only not a blanking-aligned one.  Returns the microseconds spent in the vsync wait
- * so the caller can take that idle out of the work it charges its real-time budget against. */
+ * Returns microseconds spent waiting for VSYNC.
+ */
 uint32_t ps2_gs_flip(int aligned);
 
-/* What the flips did, since boot: how many, how many of them timed out instead of seeing a
- * vsync, and the longest wait.  A flip whose store lands blind is the flicker's own shape, so the
- * rung that removes it has to be able to say how often it was aligned. */
+/* Frame presentation telemetry */
 uint32_t ps2_gs_flip_count(void);
 uint32_t ps2_gs_flip_unaligned(void);
 uint32_t ps2_gs_flip_wait_max_us(void);

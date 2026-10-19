@@ -15,12 +15,12 @@
 
 #include <btron/types.h>     /* BTRON_PIXEL_FB, the canvas's byte order */
 #include <btron/dp.h>        /* btron_render_perf_us(), the ring's clock */
-#include "ps2_gif_ring.h"    /* LANE 10: the ring whose hardware seam this file is */
-#include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
-#include "ps2_gs_pack.h"     /* the field encoders the blit path now builds its words with */
-#include "ps2_gs_read.h"     /* LANE 19 rung 2: the pure Local->Host builder this file is the bus for */
-#include "ps2_gs_vram.h"     /* the display pages: the base, width field and format every writer here names */
-#include "ps2_gs_tex.h"      /* the texture-plane registry this file is the bus for */
+#include "ps2_gif_ring.h"    /* Hardware GIF DMA ring buffer */
+#include "ps2_gs_env.h"      /* Environment packet builder and types */
+#include "ps2_gs_pack.h"     /* GS register and field encoders */
+#include "ps2_gs_read.h"     /* Local->Host VRAM readback builder */
+#include "ps2_gs_vram.h"     /* VRAM page and framebuffer allocator */
+#include "ps2_gs_tex.h"      /* Texture-plane registry */
 
 /* The canvas the GS is fed from, and the one the desktop composites into.
  *
@@ -127,28 +127,10 @@ extern void ps2_gs_put_imr(uint32_t mask);
 extern const uint8_t* get_glyph_bitmap(uint16_t code, int16_t *out_width, int16_t *out_height);
 extern void* tkl_memmove(void *dst, const void *src, size_t n);
 
-/* Transmit packet of quadwords to Graphics Interface (GIF) via DMAC Channel 2.
- *
- * Not static since increment 3: the drawing environment is a second producer on this same
- * pipe, and giving it a copy of the register dance would be two places to keep right about
- * STR polling.  The blit path above and ps2_gs_env.h's packet used to be its only callers; the
- * environment moved to the ring with LANE 10, so what still arrives here is the canvas stream --
- * the transfers whose buffer this port cannot promise will still be there in one DMA's time.
- *
- * Two things this function now does that it did not do before, both of them LANE 10's:
- *
- *   It hands the ring first.  A synchronous start writes CHCR while the ring may be holding
- *   descriptors that were posted earlier and have not started, and channel 2 takes one transfer at
- *   a time -- so a start here without the drain would put the canvas band in front of primitives
- *   the EE had already committed to the bus, and the layer's picture would draw on the wrong
- *   page of its own history.  reap() also leaves `in flight` false, which is what keeps the ring's
- *   one-flag model honest: a flag the ring set for a transfer this function started would be a
- *   lie, and the next drain() would wait for a transfer that never happened.
- *
- *   It counts its own spin.  The blocked time of a producer that blocks was, until now, the one
- *   number on this pipe nobody printed, and LANE 10's claim is not "no producer ever waits" but
- *   "every wait is measured and bounded".  `sync_sends`/`sync_us`/`sync_max_us` in [GSTS] gif:
- *   are the answer, and they are what says how much of VIOLATION 2 this increment left in.
+/*
+ * Transmits a synchronous GIF packet via DMAC Channel 2.
+ * Drains and reaps any pending asynchronous transfers first to maintain strict FIFO order.
+ * Blocks until the transfer completes (STR bit clears).
  */
 void ps2_gs_gif_send(const void *packet, uint32_t qwc)
 {
@@ -168,19 +150,10 @@ void ps2_gs_gif_send(const void *packet, uint32_t qwc)
     __asm__ volatile("" : : : "memory");
 }
 
-/* ── LANE 10: the ring's hardware seam ─────────────────────────────────────────────────
- * ps2_gif_ring.c is bookkeeping it can do on any machine, so the three facts it needs from the
- * bus are functions it calls rather than registers it reads.  This is the only place in the port
- * that answers them, which keeps DMAC channel 2 where the image gate can find it: test_ps2.sh
- * reads the MADR/QWC/D_STAT triple out of the disassembly and expects it in the channel-2
- * producers and nowhere else -- including not in the ring, whose purity is that row's other half.
- *
- * The address arithmetic is the same mask the sender has always used: MADR takes a physical
- * address, so the KSEG bits come off, and the packet a descriptor carries is the pointer its
- * producer was given.  Reading the words through a *cached* pointer is safe for one reason only,
- * and the port asserts it rather than trusting it -- the EE's L1 caches are never enabled, so
- * there is no stale line for the bus master to miss (see ps2_fb() above, and the CP0 row in
- * scripts/test_ps2.sh). */
+/* ── GIF Ring Buffer Hardware Interface ──────────────────────────────────
+ * Provides low-level DMAC Channel 2 hardware primitives for ps2_gif_ring.
+ * Converts virtual buffer addresses to physical addresses for MADR.
+ */
 int ps2_gif_hw_busy(void)
 {
     return (D2_CHCR & (1 << 8)) != 0u;
@@ -209,21 +182,11 @@ uint32_t ps2_gif_hw_us(void)
     return btron_render_perf_us();
 }
 
-/* One Host->Local setup packet (5 QWs) into an arbitrary VRAM block: where in VRAM, how big,
- * which format, which way.  `dba` is in the 256-byte units BITBLTBUF.DBA counts, not the 8 KB units
- * FRAME.FBA does -- the two field units are ps2_gs_vram.h's, and a caller that mixes them is off by
- * 32x.
- *
- * The PSM arrived as an argument with LANE 21 rung 2 rather than staying CT32 in the body, because
- * it is the field that says how many bytes a pixel of the incoming stream is: the GS converts nothing
- * on a Host->Local path, so DBA's format and the caller's packing have to agree or the page fills at
- * half its width.  Textures still name GS_PSM_CT32 themselves -- they are planes, not the canvas, and
- * the atlas's format is not the display's.
- *
- * Moved onto the increment-5b encoders from written-out shifts.  The words are the same ones the
- * canvas has been uploaded with since before the encoders existed -- `make test-ps2-gs-pack`
- * compares the encoder output against these literals -- so the already-working path is the
- * instrument for the encoders rather than a second copy of their arithmetic. */
+/*
+ * Emits a Host->Local transmission setup packet (5 quadwords):
+ * Configures GS registers BITBLTBUF, TRXPOS, TRXREG, and TRXDIR.
+ * `dba` specifies the destination VRAM base address in 256-byte units.
+ */
 static void send_trx_setup_at(uint32_t dba, uint32_t dbw, uint32_t psm,
                               int dx, int dy, int w, int h)
 {
@@ -261,10 +224,7 @@ static void send_trx_setup_at(uint32_t dba, uint32_t dbw, uint32_t psm,
     ps2_gs_gif_send(setup_pkt, 5);
 }
 
-/* The canvas's own rectangle: the page the CPU blit writes, its width field, its format.  While the
- * display is single-buffered that is page 0 at 13 units of 64 px and CT32 -- every byte this function
- * has ever put on the bus -- and rung 2's point is that the three now come from one place, so the
- * dial that changes them changes one configuration and not four literals. */
+/* Setup Host->Local transmission for the active destination framebuffer page */
 static void send_trx_setup(int dx, int dy, int w, int h)
 {
     const gs_disp_page_t *pg = gs_disp_drawn();
@@ -293,25 +253,15 @@ static void send_image_stream(const void *src, uint32_t qwc)
     }
 }
 
-/* Rung 20y's bill, and the reason it is paid here rather than at the cut.
- *
- * A rect that is not the canvas's full width cannot be streamed as one buffer, because Host->Local
- * IMAGE carries no row pitch: the loop below restarts the DMA for every row, and a restart is a
- * blocking round trip -- ps2_gs_gif_send() writes CHCR and spins on STR.  Cutting the layer's rect out
- * of a band leaves exactly two such rects, 4 px wide and 500 rows tall, so the pass that skips
- * 384,000 px of canvas pays for 1,000 row-restarts instead of 536: measured on the `upload=` column
- * as 4,498 us for the uncut band and 7,348 us for the cut one, the refund of 384,000 pixels of GIF
- * traffic swamped by 500 extra round trips each way.
- *
- * The restart is bought by the missing pitch, so the cure is to supply one: gather a run of rows into
- * a contiguous staging buffer and hand the GS one setup plus one stream for that run, which is the
- * same shape the full-width path has always used and therefore the same encoders, not a second
- * spelling of them.  The gather is only worth doing while the rect is narrow -- above
- * PS2_GS_STAGE_MAX_QWC the copy moves more bytes than the transfers it saves cost, and a wide band's
- * rows are already ~200 quadwords per restart, which is why the full-width case above never gathers
- * at all and this branch is bounded by width rather than by area. */
-#define PS2_GS_STAGE_QWC      512u     /* the buffer: 8 kB of contiguous quadwords */
-#define PS2_GS_STAGE_MAX_QWC   16u     /* a rect up to 64 px wide gathers; wider ones stream per row */
+/*
+ * Narrow Rectangle Upload Optimization:
+ * Narrow blits that do not span the entire framebuffer width incur per-row DMA restart
+ * overhead if streamed directly. Narrow regions (up to PS2_GS_STAGE_MAX_QWC quadwords wide)
+ * are gathered into contiguous staging memory (`s_gs_stage`), coalescing multiple rows into
+ * a single DMA transfer burst.
+ */
+#define PS2_GS_STAGE_QWC      512u     /* Staging buffer: 8 KiB */
+#define PS2_GS_STAGE_MAX_QWC   16u     /* Regions <= 64 px wide are gathered */
 #define PS2_GS_STAGE_BYTES  (PS2_GS_STAGE_QWC * 16u)
 
 /* The one staging buffer, hoisted out of the branch that first needed it so the 16-bit gather below
@@ -372,13 +322,7 @@ static void upload_ct16(int x, int y, int w, int h)
         }
         send_trx_setup(x, y + (int)row, w, (int)n);
         send_image_stream(s_gs_stage, qwc * n);
-        /* The chunk's own advance, and the one line this function cannot be without: `from` walks the
-         * canvas by whole rows for the n rows above, and the destination walks by n rows below, so a
-         * missing step here does not shift the picture -- it sends the canvas's FIRST n rows once per
-         * chunk, into every band of the page.  Measured on 2026-10-18 by [BENCH] rung 3a (BENCH_GS=6),
-         * where it read as a page of flawless uniform background and no plate anywhere: the rows it
-         * kept re-packing were navy, so nothing was wrong except the ink.  The 32-bit staged path
-         * advances its own pointer the same way, inside its copy loop. */
+        /* Advance canvas source pointer by chunk row height */
         from += (size_t)n * row_words;
         row += n;
     }
@@ -415,10 +359,7 @@ void ps2_gs_upload(int x, int y, int w, int h)
 
     canvas = (const uint8_t *)ps2_fb();
 
-    /* A 16-bit page converts on the way out, because the GS converts nothing on a Host->Local
-     * stream: DBA's format says how many bytes each incoming pixel is, so a CT32 canvas poured into
-     * a PSMCT16 page would fill eight pixels a row instead of four and show the desktop squeezed to
-     * half its width.  Rung 3's answer is the packer, not a refusal. */
+    /* For 16-bit framebuffer pages, pack pixels into 5:5:5:1 format via staging buffer */
     if (pg->bytes_pp == 2u) {
         upload_ct16(x, y, w, h);
         return;
@@ -477,30 +418,11 @@ void ps2_gs_flush(void)
     ps2_gs_upload(0, 0, PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
 }
 
-/* ── LANE 19 rung 2: the Local->Host read ───────────────────────────────────────────────
- * The counterpart of ps2_gs_upload(), and the reason it exists: PCSX2 2.8.2 has no CLI flag that
- * dumps a frame, so the only way this port can be shown what the GS rasterised is for the guest to
- * ask the GS.  ps2_gs_read.c builds the words and refuses the rectangles those words cannot describe;
- * this function is the machine half -- three register dances on DMAC channel 1, with the receipts
- * between them.
- *
- * The order is ps2sdk's screenshot() and each gap in it is a failure mode:
- *
- *   Clear CSR FINISH *before* the block goes out, so the receipt below can only belong to this
- *   packet.  There is no interrupt handler that could race the poll (the IMR 0xFF00 installed at init
- *   masks the event), so the flag is this function's own to consume.
- *
- *   Wait for STR, then FINISH, then FQC.  STR says VIF1 has taken the block's bytes; FINISH says the
- *   GS has decoded the five AD words it carried and therefore knows the download's size; FQC says
- *   VIF1's FIFO is empty, which is the precondition for reversing it.  Reversing before FINISH takes
- *   the pixels of a request nobody has sized, and reversing before FQC reaches zero shifts the stream
- *   by however many quadwords were still queued.
- *
- *   Restore VIF1_STAT and BUSDIR on every exit, including the bounded-wait ones.  A read that returns
- *   with the bus reversed stops the desktop drawing forever, so the diagnostic would be the fault.
- *
- * Nothing here touches the canvas, the GIF ring, or channel 2 -- which is the whole reason the census
- * is honest: the page read is the one PCRTC is showing, and no part of the present path is consulted. */
+/* ── Local->Host VRAM Readback ───────────────────────────────────────────
+ * Reads a rectangular region of GS VRAM back into main memory via VIF1
+ * on DMAC Channel 1, reversing FIFO direction (BUSDIR=1).
+ * Used for diagnostic frame inspection and cleanroom verification.
+ */
 static gs_read_bus_err s_read_bus_err;
 
 gs_read_bus_err ps2_gs_vram_read_err(void)
@@ -1088,10 +1010,7 @@ uint32_t *ps2_gs_get_framebuffer(void)
     return ps2_fb();
 }
 
-/* LANE 21 rung 4's present, and the three counters that say what it did.  See ps2_gs.h for why the
- * steps are in this order; the numbers are here because the rung's claim is not "the page changed"
- * but "the page changed at a frame boundary", and only a count of the waits that did not see one can
- * tell those two apart from a log. */
+/* Hardware presentation telemetry */
 static uint32_t s_flip_count;
 static uint32_t s_flip_unaligned;
 static uint32_t s_flip_wait_max_us;
@@ -1244,30 +1163,10 @@ void ps2_gs_draw_cursor(int x, int y)
     }
 }
 
-/* Program the GS drawing environment (doc/txt/PS2.txt ch. 16, increment 3).
- *
- * The packet's contents are ps2_gs_env.c's business and are gated word for word on the host;
- * this is the part that can only be done here, because channel 2 is.  There is deliberately no
- * ps2_gs_poke64() on this path: the GIF takes the whole environment in one DMA, in order, and
- * nine individual stores would each take a bus turn and none of them would be ordered against
- * the primitive stream that follows.  make test-ps2 reads that off the image -- tests 39 to 41
- * find the call into the builder, no GS poke, and the way out to DMAC channel 2.  Note that the
- * sender itself is not what the image gate looks for: with LANE 10 the way out is a post, which
- * is a call into another translation unit and therefore readable as a jal, where the register
- * writes it turns into are inlined here and gone from this function's range.
- *
- * POSTED, and the only producer that posts in this file -- src/gl/eegs_present.c's stage is the
- * other one, and it is reaped at that unit's begin().  `env_pkt` is a static, so the
- * packet this pass sends is the packet the next apply overwrites -- and the next apply happens
- * after src/gl/eegs_present.c's begin(), which is exactly where the ring is reaped.  That is the
- * buffer-lifetime law in ps2_gif_ring.h, and it is why the canvas stream below this function is
- * still synchronous: the canvas has a writer in every console character, and no reap is scheduled
- * between one and the next upload.
- *
- * A refusal is returned as -1, and the caller stops there.  Sending a layer's primitives under
- * the *previous* layer's clip is a picture with the wrong rectangle, which is worse than the
- * frame that never happened -- and unreachable by construction anyway, since the ring holds more
- * descriptors than the stage holds groups. */
+/*
+ * Dispatches drawing environment configuration packet to the GIF ring buffer.
+ * Configures FRAME, ZBUF, SCISSOR, TEST, ALPHA, and XYOFFSET registers in batch.
+ */
 int ps2_gs_draw_env_apply(const gs_draw_env *env)
 {
     /* Tag pair plus one quadword per register, in quadword-aligned storage: the DMA reads

@@ -1,10 +1,17 @@
 /*
- * ps2_gs_rec.c — vertices accumulated into GIF groups, with no register and no DMA in sight
+ * ps2_gs_rec.c — Graphics Synthesizer GIF vertex packet recorder implementation
  *
- * Increment 4 of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  See ps2_gs_rec.h
- * for what a group holds and for the census rows that chose its register list.  What is only visible
- * here is the boundary rule: a buffer that fills mid-primitive has to be cut where no triangle loses
- * a vertex, and the vertices a strip needs in order to continue have to be written a second time.
+ * Implements pure GIF packet recording and primitive boundary management.
+ * Formats vertex streams into dense REGLIST packets with safe boundary clipping
+ * and continuation across DMA bursts.
+ *
+ * Buffer Headroom & Safe Boundary Splitting:
+ * When the staging buffer approaches capacity, primitive streams cannot be abruptly
+ * truncated without breaking triangle topologies (losing vertices from triangle strips
+ * or fans).
+ * Headroom (`GS_REC_HEADROOM`) ensures the buffer reserves enough space to complete
+ * the current primitive boundary before closing the packet group and re-emitting
+ * continuation vertices in the subsequent group.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -12,76 +19,40 @@
 #include "ps2_gs_rec.h"
 #include "ps2_gs_pack.h"
 
-/* A group occupies one tag quadword -- the tag itself in its low half, its REGS list in the high --
- * and then NLOOP * NREG registers laid end to end, which is what a dense `FLG=REGLIST` means.  With
- * the two lists this file writes, an untextured vertex is one whole quadword and a textured one is
- * one and a half, so this buffer's cursor is counted in 64-bit register halves and every count handed
- * to the sink is `s_w / 2u`.  A group of an odd number of registers ends on a half, and
- * close_group() pads that half with a zero: the DMA moves quadwords, so an unpadded last quadword
- * would carry whatever the previous frame left in its upper half -- a stale colour read as this
- * frame's vertex, in a packet whose length is a fact about memory it never wrote.
- *
- * The headroom is what lets a full buffer be cut at the *safe* boundary instead of at the moment it
- * fills: three vertices is the most any supported primitive type needs before its next whole
- * primitive starts (a TRI_LIST sitting at one vertex), plus the tag pair and the pad, so with this
- * much room left the recorder can keep appending until a boundary arrives, and the case where no
- * boundary arrives before the buffer is truly full becomes an error it can count instead of a vertex
- * it silently loses.
- *
- * It is written in halves because the cursor is in halves, and in GS_REC_REGS_MAX rather than a
- * literal because the per-vertex count changed under LANE 19 rung 12f: a headroom sized for the
- * four-register chain leaves the buffer half empty at every split, and one sized for two while a
- * textured group writes three and pads to four is an overrun at the boundary rather than a cut. */
-#define GS_REC_HEADROOM (2u + 3u * GS_REC_REGS_MAX + 1u)   /* halves: tag pair, three vertices, pad */
+/* Headroom: tag pair, 3 vertices (worst-case for triangle list boundary), and padding */
+#define GS_REC_HEADROOM (2u + 3u * GS_REC_REGS_MAX + 1u)
 
 #define GS_REC_NO_GROUP 0xFFFFFFFFu
 
-/* PRIM's texture bit, the one field of the primitive descriptor this file reads.  The field table is
- * in ps2_gs_pack.h; naming it here keeps the choice of list below from looking like a magic shift. */
+/* Extracts texture mapping enable (TME) flag from packed PRIM word */
 #define GS_REC_TME(prim) (((prim) >> 4) & 1ULL)
 
-/* The two REGS lists, in the order their data registers pack: state first, the drawing kick last
- * because XYZ2 is what completes a vertex.  Neither names PRIM -- the tag carries it under PRE --
- * and neither carries the NOP slot that used to hold PRIM's old seat.  The two shapes are the two
- * LANE 19 rung 12e measured as INTERPOLATING, on this same tag framing (D and F in its census);
- * the four-register list this replaces is the one that measured FLAT (A and B), and ps2sdk's own
- * Gouraud cube draws the two-register form.  See ps2_gs_rec.h for the rows. */
+/*
+ * Register Lists for REGLIST Packets:
+ * 1. Flat/Untextured (NREG=2): RGBAQ (colour), XYZ2 (coordinates and raster kick).
+ * 2. Textured (NREG=3): RGBAQ (colour), ST (texture coordinates), XYZ2 (kick).
+ */
 static const uint32_t s_regs_flat[GS_REC_NREG_UNTEX] = { GS_NIB_RGBAQ, GS_NIB_XYZ2 };
 static const uint32_t s_regs_tex[GS_REC_NREG_TEX] = { GS_NIB_RGBAQ, GS_NIB_ST, GS_NIB_XYZ2 };
 
-/* Which of a vertex's three semantic registers each list names, and in what order.  Kept separate
- * from the nibble tables above because they answer different questions: those say what the GIF
- * decoder is told to expect, these say what the recorder has to hand over, and the two are only
- * consistent by construction.  `make test-ps2-gs-rec` reads a group back by nibble and compares it
- * against what the caller asked for, which is the check that they still agree. */
+/* Slot indices mapping internal vertex values to the active register list */
 static const uint32_t s_slot_flat[GS_REC_NREG_UNTEX] = { 0u, 2u };
 static const uint32_t s_slot_tex[GS_REC_NREG_TEX] = { 0u, 1u, 2u };
 
-/* One quadword is 128 bits and every GS register is 64 of them, so `s_qw` is a stream of `uint64_t`
- * HALVES and the unit a caller sees -- the QWC handed to channel 2 -- is pairs of them.  What a half
- * MEANS depends on the group: a vertex group is a dense REGLIST, so its halves are consecutive
- * registers of the REGS list with no gaps, and a group of an odd register count carries a register
- * across a quadword boundary the way a 3-register chain does; an AD group is PACKED with NREG=1, so
- * its low half is the register's value and its high half is that register's GP offset, which is why
- * `send_trx_setup()` in ps2_gs.c fits four registers into five quadwords and the canvas is the proof
- * of that shape.  The two counts are not interchangeable, and the recorder keeps them apart by
- * tracking the cursor in halves and dividing once at the send: a vertex counted as four quadwords --
- * the sparse PACKED form this file used to emit -- both doubles the bytes on the bus and names a
- * primitive the GS never kicks (LANE 19 rung 5, ps2_gs_poster.h), and a 3-register chain counted as
- * floor(3/2) loses a vertex's texture coordinate and everything after it. */
+/* Staging buffer: 64-bit register halves (2 halves per 128-bit quadword) */
 static uint64_t s_qw[GS_REC_QW_CAP * 2u];
 static gs_rec_sink s_sink;
 static void *s_user;
 
-static uint64_t s_prim;                  /* this group's PRIM word, carried by its tag */
-static uint32_t s_op;                    /* its op code: the low three bits of that word */
-static int      s_prim_set;              /* gs_rec_prim() has been called at least once */
+static uint64_t s_prim;                  /* Active primitive configuration word */
+static uint32_t s_op;                    /* Active primitive opcode */
+static int      s_prim_set;              /* Non-zero if gs_rec_prim() has been called */
 static uint64_t s_rgbaq;
 static uint64_t s_st;
-static uint32_t s_tag_at = GS_REC_NO_GROUP;  /* half index of the open group's tag */
-static uint32_t s_nloop;                 /* vertices in the open group */
-static uint32_t s_w;                     /* register HALVES written since the last send */
-static uint32_t s_nreg = GS_REC_NREG_UNTEX;  /* the open group's register count: 2 or 3 */
+static uint32_t s_tag_at = GS_REC_NO_GROUP;  /* Buffer index of active GIF tag */
+static uint32_t s_nloop;                 /* Vertex count in active group */
+static uint32_t s_w;                     /* 64-bit words written in active buffer */
+static uint32_t s_nreg = GS_REC_NREG_UNTEX;  /* Active register count (2 or 3) */
 
 /* The two vertices a continued strip needs, and the apex a continued fan needs.  Kept as whole
  * register sets -- the three values a vertex is made of, not the two or three a list happens to
@@ -227,25 +198,19 @@ static void close_group(void)
         s_span_done = 1u;
     }
 
-    /* Back-patch the tag now that the loop count is final. EOP is set because each send here is
-     * one complete packet on a DMA transfer of its own. PRE is SET to 1 and PRIM carries s_prim,
-     * the same word open_group() writes into the PRIM register with an AD group of its own: this GS
-     * reads the write and (per ps2sdk) a real one may also read the field, so naming it twice from
-     * one variable is the only way both machines get the primitive the packet asked for.  The old
-     * comment on this line claimed the tag field did the programming on its own -- and that
-     * repeating PRIM per vertex was what kept a strip's texture and blend flags alive.  Rungs 12e
-     * and 12u separate the two halves of that claim: the repetition is unnecessary (one AD write
-     * stands a whole group's worth of loops, and 12u's V2 group of three loops proves it on this
-     * machine), and the tag field is NOT sufficient -- with no other packet in front of it, the
-     * identical chain laid one pixel at either value of PRE. */
+    /*
+     * Finalize GIF Tag and Quadword Alignment:
+     * Back-patches the tag with the finalized loop count (`s_nloop`).
+     * EOP is set because each group forms an autonomous DMA transfer burst.
+     */
     s_qw[s_tag_at] = gs_pack_giftag(s_nloop, 1u, 1u, s_prim, GS_FLG_REGLIST, s_nreg);
 
-    /* A group whose register count is odd ends between two quadwords, and the DMA moves quadwords:
-     * the half that would be read as the last register's partner is whatever the buffer held before
-     * this frame wrote over it.  Zero it, which is what ps2sdk does for its own odd chains
-     * (texture.c:259-263) and the exact shape boxes E and F measured.  An even group -- every
-     * untextured one, always two registers to a vertex -- takes no branch here, which is why the
-     * count below needs no rounding term. */
+    /*
+     * 128-bit Quadword Padding:
+     * Textured groups (NREG=3) produce an odd number of 64-bit register halves when
+     * `s_nloop` is odd. Pad the trailing half with zero to prevent transferring stale
+     * garbage over the DMA bus.
+     */
     if ((s_w & 1u) != 0u) s_qw[s_w++] = 0u;
 
     if (s_sink) s_sink(s_user, s_qw, s_w / 2u);
@@ -256,8 +221,7 @@ static void close_group(void)
     s_tag_at = GS_REC_NO_GROUP;
 }
 
-/* The high half of an AD data quadword that programs PRIM.  The low half is `s_prim` itself -- the
- * same 64-bit word the group's tag names -- so the write and the field cannot disagree. */
+/* High half of an A+D quadword addressing GS_REG_PRIM */
 static const uint32_t s_gp_prim[1] = { GS_GP_PRIM };
 
 static void open_group(void)
@@ -267,48 +231,19 @@ static void open_group(void)
 
     if (s_tag_at != GS_REC_NO_GROUP) return;
 
-    /* LANE 19 rung 12u measured this on the machine, with no neighbouring packet around to lend it
-     * state: box D's captured recorder group, replayed alone on a canvas-reset band, laid ONE pixel
-     * at its own apex vertex at BOTH values of PRE (V0 as captured, V1 with PRE cleared so the tag's
-     * PRIM field was the only thing left speaking), and laid a correct 610-pixel triangle --
-     * x539..620 of a 536..623 ask, which is the GS's own edge correction, not this file's arithmetic
-     * -- the moment an AD write of the identical prim word went in front of it.  The two AD writes
-     * that followed it differed in IIP alone and came out field=609 and field=0, which is the same
-     * run naming the bit the rasteriser interpolates on.
-     *
-     * So PRIM is a register this stream has to WRITE, not a field it can merely mention, and nothing
-     * upstream leaves it where the next group wants it: eegs_present.c's depth clear is an eight-write
-     * AD group that ends on PRIM=SPRITE, so a recorder group that inherits its primitive draws a
-     * sprite with three vertices -- one whole quad and one leftover kick, which is what a page of
-     * solid rectangles and dots looks like.  That is the mechanism behind the operator's flat gears,
-     * and it is why this file, not the backend, owns the fix: the packet is where the ask lives.
-     *
-     * The write goes out as its own group, in exactly the shape the run measured, by way of the
-     * mechanism the texture switches already ship through: PACKED, NLOOP=1, NREG=1, PRE clear, one
-     * data quadword whose low half is the word and whose high half is GS_GP_PRIM.  Writing it here
-     * rather than in gs_rec_prim() means a declared primitive that never gets a vertex costs nothing,
-     * and a group that reaches the bus always has its own primitive in front of it.
-     *
-     * Once per GROUP and not once per CHANGE, because the recorder does not own the other writers in
-     * the frame; a cached "PRIM already says this" would be a claim about machine state that another
-     * packet can move.  The cost is two quadwords and one DMA start per group -- a measured XMB frame
-     * is 47 groups against 5,322 quadwords -- and the next bench run owns the number rather than this
-     * comment guessing at it. */
-    /* n=1 is two quadwords, so gs_rec_ad()'s buffer test cannot refuse it in any build (the shipped
-     * GS_REC_QW_CAP is 4,096 and the host gate's is 32).  Counting the write only when it went out
-     * keeps gs_rec_prim_writes() a fact about the bus rather than an intention. */
+    /*
+     * Hardware Primitive Preamble:
+     * Before opening a vertex burst, issue an explicit A+D packed register write to
+     * GS_REG_PRIM. This guarantees primitive mode selection and Gouraud interpolation
+     * regardless of whether the hardware revision latches the GIF tag's embedded PRIM field.
+     */
     if (gs_rec_ad(&prim, s_gp_prim, 1u) == 0) s_prim_writes++;
 
-    /* The primitive decides the list, not the caller: a textured stream that left its ST out of the
-     * chain would sample the page with the previous vertex's coordinate, and an untextured one that
-     * carried an ST slot would pay a register for a value the rasteriser never reads. */
+    /* Select register list based on texture mapping enablement */
     s_nreg = GS_REC_TME(s_prim) ? GS_REC_NREG_TEX : GS_REC_NREG_UNTEX;
     regs = (s_nreg == GS_REC_NREG_TEX) ? s_regs_tex : s_regs_flat;
 
-    /* One quadword: the tag's own 64 bits with PRE=1 and s_prim, and then the REGS list in the half
-     * above them.  NREG is written here as 0 and rewritten by close_group() with the real loop
-     * count; the register count cannot change once the group is open, because a data stream whose
-     * second vertex does not have the length its first one has is a stream with no decoder. */
+    /* Allocate GIF tag quadword (tag header in low 64 bits, REGS list in high 64 bits) */
     s_qw[s_w]      = gs_pack_giftag(0u, 1u, 1u, s_prim, GS_FLG_REGLIST, s_nreg);
     s_qw[s_w + 1u] = gs_pack_regs(regs, s_nreg);
     s_tag_at = s_w;

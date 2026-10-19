@@ -1,10 +1,16 @@
 /*
- * eegs_present.c — the staged GIF stream, and the two DMA bursts that follow an upload
+ * eegs_present.c — Staged GIF stream management and asynchronous DMA presentation
  *
- * Increment 5c of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  See eegs_present.h
- * for the ordering rule this file exists to obey.  What is only visible here is the staging
- * buffer's own arithmetic: how many quadwords a frame costs, and what happens to a group that
- * does not fit.
+ * Implements the deferred DMA staging buffer and presentation pipeline for PS2 GS.
+ * See eegs_present.h for architectural invariants and ordering rules.
+ *
+ * Buffer Capacity & Sizing Principles:
+ * 1. Staging Buffer Capacity (EEGS_STAGE_QW_CAP = 65,536 quadwords = 1 MiB):
+ *    Sized to comfortably accommodate complex frames (such as multi-window desktops
+ *    and multi-segment animated wave ribbons) with generous headroom in main RAM.
+ * 2. Group Limits (EEGS_MAX_GROUPS = 256):
+ *    Bounded so that an entire frame of GIF packet descriptors fits within the
+ *    hardware GIF DMA ring buffer (`ps2_gif_ring`).
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -20,42 +26,23 @@
 #include "../drivers/ps2/ps2_gs_tex.h"
 #include "../drivers/ps2/ps2_gs_vram.h"
 
-/* The shipped XMB frame measures 7,434 vertices and 51 groups, which is 7,434 x 4 + 51 = 29,787
- * quadwords (doc/txt/PS2.txt, increment 5c's bench row).  A previous note here claimed a frame
- * records about 13,700, and the stage was built to fit a frame and a half of that; the first
- * image that actually presented through the GS said otherwise with `drop=42` on every frame,
- * because the stage held the first nine groups and refused the rest -- a partial picture with a
- * number attached to it.  65,536 quadwords is a frame with headroom for a second window's worth
- * of geometry, at 1 MiB of .bss against a machine with 32.  The bound is not provable from the
- * app, so the counter is the design: `drop` is the row a bench reads, and a non-zero one means
- * this port has met a frame it cannot put on the bus in one pass. */
 #define EEGS_STAGE_QW_CAP 65536u
-
-/* One group per recorder send: the vertex groups are bounded by GS_REC_QW_CAP, and a texture
- * switch is its own group of four quadwords.  256 is ~50x the measured frame's group count. */
 #define EEGS_MAX_GROUPS 256u
 
-/* LANE 10's bound, stated where both halves of it are visible.  The ring has to hold one whole
- * frame's transfers -- a group each, plus the environment packet that goes in front of them -- or a
- * refusal would mean "this port built too small a queue" instead of the one thing `refused=` is
- * allowed to mean: the GIF fell behind.  The pair lives in two files, so only the build can see
- * it; the idiom is core_ps2.c's negative array size, because PS2_CFLAGS is -std=c99 and
- * _Static_assert is C11.  If the group table ever outgrows the ring this is a compile error rather
- * than a picture with a piece missing. */
+/*
+ * Compile-time invariant: the GIF ring buffer capacity must strictly exceed
+ * the maximum allowable groups per frame plus one environment packet.
+ * Tested via negative array size under C99.
+ */
 typedef char eegs_ring_holds_a_frame[
     (PS2_GIF_RING_CAP > EEGS_MAX_GROUPS + 1u) ? 1 : -1];
 
-/* Each staged quadword is two uint64_t, exactly as the recorder's own buffer holds them: the DMA
- * reads 16 bytes at a time, and the GIF decodes one register per quadword. */
+/* Staged GIF packet buffer: aligned to 16-byte quadword boundaries for DMAC access */
 static uint64_t s_stage[EEGS_STAGE_QW_CAP * 2u] __attribute__((aligned(16)));
 static uint32_t s_group_qwc[EEGS_MAX_GROUPS];
 static uint32_t s_groups, s_used;
 
-/* The first groups of the frame that just went out, as a running word offset -- the look rung 25
- * needs, because send() ends by clearing `s_groups` and the next begin() starts writing the stage
- * again, so "the words of group 2" has no answer after the frame is over.  Eight because that is
- * all the instrument reads, and a full EEGS_MAX_GROUPS table would be 1 kB of .bss in an image
- * whose budget has already been the subject of its own lane. */
+/* Running word offsets for diagnostic inspection of recently dispatched groups */
 #define EEGS_PEEK_GROUPS 8u
 static uint32_t s_peek_off[EEGS_PEEK_GROUPS];
 static uint32_t s_peek_qwc[EEGS_PEEK_GROUPS];
@@ -65,52 +52,28 @@ static uint32_t s_dropped;
 
 static eegs_present_stats s_stats;
 
-/* ── LANE 12h's invariance instrument (`PS2_IDENT=1`) ──────────────────────────────
- * The question this answers is the one that decides between the lane's two rungs: is the stream a
- * frame records the same byte string the previous frame recorded?  If it is, the rung is a replay
- * and the vertex arithmetic goes away; if it is not, the rung is a batch map and the arithmetic
- * gets cheaper instead.  Nothing else in this port can answer it, because the recorder keeps no
- * history -- LANE 10's buffer-lifetime law is that the words a group handed to the sink are gone
- * the moment the next group is written.
+/* ── Inter-Frame Invariance Instrument (`PS2_IDENT=1`) ───────────────────────
  *
- * So the instrument keeps a per-group hash instead of the words.  Two 32-bit FNV-1a lanes folded
- * over the group's uint64 halves give 64 bits of state for ~2 multiplies a word, both on 32-bit
- * operands (a 64-bit multiply on this o32 build is a software routine, which is exactly the cost
- * the instrument must not pay in a lane that measures cost), and the pair is folded inside the
- * copy loop that already touches each word.  Its error is one-directional, which is what makes
- * `sameqw=` usable as a decision rather than as a hint: identical bytes necessarily hash
- * identically, so a same-group claim is only wrong on a 2^-64 collision, while a different-group
- * claim is exact.
+ * To determine whether successive frames submit identical geometry, rigid translations,
+ * or dynamically deformed meshes, this diagnostic instrument computes per-group and
+ * per-register 64-bit FNV-1a hashes:
  *
- * The comparison is BY INDEX, and that is the design rather than a shortcut: a replay can re-send
- * a span only where that span sits in this frame too, so an inserted group that shifts every later
- * one is precisely the cost rung (ii) would pay, and it reads as a frame whose whole tail differs.
- * `tail_*` counts the groups only one of the two frames has, so a shifted frame is never mistaken
- * for an identical one, and the group indices that differ are named in `at=` so the reading side
- * can put them against the `g=` column the app's phase markers print.
+ * 1. Arithmetic Efficiency:
+ *    Uses two parallel 32-bit FNV-1a hashes folded over 64-bit words, requiring only
+ *    32-bit integer multiplications. This avoids expensive 64-bit software multiplication
+ *    emulation on the 32-bit MIPS o32 ABI.
  *
- * The per-group tuple is {hash low, hash high, qwc, the per-register lane hashes, the group's
- * kind}.  `qwc` is carried for the COLUMNS and not for the detection: `same=`/`diff=`/`tail=` are
- * reported in quadwords, and this is the field they are summed from.  A vertex-count change is
- * already caught by the words themselves -- the group then folds one more register, which under
- * LANE 19 rung 12f is a whole quadword for an untextured vertex and a half of one for a textured --
- * and its tag's NLOOP field moves with it -- which is what the controls
- * measured by deleting both of the length terms and losing no check at all.
+ * 2. Positional Matching:
+ *    Groups are compared by index between frame N and frame N-1. If groups match bit-for-bit,
+ *    `same_groups` increments. If a mesh count shifts, `tail_groups` records the divergence.
  *
- * The lanes exist because `diff=` cannot say WHAT moved, and the answers send the next rung to
- * different files: a group whose XYZ2 registers are byte-identical while its RGBAQ moved is a mesh
- * whose geometry is the same every frame and only its shade changes, which wants a colour map, while
- * a moving XYZ2 is the vertex transform being re-solved.  A vertex group is a dense REGLIST, so its
- * registers -- RGBAQ then XYZ2, plus ST between them when the primitive is textured -- pack end to end
- * from half 2 on (the tag's quadword carries the REGS list in its high half), and a register can
- * straddle a quadword boundary; each lane therefore folds the halves the group's OWN NREG says hold
- * it, dispatching on the nibble the REGS list names rather than on a position this file could keep up
- * to date only by luck.  PRIM and
- * the tag are in none of the lanes and
- * only in the whole-group hash, which is why a group can count in all three lanes and still be
- * `diff=` -- that combination says the primitive descriptor moved, not the picture.  An AD group (a
- * texture switch) has no such register body, so it is marked by kind and counted in no lane;
- * `same=`/`diff=` count it like any other group. */
+ * 3. Register Lane Analysis:
+ *    In REGLIST vertex packets, registers are mapped by the GIF tag's REGS list:
+ *      - XYZ2 lane: tests geometric coordinate invariance.
+ *      - Shape lane: tests delta between consecutive vertices, detecting rigid translations.
+ *      - RGBAQ lane: tests colour invariance.
+ *      - ST lane: tests texture coordinate invariance.
+ */
 #ifndef BTRON_PS2_GS_IDENT
 #define BTRON_PS2_GS_IDENT 0
 #endif
@@ -194,20 +157,16 @@ uint32_t eegs_present_groups_staged(void)
     return s_groups;
 }
 
-/* Rung 25's count of what the last send put on the bus.  This is NOT
- * `eegs_present_groups_staged()`: that counts the frame being built and is reset to zero by the send
- * itself, so a caller standing at the send seam -- which is the only place the stage is still this
- * frame's -- would read "0 group(s) staged" for a frame that just sent twenty. */
+/* Number of groups dispatched in the most recent send() invocation. */
 uint32_t eegs_present_groups_sent(void)
 {
     return s_peek_n;
 }
 
-/* Rung 25's look into the stage.  `s_group_qwc[]` counts GIF quadwords -- 16-byte units, the width
- * the GIF itself transfers -- so a group is `2 * qwc` 64-bit words, which is the unit this copy
- * counts.  The offsets are the ones taken at the send, so what a caller reads here is what went on
- * the bus, by construction rather than by a second model of the layout -- and they describe the
- * frame that most recently went out, which is the only frame whose words are still in the buffer. */
+/*
+ * Reads raw GIF quadwords from staged group `group` for diagnostic validation.
+ * Offsets and lengths mirror the packets actually committed to the DMA ring buffer.
+ */
 uint32_t eegs_present_group_peek(uint32_t group, uint64_t *out, uint32_t max_u64)
 {
     uint32_t i, n;
@@ -357,16 +316,9 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
         s_stage[2u * s_used + i] = qw[i];
 #if BTRON_PS2_GS_IDENT
         ident_fold(&ha, &hb, qw[i]);
-        /* The tag occupies ONE quadword -- its own 64 bits with the REGS list in the half above
-         * them -- so the data body starts at half 2 and is NLOOP * NREG registers packed end to end,
-         * which is what a dense REGLIST means.  Under LANE 19 rung 12f that product is no longer a
-         * constant: an untextured group carries two registers a vertex and a textured one three, so
-         * which register a given half IS can only be answered by the group's own NREG and its own
-         * REGS list.  The dispatch below does exactly that, and a register the list does not name is
-         * a lane that folds nothing -- which is the honest reading, not a gap.  PRIM and the tag fold
-         * into no lane: the whole-group hash owns them,
-         * which is what the book's residual reading is -- a group invariant in every lane yet
-         * `diff=` had its PRIM, its tag or its loop count move. */
+        /* The tag occupies one quadword (header in low 64 bits, REGS list in high 64 bits).
+         * Vertex data begins at quadword offset 2, packed densely in REGLIST order.
+         * The loop dispatches by the active register nibble defined in the GIF tag. */
         if (kind == ID_VERTEX && i >= 2u) {
             const uint32_t reg = (i - 2u) % nreg;
             const uint32_t nib = (uint32_t)((qw[1u] >> (4u * reg)) & 0xFu);
@@ -376,16 +328,11 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
             case GS_NIB_ST:    ident_fold1(&lst,  qw[i]); break;
             case GS_NIB_XYZ2:
                 ident_fold1(&lxyz, qw[i]);
-                /* The shape lane reads XYZ2's own fields -- X[15:0], Y[31:16], Z[63:32] of the
-                 * register (gs_pack_xyz2) -- and folds the DIFFERENCE from the previous
-                 * vertex rather than the coordinate.  It is therefore invariant under translating
-                 * the whole group, which is the one thing `xyz=` cannot say: a differing `xyz=` over
-                 * an invariant `shape=` is the same mesh in a new place, and a differing `shape=` is
-                 * the mesh itself changing.  The first vertex folds nothing, so a group's shape is
-                 * its vertex count and its relative structure and nothing about where it sits.
-                 * There is no half test here: the register dispatch above already puts XYZ2 in the
-                 * half the dense stride gives it, and the `(i & 1u) == 0u` this replaces was that
-                 * test read as a fact about the layout rather than as the sparse shape's accident. */
+                /*
+                 * Shape invariance analysis: folds the difference between consecutive vertices
+                 * (X, Y, Z coordinates). Translations preserve vertex deltas, allowing the instrument
+                 * to distinguish rigid translations from mesh deformations.
+                 */
                 {
                     const uint64_t w = qw[i];
                     const uint32_t x = (uint32_t)(w & 0xFFFFu);
@@ -427,14 +374,13 @@ static void eegs_stage_sink(void *user, const uint64_t *qw, uint32_t qwc)
 
 void eegs_present_begin(void)
 {
-    /* LANE 10's completion check, and it is here rather than at send() on purpose.  The stage is
-     * the buffer the ring's descriptors point into, and this function is the one moment before the
-     * next frame's words are written into it -- so this is where "has the GIF finished reading what
-     * I committed last pass?" gets asked, once per paint pass, instead of once per transfer at the
-     * moment of committing it.  A reap with nothing queued and nothing in flight is a register read
-     * and a comparison; the µs it does spend waiting are counted into the ring's `wait_us`, which
-     * is the number that says whether the presentation plane is still, in the end, being stopped by
-     * its consumer. */
+    /*
+     * Asynchronous DMA Reaping:
+     * Reaping completed GIF transfers occurs lazily at the start of the next frame's
+     * staging rather than blocking synchronously at the end of send().
+     * This allows the EE CPU to proceed with compositing while the Graphics Synthesizer
+     * drains the prior frame's DMA bursts asynchronously in the background.
+     */
     (void)ps2_gif_reap();
 
     s_groups = 0u;
@@ -448,8 +394,7 @@ void eegs_present_begin(void)
 
 void eegs_present_end(void)
 {
-    /* Closes the open group, which arrives at the sink above.  Nothing is sent here: the whole
-     * point of staging is that the canvas upload has not happened yet. */
+    /* Finalizes the active group. No DMA is initiated until after canvas compositing. */
     eegs_frame_end();
 }
 
@@ -461,14 +406,7 @@ int eegs_present_send(const RECT *client)
     if (client == 0 || s_groups == 0u) return 0;
     if (client->right <= client->left || client->bottom <= client->top) return 0;
 
-    /* The frame the primitives land in is the page ps2_gs_vram.h says writers own: the shown one
-     * while double-buffering is off, the hidden one when LANE 21 rung 4 turns it on.  Its base,
-     * width and format all come from that one description, which is the same one ps2_gs_set_mode()
-     * programs DISPFB from -- a stream that lands somewhere other than where the CRT reads is a
-     * stream nobody sees, and the two cannot disagree once neither of them writes it out.  The
-     * accessors always describe a page -- a format with no second page leaves that entry zeroed and
-     * gs_disp_set_double() refuses it, so nothing can point the writers at it -- and the mask stays
-     * clear because the layer replaces what it covers and blends into it where ALPHA says to. */
+    /* Framebuffer destination page obtained from active VRAM allocator */
     const gs_disp_page_t *drawn = gs_disp_drawn();
 
     env.frame_byte   = drawn->byte;
@@ -573,27 +511,18 @@ int eegs_present_send(const RECT *client)
     }
 
     if (eegs_is_dual_context()) {
-        /* Rung 28: the two blend laws the applications ask for cannot share one ALPHA register, so
-         * they get one drawing context each and PRIM's CTXT bit selects between them -- `prim_word()`
-         * in backend_eegs.c sends a brighten prim to context 2 and everything else, textured or not,
-         * to context 1.
+        /*
+         * Dual Hardware Drawing Contexts (GS Context 1 & Context 2):
          *
-         * Context 1 therefore keeps the source-over word `env` was given above -- NOT zero.  The
-         * dormant version of this branch wrote `reg_alpha = 0` here on the reasoning that only ABE=0
-         * primitives would ever select it, and that stopped being true the moment the icons and glyphs
-         * (textured, blended, and by the gate above unmistakably context 1) needed a law: with A=0 the
-         * register computes black, and an opaque-looking pixel on the XMB is exactly the symptom that
-         * would follow.
+         * The GS provides two concurrent drawing contexts selectable via PRIM.CTXT:
+         *   - Context 1 (CTXT=0): Standard source-over alpha blending
+         *     Equation: (Cs - Cd) * As >> 7 + Cd
+         *   - Context 2 (CTXT=1): Additive destination brighten blending
+         *     Equation: (Cd - 0) * As >> 7 + Cd  (i.e. Cd * (1 + As/128))
          *
-         * Context 2 is the measured brighten word: `(Cd - 0) * As >> 7 + Cd`, i.e. the destination
-         * scaled by the vertex's own alpha over 128, which is the GS's spelling of the ribbon's
-         * `dst * (1 + src)`.  The measurement is [GS28]'s M box: 1600/1600 px landed at dest*3/2 with
-         * As=64, and the page stored the vertex's own alpha, so the divisor is As/128 and not As/255.
-         *
-         * Everything else in `env2` is a copy, deliberately: CTXT switches the whole environment, so
-         * FRAME_2/ZBUF_2/SCISSOR_2/TEST_2/XYOFFSET_2 must name the same page and the same window as
-         * context 1 or the wave would draw somewhere other than the ribbon's band.  TEX0_2/CLAMP_2
-         * stay zero, which is safe precisely because a textured prim never selects context 2. */
+         * Context 2 duplicates all geometric transformation, scissoring, and framebuffer
+         * state from Context 1, differing exclusively in its programmed ALPHA blending equation.
+         */
         gs_draw_env env2 = env;
         env2.reg_alpha = gs_pack_alpha(GS_BLEND_CD, GS_BLEND_ZERO, GS_ALPHA_AS, GS_BLEND_CD, 0u);
         if (ps2_gs_draw_dual_env_apply(&env, &env2) != 0) return -1;
@@ -601,22 +530,12 @@ int eegs_present_send(const RECT *client)
         if (ps2_gs_draw_env_apply(&env) != 0) return -1;
     }
 
-    /* One DMA per group, in recorded order: the environment above has to reach the GS before the
-     * first vertex, and each group is a complete packet with EOP set, which is what makes a
-     * transfer per group legal rather than merely convenient.
+    /*
+     * Dispatch Staged Packets to GIF Ring Buffer:
      *
-     * These are POSTED, not sent (LANE 10).  The stage is not written again before the reap at the
-     * next begin(), so a descriptor can point into it while the EE goes on to composite the rest
-     * of the frame, and the transfer's cost is no longer a hole in this pass.  Order survives
-     * because the ring is a FIFO and because the only synchronous producer left -- the canvas band
-     * that `ps2_upload_cover_in_layer()` puts back over a stream that buried it -- reaps before it
-     * starts, so it can put nothing in front of a group it did not wait for.
-     *
-     * The first refusal ends the frame.  Continuing would let a later group take a slot that freed
-     * up while an earlier one was lost, which is primitives out of draw order rather than a
-     * missing tail; the lost groups are counted in the same `dropped` column the stage's own
-     * overflow uses, because both mean a piece of the picture no screen has. */
-
+     * Packets are posted asynchronously to the ring FIFO. Because the buffer descriptors
+     * reference the staging array, the memory remains valid until the next frame's reap.
+     */
     off = 0u;
     qw_sent = 0u;
     posted = 0u;

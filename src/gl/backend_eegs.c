@@ -1,17 +1,15 @@
 /*
- * src/gl/backend_eegs.c -- the vertices a clipped triangle becomes, as a GIF group, and the
- * texture switch that goes between them
+ * src/gl/backend_eegs.c -- PlayStation 2 GS (Graphics Synthesizer) rasterizer backend:
+ * vertex packaging, GIF packet groups, and texture plane state switching.
  *
- * Row 5, steps 5a and 5b of the plan of record (doc/txt/PS2.txt, ch. 16 "The increments").  Everything
- * hard about the GS is in increments 2, 3 and 4, which this file calls and does not duplicate: the
- * field encodings are `ps2_gs_pack.c`'s, the environment is `ps2_gs_env.c`'s, and the group state
- * machine -- NLOOP, the REGS list, where a full buffer is cut and which vertices a continued strip
- * needs -- is `ps2_gs_rec.c`'s.  What is here is the two decisions the raster stage makes: which
- * primitive and which three state flags a triangle carries, and what a device-space vertex means
- * to the GS.  From 5b a third: when the plane a triangle samples is not the plane the stream
- * already points at, the three texture registers go in as a group of their own.  From LANE 12f a
- * fourth: a mesh the application already has in hand is one PRIM and a run of vertices, and needs
- * no triangle loop at all -- see `eegs_grid_strip()`.
+ * Implementation Details:
+ * Connects TinyGL's geometry pipeline to the Sony PS2 Graphics Synthesizer (GS).
+ * Performs two key tasks:
+ * 1. Encodes primitives and device-space vertices into GIF packets (`ps2_gs_rec.c`).
+ * 2. Emits texture plane configuration registers (`ps2_gs_pack.c`) dynamically when switching planes.
+ *
+ * Retained meshes are submitted as single PRIM strips or quad runs (`eegs_grid_strip()`),
+ * bypassing immediate-mode looping.
  *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
@@ -25,22 +23,16 @@
 
 /* The register set this port's primitives are drawn with, as the PRIM word's CTXT bit.
  *
- * It is 0, and the reason it is worth a paragraph is that the two naming schemes in this port run
- * in opposite directions.  Every environment register this port writes is named for the FIRST
- * context -- `ps2_gs_env.c` emits GS_GP_FRAME_1, GS_GP_SCISSOR_1, GS_GP_ALPHA_1, GS_GP_XYOFFSET_1,
- * and `eegs_texture()` below writes GS_GP_TEX0_1/TEX1_1/CLAMP_1 -- and the GIF's address table
- * pairs those with the integer 0: `GS_REG_FRAME_1` is 4Ch and `GS_REG_FRAME_2` is 4Dh, and
- * ps2sdk's own pairing is `GS_REG_FRAME + context` (draw.c:61, draw_environment.c:38) with the
- * SAME integer going into the primitive's CTXT field (`GS_SET_PRMODE(..., context, ...)` at
- * draw.c:175, `GS_SET_PRIM(..., context, ...)` at draw3d.c:17).  So "context 1" is CTXT=0.
+ * Hardware Register Context Mapping:
+ * The GS provides two register contexts (Context 1 and Context 2).
+ * Environment registers emitted by `ps2_gs_env.c` target Context 1:
+ * GS_GP_FRAME_1, GS_GP_SCISSOR_1, GS_GP_ALPHA_1, GS_GP_XYOFFSET_1.
+ * In the GS GIF register addressing table, Context 1 registers are paired with index 0
+ * (e.g. GS_REG_FRAME_1 is 4Ch, with CTXT=0).
  *
- * CTXT=1 asks the GS for the second register set, and nothing in this port has ever written that
- * set: its FRAME is 0 (page 0, buffer width 0), its SCISSOR is the empty box, its XYOFFSET and
- * ALPHA are reset values.  A stream addressed that way is delivered, acknowledged and rasterised
- * against a window that clips every fragment away -- the whole picture vanishes and every counter
- * this side of the GS keeps saying the frame was sent.  That is what the LANE 19 rung-6 live census
- * found on 2026-10-16 (`ink=0` across the displayed page while the census's own CTXT=0 control
- * filled its box exactly), and it is why the census's controls and this backend must agree on 0. */
+ * Thus, Context 1 corresponds to PRIM CTXT=0.
+ * PRIM CTXT=1 routes to Context 2, which is configured for destination-brighten blending.
+ */
 #define EEGS_CONTEXT 0u
 
 /* The largest window-local coordinate the vertex word carries, in pixels.  `gs_vertex_coord16()`
@@ -59,18 +51,15 @@ static uint64_t s_prim_live;
 static int      s_prim_valid;
 static uint32_t s_prims;
 
-/* Rung 28: whether the PRIM the GS now holds asks for the destination-brighten law, i.e. whether its
- * ABE and CTXT bits are both set, which is what `prim_word()` means by context 2 and what
- * `eegs_present.c` programs there with `gs_pack_alpha(CD, ZERO, AS, CD, 0)`.
+/* Destination-brighten blending mode flag:
+ * Set when the active PRIM word requests Context 2 (CTXT=1) destination-brighten blending.
  *
- * It is read out of the live word rather than passed down with each vertex because the word IS the
- * contract: `select_prim()`'s word compare is what keeps a 1,984-vertex ribbon inside one PRIM group,
- * so the vertices of an open chain are drawn under the state that chain's word names -- and a rule
- * taken from `st` at the call would be able to disagree with the register after a repeat, which is
- * exactly the shape of the bug this whole lane exists to stop.  `emit_vertex()` consults it to move
- * the colour's brightness into As, because that law's only input is the scalar alpha: the GS computes
- * `(Cd - 0) * As >> 7 + Cd`, so a vertex's RGB never reaches the page and its brightness has to ride
- * where the hardware looks. */
+ * Evaluates the hardware equation:
+ *     Color = (Cd - 0) * As >> 7 + Cd
+ *
+ * Because this equation modulates by the scalar alpha (As) rather than vertex RGB,
+ * `emit_vertex()` relocates the vertex luminance into the alpha channel.
+ */
 static uint32_t s_brighten_live;
 
 static const gs_tex_t *s_tex_live;
@@ -78,40 +67,24 @@ static uint32_t s_tex_switches;
 static uint32_t s_tex_missing;
 static int      s_depth_test_active;
 
-/* LANE 19 rung 11: how many vertex colours the frame actually carried.
+/* Vertex Colour Transition Diagnostics:
+ * Tracks whether the stream contains varying vertex colours or a uniform flat colour.
  *
- * Rung 10's page-as-picture (same lane, one rung up) put a name on what the operator has been
- * pointing at: the XMB's client is ONE colour on the GS page -- 270,436 px of 0xfe9d4c01, which in
- * the framebuffer's own byte order is the gradient's top-left corner, (1,76,157) at 0.81 opacity --
- * with a few flat 0xe5e5e5 blocks where the icons should be.  The ink arrives, it is in the rect,
- * and it is one value: `in_win=` could never see this, because it counts pixels, not colours.
- *
- * Two places can make that picture and the remedies are opposite.  Either the application's per-
- * vertex colours never reach the stream -- everything arrives carrying one colour, and the bug is
- * in TinyGL's colour plumbing on this backend -- or the colours are in the stream and the GS is
- * not interpolating them, which is an environment question (IIP in PRIM, and the alpha/fog state)
- * rather than a drawing one.  The shade model reads GL_SMOOTH at init and nothing lowers it, and
- * `gs_vertex()` takes each vertex's own `col->r/g/b/a` when `flat` is null, so both look right in
- * the source; only the emitted words can say which of the two the frame is.
- *
- * So this is the cheapest thing that answers it: one compare per vertex against the previous
- * colour word, and the first and last values seen.  A frame that draws a gradient and a 32x32
- * wave lattice moves its colour on nearly every vertex, so `colchg` is of the same order as
- * `verts`; a frame whose vertices all carry one colour reports 0 with a `first` equal to its
- * `last`.  No table and no hash -- the question is "does this stream vary", and a transition count
- * answers it for the price of a register. */
+ * Compares each vertex colour against the previous vertex. For a gradient or dynamic wave
+ * lattice, `colchg` scales with `verts`. A flat-shaded stream reports 0 transitions.
+ * This diagnostic quickly identifies whether colour loss originates in the software pipeline
+ * or in hardware rasterizer shading flags (IIP bit in PRIM).
+ */
 static uint32_t s_colour_prev;
 static uint32_t s_colour_first;
 static uint32_t s_colour_last;
 static uint32_t s_colour_changes;
 static uint32_t s_colour_verts;
 
-/* LANE 19 rung 11's second half: of the PRIM words this frame declared, how many asked the GS for
- * Gouraud interpolation (IIP, bit 3) and how many for texture mapping (TME, bit 4), out of how many
- * declarations there were.  Rung 10 found a client that is one flat colour with a varying-colour
- * stream, and the recorder programs PRIM once per group, so these three counts are the whole of what
- * the rasteriser was told about shading.  `iip=0/25` is the flat page explained without touching the
- * GS environment at all. */
+/* PRIM Shading Mode Diagnostics:
+ * Measures how many declared PRIM words requested Gouraud shading (IIP bit 3)
+ * or texture mapping (TME bit 4). Verified against total declarations (`s_prim_decl`).
+ */
 static uint32_t s_prim_iip;
 static uint32_t s_prim_tme;
 static uint32_t s_prim_decl;
@@ -128,25 +101,15 @@ static void count_colour(uint32_t rgba)
     s_colour_verts++;
 }
 
-/* LANE 19 rung 12b: the frame's LARGEST triangle, named by its own three colours.
+/* Large Triangle & Geometric Area Diagnostics:
+ * Distinguishes large full-screen backdrop / gradient quads from small UI elements by area.
  *
- * Rung 11's `colchg=` is a frame total, and the background is 15 vertices of a 4,138-vertex frame,
- * so it cannot say anything about that one quad: 1,852 changes is equally consistent with every
- * triangle carrying three corner colours and with every one of them flat.  But the layer whose
- * flatness is the complaint is the only one whose triangles are BIG -- the gradient quad is ~77,000
- * px of the client, and an icon or a glyph is a few hundred -- so area selects the layer for free.
- *
- * `big_*` therefore describes the widest triangle the frame recorded: its doubled area, the three
- * colours it was handed, and whether it asked for interpolation.  If those three words differ, the
- * collapse is downstream of this file and the GS's shading is the suspect; if they are one word,
- * the gradient never left the EE and the clipper's colour plumbing is.  `wide=`/`wideflat=` widen
- * the same test from one triangle to a class (every triangle of at least EEGS_WIDE_TRI_PX doubled
- * area), so a frame that happens to split its background into small wedges cannot hide behind the
- * single largest one.
- *
- * Doubled area, because the cross product of two edge vectors is twice the area and dividing it is
- * a shift this census has no use for: the threshold is written in the same unit. */
-#define EEGS_WIDE_TRI_PX 32768u    /* doubled: a 256 x 128 wedge, a tenth of the background's own */
+ * Evaluates the cross-product of edge vectors to compute doubled area.
+ * `wide` counts triangles exceeding `EEGS_WIDE_TRI_PX` (doubled area >= 32,768).
+ * `wideflat` counts large triangles with uniform vertex colors.
+ * `big_*` records the single widest triangle: its doubled area, corner colors, and smooth flag.
+ */
+#define EEGS_WIDE_TRI_PX 32768u    /* doubled area threshold: 256x128 pixel wedge */
 
 static uint32_t s_wide_tri;
 static uint32_t s_wide_flat;
@@ -177,64 +140,28 @@ static void count_wide(const eegs_vertex_t *a, const eegs_vertex_t *b, const eeg
     s_big_smooth = smooth;
 }
 
-/* The group-boundary rate, and the one column LANE 12e left behind as an instrument.
- *
- * s_prim_moves counts the times select_prim() actually sent a new PRIM word, each of which closes
- * the open group -- so `pchg=` against `groups=` in the [GSTS] row is the rate and its budget, and
- * EEGS_MAX_GROUPS (256, asserted against LANE 10's ring capacity in eegs_present.c) is what happens
- * when the rate outruns it: the stage table fills and the row's `drop=` counts primitives of this
- * frame's picture that the screen never receives.
- *
- * The four chain counters this rung grew to read its own win (taken / entry / miss / fresh, plus
- * the strip-selection helpers they hung on) are REMOVED, not parked: the measured verdict -- 516 of
- * ~1,838 ribbon triangles chained, every miss costing a list path and a re-entry, `pchg=` 51 -> 470
- * and `drop=` 0 -> 236 for 14% fewer vertices and no movement in f_ribbon -- is in
- * doc/txt/PS2.txt LANE 12e, and a re-lived rung shows up there without new counters, as the
- * `verts=`/`prims=` ratio leaving 3.00.  What it would need first is a group that survives a PRIM
- * change; the recorder's own strip primitive stays implemented and gated in ps2_gs_rec.c. */
+/* PRIM Re-declaration & GIF Group Boundary Rate:
+ * Counts transitions where `select_prim()` emits a distinct PRIM word, closing the active group.
+ * Monitored against `EEGS_MAX_GROUPS` (256) to ensure the stage buffer is never overrun.
+ */
 static uint32_t s_prim_moves;
 
-/* LANE 12f rung (ii): the two exits a retained mesh has, counted where the decision is made.
- *
- * `batch=` is a mesh drawn as one strip by `eegs_grid_strip()`, `slow=` is a mesh that asked and was
- * refused and is therefore being drawn by the immediate-mode walk instead.  Both are counted inside
- * that one entry -- a refusal returns -1 having recorded nothing, and a caller that could not even
- * capture a map hands the zeroed struct to the same entry, so there is exactly one place the two
- * numbers can come from and they cannot be made to sum to something other than the draws.
- *
- * They are on the row because the batch path has no clipper in front of it -- the clip is the GS's,
- * by the SCISSOR the present programs from the same rect the map carries (see the bbox scan in
- * `eegs_grid_strip()`, and `over=` below for what a frame relied on it for).  The ratio is the
- * evidence: `slow=` rising while the window is a fixed size says the gate is rejecting meshes that
- * used to draw, and `batch=` with a sheet missing an edge says the clip is not doing what the
- * register means.  Neither is a substitute for the user's eyes, which is rung (iii)'s gate.
- *
- * `why=` is the third column of that pair, and the one that makes the other two actionable: a lone
- * `slow=` cannot say whether the mesh left the window or the context was not in the shape a
- * two-constant map can represent, and those two have opposite remedies.  It is the LAST refusal of
- * the frame, encoded by `TGL_GRID_REFUSE_*` in `src/gl/grid_map.h` -- the map's own conditions come
- * in through the refused struct, and the range exit names its own here, so the column has one source
- * whatever the caller passed.  The first live run of the batch path is why it exists: it printed
- * `batch=0 slow=1` on every frame with no way to say which condition refused.
- *
- * `over=` is the fourth and the one the amended gate needs: a batched mesh's points that lie outside
- * the clip rect but inside the vertex word's range, which is the work this frame asked the GS's
- * SCISSOR to do.  It is not a refusal and not an error -- the ribbon's 32 points a frame are the same
- * 32 the immediate path's clipper used to cut, for ~3,260 cycles a vertex -- but a fast path that
- * relied on a register that does not mean what it says would lose a strip of the picture and print
- * nothing, and this is the column that would be nonzero while it did. */
+/* Retained Mesh Execution Metrics:
+ * - `s_grid_batch`: Meshes batched and submitted directly as continuous strips or quad runs.
+ * - `s_grid_slow`: Meshes refused (falling back to immediate-mode walk).
+ * - `s_grid_why`: Reason code for refusal (`TGL_GRID_REFUSE_*` in `grid_map.h`).
+ * - `s_grid_over`: Count of points lying outside the viewport rect that are scissored by hardware.
+ */
 static uint32_t s_grid_batch;
 static uint32_t s_grid_slow;
 static uint32_t s_grid_why;
 static uint32_t s_grid_over;
-/* Rung 28: on by default, because it is the only way the stream can carry both blend laws the in-tree
- * applications ask for.  With one drawing context there is one ALPHA register, and the shipping word
- * is source-over, `(Cs - Cd) * As >> 7 + Cd`; the XMB ribbon's `glBlendFunc(GL_DST_COLOR, GL_ONE)` is
- * a different law -- `Cd * (1 + Cs)` -- and source-over with the ribbon's own As (0xfe) collapses to
- * `2*Cs - Cd`, which is why the wave reads grey and its blue is erased.  Context 2 carries the measured
- * brighten word ([GS28]'s M box: 1600/1600 px at dest*3/2 with As=64, divisor As/128) and `prim_word()`
- * sends a brighten prim there; the toggle stays so an A/B run can put every law back into one register
- * and show the grey again. */
+
+/* Dual-Context Blending Support:
+ * Context 1 provides standard source-over blending: (Cs - Cd) * As >> 7 + Cd.
+ * Context 2 provides destination-brighten blending: (Cd - 0) * As >> 7 + Cd.
+ * Enabled by default to support both blending equations concurrently across drawing passes.
+ */
 static int      s_dual_context_en = 1;
 
 void eegs_enable_dual_context(int enable)
@@ -247,19 +174,12 @@ int eegs_is_dual_context(void)
     return s_dual_context_en;
 }
 
-/* LANE 20 rung 22: the frame broken into its layers, one record per real PRIM declaration.
+/* PRIM Chain Record Tracking:
+ * Records drawing layers partitioned by distinct PRIM declarations.
  *
- * The three funnels are already the right seams and there are exactly three of them: `select_prim()`
- * is the only place a chain begins (its word-compare is LANE 12e's, and a repeated word genuinely
- * does not begin a group -- `gs_rec_prim()` is not called, so the recorder keeps the group open),
- * `emit_vertex()` is the only place a vertex enters the stream (the immediate triangle, the batch
- * strip's `emit_point()`, the textured quad, the line and the point all walk through it), and the
- * `s_prims++` of each submitter is the only place a primitive completes.  So the table cannot be
- * made to disagree with the [GSTS] row's `verts=`/`prims=`/`pchg=`: they count the same three calls.
- *
- * The bbox starts empty as `l > r` rather than as a huge rect because an empty chain has to be
- * nameable as one -- `gs_rec_prim()` for a declaration that never gets a vertex sends nothing, and a
- * record that claimed to cover the world would be the one lie this table cannot be forgiven. */
+ * Each chain captures the PRIM state, vertex and primitive counts, bounding box,
+ * and first/last vertex colors. Bounding box initializes with `l > r` to represent an empty chain.
+ */
 #define EEGS_CHAIN_EMPTY ((int32_t)0x7FFFFFFF)
 
 static eegs_chain_rec s_chain[EEGS_CHAIN_MAX];
@@ -268,10 +188,10 @@ static uint32_t s_chain_n;
 static uint32_t s_chain_drop;
 static uint32_t s_chain_live;
 
-/* LANE 20 rung 24's dial.  `s_chain_refusing` is a flag rather than a comparison because a
- * declaration whose PRIM word repeats the live one never reaches chain_begin() at all -- LANE 12e's
- * word-compare keeps that chain open -- so "am I past the limit?" has to be remembered at the
- * declaration that crossed it and applied to every vertex after it. */
+/* Diagnostic Chain Limit:
+ * Restricts rendering to the first N chain declarations (0..N-1), discarding subsequent commands.
+ * `s_chain_refusing` tracks whether the active chain exceeds the cutoff limit.
+ */
 static uint32_t s_chain_limit;
 static uint32_t s_chain_opened;
 static uint32_t s_chain_refused;
@@ -331,16 +251,13 @@ const eegs_chain_rec *eegs_chain_at(uint32_t i)
 
 static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
 {
-    /* Rung 28: the two ALPHA laws the applications ask for are mutually exclusive in one register, so
-     * they live in two drawing contexts and PRIM's CTXT bit chooses between them -- context 1 is the
-     * source-over word every icon and glyph needs, context 2 is the brighten word the ribbon needs.
+    /* Blending Context Selection:
+     * Context 1 provides standard source-over blending for UI icons and text.
+     * Context 2 provides destination-brighten blending for translucent waves/ribbons.
      *
-     * A brighten prim is the only thing sent to context 2, and a TEXTURED prim never is, whatever its
-     * blend: CTXT selects the whole environment (FRAME, SCISSOR, TEST, CLAMP, TEX0, TEX1 as their _2
-     * forms), and `eegs_texture()` writes the _1 trio between vertex groups.  A textured primitive in
-     * context 2 would therefore sample a plane `TEX0_2` does not name -- so the gate is brighten AND
-     * untextured, and a textured blend stays in context 1 under source-over exactly as it did before
-     * this existed. */
+     * Textured primitives remain in Context 1 to ensure correct sampling from `TEX0_1`.
+     * Untextured primitives requesting `brighten` are routed to Context 2 (CTXT=1).
+     */
     uint32_t ctxt = EEGS_CONTEXT;
     if (s_dual_context_en && st.brighten && !st.textured) {
         ctxt = 1u;
@@ -349,36 +266,23 @@ static uint64_t prim_word(uint32_t op, const eegs_tri_state_t st)
                         st.blended ? 1u : 0u, ctxt, 0u);
 }
 
-/* gs_rec_prim() closes whatever group is open, which is right for a real state change and wrong
- * for a repetition: a ribbon's 1,828 triangles all ask for the same PRIM, and re-asking would be
- * 1,828 groups and 1,828 DMA starts of three vertices each.  So the word is compared, not re-sent,
- * and the group stays open until the state genuinely moves -- which is why the send is counted (see
- * s_prim_moves above) rather than trusted: the rate is what the group budget is spent on. */
+/* PRIM Word State Caching:
+ * Closes the active group only when the PRIM word genuinely changes.
+ * Avoids starting redundant DMA transfers when consecutive primitives share state.
+ */
 static void select_prim(uint64_t prim)
 {
-    /* Rung 28: the vertex colour's law follows the word, so it is taken from the word here and nowhere
-     * else.  Placed before the compare because a word that equals the live one describes the same law
-     * the open chain is already being drawn under, and a refusal below never emits a vertex at all --
-     * `s_chain_refusing` keeps the stream away from a chain this flag was set for. */
+    /* Update brighten state from the PRIM word (ABE bit 6 and CTXT bit 9) */
     s_brighten_live = ((prim & (1ULL << 6)) != 0u && (prim & (1ULL << 9)) != 0u) ? 1u : 0u;
 
     if (s_prim_valid && s_prim_live == prim)
         return;
 
-    /* Counted at the declaration, not at the primitive, because this is the one place the frame
-     * decides what the GS's PRIM register will HOLD: `gs_rec.c` programs it once per group through
-     * the GIF tag's PRE bit and never repeats it inside the vertex loop, so the set of PRIM words
-     * this function sends IS the set of shading modes the rasteriser is asked for.  Rung 11's
-     * `colchg=1852/4138` proved the vertex colours vary in the stream while rung 10's picture showed
-     * the client as one flat colour, and the only register between those two facts is IIP. */
+    /* Record shading mode diagnostics (IIP = Gouraud, TME = Texture Enable) */
     if (prim & (1ULL << 3)) s_prim_iip++;
     if (prim & (1ULL << 4)) s_prim_tme++;
 
-    /* Rung 24: past the dialled chain, the declaration is counted and dropped WITHOUT touching the
-     * recorder, so no group, no PRIM write and no vertex of it reaches the GIF.  The counters above
-     * stay before this test on purpose: `decl`/`iip`/`tme` keep describing the frame the application
-     * asked for, while [GSTS]'s `verts=`/`prims=` describe the frame the GS was given -- and the gap
-     * between the two, with the chain table above them, is this rung's whole reading. */
+    /* Enforce diagnostic cutoff limit */
     if (s_chain_limit != 0u && s_chain_opened >= s_chain_limit) {
         s_chain_refused++;
         s_chain_refusing = 1u;
@@ -393,40 +297,26 @@ static void select_prim(uint64_t prim)
     s_prim_moves++;
 }
 
-/* One vertex's colour and texture coordinate, then the vertex itself.  The order is the open group's
- * REGS list's -- RGBAQ, then ST when the primitive samples, then the drawing kick XYZ2 -- and it is
- * not free: XYZ2 fires the vertex, so the state it is drawn with has to be in the GS before it.  An
- * untextured group simply never carries the ST this line writes, which is why a latched texture
- * coordinate cannot leak into a primitive that cleared `TME`. */
+/* Vertex Packaging:
+ * Emits vertex colour, texture coordinates, and XYZ2 position into the active GIF group.
+ * The register order follows the open group's REGS sequence (RGBAQ, then ST, then XYZ2 kick).
+ */
 static void emit_vertex(const eegs_vertex_t *v)
 {
     float s = v->s;
     float t = v->t;
     uint32_t rgba;
 
-    /* Rung 24's other half: a vertex whose declaration was refused must not slip in through a later
-     * word-compare hit -- LANE 12e's `s_prim_live == prim` early return keeps the LAST ACCEPTED
-     * chain open, so a refused chain that happens to ask for the same PRIM word would otherwise be
-     * recorded into it and painted under the accepted chain's shading. */
     if (s_chain_refusing) return;
     chain_vertex(v);
     rgba = v->rgba;
 
-    /* Rung 28's second half.  Context 2 computes `(Cd - 0) * As >> 7 + Cd`: the destination is
-     * multiplied by a number the vertex's SCALAR alpha carries, and the vertex's own RGB is not read
-     * at all.  That is the GS's spelling of the application's `dst * (1 + src)`, and to reach it the
-     * brightness has to be moved out of the colour and into As -- `a/128` being the multiplier, so a
-     * source brightness of `b/255` is `As = b * 128 / 255`, rounded.
+    /* In Context 2 destination-brighten mode:
+     *     Color = (Cd - 0) * As >> 7 + Cd
      *
-     * One scalar can only carry one number, and the software law is per-channel.  The meshes this
-     * gate admits are grey -- the ribbon's luminance map, `R = G = B`, the reason its `c0` reads
-     * 0xfe121212 and not a blue -- so the maximum channel IS the brightness for them; a coloured
-     * brighten prim would be brightened by its brightest channel, which is why the model is set by
-     * the caller's blend factors and never guessed from the pixels here.
-     *
-     * The alpha the application supplied is deliberately discarded on this path: it is the reason the
-     * wave is grey today (As = 0xfe under source-over gives `2*Cs - Cd`, the blue erased), and under
-     * this law it would be read as a second brightness. */
+     * The hardware modulates destination colour by scalar alpha (As = b * 128 / 255).
+     * Relocate maximum colour luminance into As so that the hardware computes the intended brightness.
+     */
     if (s_brighten_live) {
         uint32_t r = rgba & 0xFFu;
         uint32_t g = (rgba >> 8) & 0xFFu;
@@ -578,40 +468,20 @@ static void emit_point(const tgl_grid_pt_t *p)
     emit_vertex(&v);
 }
 
-/* The XMB ribbon's walk, as one strip.  LANE 12f rung (i): the mesh is retained -- `xmb_wave.c`
- * wrote its positions and intensities this frame -- so the draw is a walk over arrays this file is
- * handed, not a thousand calls into a general-purpose immediate-mode pipeline.
+/* Retained Mesh Triangle Strip Submission:
+ * Submits a precomputed vertex mesh (`rows` x `cols`) as a continuous zigzag triangle strip.
  *
- * What it does is one PRIM and then the vertices, in `xb_draw_ribbon()`'s own order: for every row
- * pair, down the columns, with the odd row walked backwards so the strip never has to be broken at a
- * turn-around.  The recorder owns everything else -- the REGS list, the running NLOOP, where a full
- * buffer is cut, and the two vertices a continued strip needs (`reemit_continuation()` in
- * ps2_gs_rec.c), which is why a mesh of any size fits in a stream whose buffer does not.
+ * Algorithm:
+ * Traverses row pairs down columns, reversing odd rows to maintain winding order without
+ * breaking the strip. The recorder (`ps2_gs_rec.c`) manages buffer partitioning and
+ * strip continuation vertices (`reemit_continuation()`).
  *
- * The strip is the primitive LANE 12e measured and parked *as a backend decision*, and the two are
- * not the same thing: 12e kept drawing lists through `eegs_triangle()` and asked the GS to continue
- * each triangle, so every missed continuation cost a group and the group rate went 20x over a
- * 256-entry budget.  Here there is one PRIM for the whole mesh, so the group count is a function of
- * the buffer, not of the geometry -- two groups for the ribbon's 1,984 vertices against the parked
- * build's 51.  Its own numbers are in doc/txt/PS2.txt LANE 12f, and the ratio that shows it is the
- * `verts=`/`prims=` one in the [GSTS] row leaving 3.00.
- *
- * NOT CLIPPED, and gated instead (LANE 12f rung (ii), amended by rung (iii)'s measurement).  The
- * immediate path sends the clipper every triangle and the clipper is what decides that a vertex
- * outside the volume does not reach the stream; this entry has no clipper in front of it.  What it
- * does have is the GS's own clip window: `eegs_present_send()` programs SCISSOR from the same client
- * rect the map carries as `vp_x0`..`vp_y1`, and XYOFFSET from the same origin, so a primitive that
- * crosses the rect is cut by the hardware exactly as the walk's clipper used to cut it.  The gate
- * therefore asks the one question the SCISSOR cannot answer -- can XYZ2 REPRESENT this point at all
- * (+/-2048 px, `EEGS_GRID_XY_LIMIT`) -- and a point outside the rect but inside that field is TAKEN
- * and counted in `over=` instead of refused.  It refuses before anything is recorded, so a refusal
- * leaves the stream exactly as it found it and the caller draws the ribbon the way it always did.
- * The rect is still derived from the clipper rather than invented -- a vertex survives exactly when
- * `-1 <= pc.X <= 1`, which the viewport map carries to `xmin + xsize - 0.5` at the outside, and a
- * truncate of anything at or below that is at or below `xmin + xsize - 1`, so `over=` counts against
- * the clipper's own answer restated in integers, for ~4 cycles a point against the walk's ~3,260.
- * Both halves are measured on the host against the real clipper, point by point, in
- * `verify/tests/test_grid_map.c`. */
+ * Hardware Scissoring & Coordinate Range Validation:
+ * Rather than clipping triangles in software, validates that all mesh points lie within
+ * the hardware coordinate range (-2048 .. +2047 px, `EEGS_GRID_XY_LIMIT`).
+ * Points outside the viewport are scissored in hardware by the GS SCISSOR register.
+ * Any point outside the viewport is tallied in `over` to track hardware scissoring utilization.
+ */
 int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows, int cols)
 {
     eegs_tri_state_t st;
@@ -625,41 +495,16 @@ int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows,
         return -1;
     }
     if (!m->ok) {
-        /* The caller hands the refused map over rather than routing around it, which is what keeps
-         * the two counts in one place -- and the refused map carries its reason with it.  A struct
-         * with no reason in it was never captured at all, and that is its own code: `ok` clear with
-         * `refuse` zero is exactly what a caller-zeroed map looks like, and reading it as "nothing
-         * refused" would make the column lie. */
         s_grid_slow++;
         s_grid_why = m->refuse ? m->refuse : TGL_GRID_REFUSE_UNSET;
         return -1;
     }
 
-    /* rung (ii), as amended by the ribbon's own measurement: a whole mesh is batched when the GS can
-     * REPRESENT every point of it, and the clip rect is not the question -- the SCISSOR
-     * `eegs_present_send()` programs from the same client rect is what cuts a primitive that crosses
-     * it, which is exactly what the walk's clipper was doing for ~3,260 cycles a vertex.  Run before
-     * anything is recorded, so a refusal leaves the stream exactly as it found it.  The scan is over
-     * the mesh's `rows * cols` points rather than the `(rows-1) * cols * 2` vertices the zigzag
-     * submits, because the two sets are the same -- every row is touched, as `r` or as `r + 1`, for
-     * every `r` in the walk -- and the point set is the one the caller's arrays hold.
-     *
-     * What is refused is a point outside XYZ2's 12.4 field, -2048 .. +2047 px about the page origin
-     * (`GS_XYOFFSET_PAGE`, ps2_gs_pack.h; asymmetric by one because `gs_vertex_coord16()` adds that
-     * offset to the coordinate and the sum goes through a 16-bit unsigned field).  Such a coordinate
-     * does not get clipped, it folds, and the triangle lands somewhere else on the canvas.  What is
-     * COUNTED is a point outside the rect and inside that range -- `over=`, the work this frame asked
-     * the GS's clip window to do.  The first
-     * version of this gate refused on the rect and the batch path therefore never ran at all: the
-     * app projects the sheet with the window's 776x536 and draws it into the client's 768x500, so
-     * the ribbon's last column maps to x_px 775 against a rect of 0..767, every frame, on every one
-     * of the 2,000 wave frames `verify/tests/test_grid_map.c` sweeps.  Its 32 points are this
-     * column's `over=32`, and the row plus the user's eyes are what say the SCISSOR means it.
-     *
-     * The running total is local and committed only after the scan completes, for the same reason the
-     * vertices are: `over=` counts the points of this frame's TAKEN batches, so a frame that refused
-     * mid-scan must leave the column exactly where it found it -- a refusal that counted would put
-     * the geometry of a mesh the GS never saw onto the row that describes what the GS did see. */
+    /* Validate that all mesh points fit within the 12.4 fixed-point vertex field
+     * (-2048 .. +2047 px about the page origin). Points outside this range cannot be
+     * represented in XYZ2 and must be refused. Points within range but outside the
+     * active viewport are counted in `over` and clipped by hardware SCISSOR.
+     */
     for (i = 0; i < npts; i++) {
         if (pts[i].x_px < -EEGS_GRID_XY_LIMIT || pts[i].x_px >= EEGS_GRID_XY_LIMIT ||
             pts[i].y_px < -EEGS_GRID_XY_LIMIT || pts[i].y_px >= EEGS_GRID_XY_LIMIT) {
@@ -673,21 +518,13 @@ int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows,
     }
     s_grid_over += over;
 
-    /* What the immediate path does per triangle, once per draw: an untextured primitive must not
-     * inherit a plane the stream is still pointing at, and the walk's first ribbon triangle cleared
-     * it exactly like this.  Passing 0 sends nothing -- `TME` in the PRIM word is what keeps an
-     * untextured primitive off the page. */
+    /* Clear texture binding for untextured strip */
     eegs_texture(0);
 
     st.smooth = m->smooth ? 1u : 0u;
     st.textured = 0u;
     st.blended = m->blended ? 1u : 0u;
     st.brighten = m->brighten ? 1u : 0u;
-    /* Named rather than left alone: `tgl_grid_map_t` has no depth field, so no batch map can ask for
-     * a Z test, and this struct is a local -- unset means whatever the stack slot happened to hold.
-     * `eegs_triangle()` reads that bit to decide whether the frame's environment gets `TEST.ZTEN`,
-     * and the textured batch entry calls it, so an unset field would arm the depth buffer at random
-     * and give two runs of one frame two different environments. */
     st.depth_test = 0u;
 
     select_prim(prim_word(GS_OP_TRISTP, st));
@@ -702,37 +539,20 @@ int eegs_grid_strip(const tgl_grid_map_t *m, const tgl_grid_pt_t *pts, int rows,
         }
     }
 
-    /* A strip of n vertices is n-2 triangles, and they are the same triangles the list path drew --
-     * which is the claim gate (b) of this rung measures, per triangle, payload by payload. */
+    /* A strip of n vertices generates n - 2 triangles */
     if (submitted >= 3) s_prims += (uint32_t)(submitted - 2);
     if (s_chain_live && submitted >= 3) s_chain_open.nprims += (uint32_t)(submitted - 2);
     s_grid_batch++;
     return submitted;
 }
 
-/* The XMB menu's quads, as one textured batch: LANE 12h rung (i), the same lane's sentence --
- * "stop paying for generality where the data is retained" -- applied to the mesh the app has in
- * hand a thousand times a second because it carries texel coordinates the grey map cannot say.
+/* Retained Textured Mesh Quad Run:
+ * Submits an array of textured quads (`nquads` groups of four mapped points),
+ * decomposing each quad into two triangles (v0, v1, v2) and (v0, v2, v3).
  *
- * The gates are `eegs_grid_strip()`'s, unchanged and for the unchanged reasons: refusal before
- * anything is recorded, the XYZ2 representability scan with `over=` counting what the SCISSOR is
- * asked to cut, and the same `batch=`/`slow=`/`why=`/`over=` columns, because a mesh is a mesh
- * whichever entry takes it and two sets of counters would be two models of one decision.
- *
- * What differs is the texture, and it is handled exactly as the walk handles it, line for line:
- * `eegs_texture(gs_tex_find(m->pixmap))` mirrors `gl_draw_triangle_fill()`'s own pairing -- the
- * registry answer, whatever it is, pointed at the stream once for the whole run rather than once
- * per triangle, which is also what the walk's word-comparing `select_prim` ends up doing when a
- * run of triangles shares a plane -- and `st.textured` asks for what the caller asked for, so a
- * plane that never got a VRAM address demotes through `need_plane()` and counts `texmiss` exactly
- * as the immediate path would.  Then each quad splits (v0,v1,v2) and (v0,v2,v3), the GL_QUADS
- * split `vertex.c` itself makes, and the vertices go through `eegs_triangle()`: its word compare
- * keeps the run inside one PRIM group, and the recorder owns everything downstream.
- *
- * Colour and texels are not this function's business: they arrive mapped, in `tgl_tex_pt_t`, bit-
- * identical to what `tgl_vertex_to_viewport()` + `gs_vertex()` would have produced -- the claim
- * `verify/tests/test_grid_map.c`'s textured sweep measures, because a texel coordinate off by one
- * truncate samples the wrong texel and shows up on the screen, not in a log row. */
+ * Resolves the texture plane binding once for the entire batch.
+ * Applies coordinate range validation and hardware scissoring identically to `eegs_grid_strip()`.
+ */
 int eegs_tex_quads(const tgl_tex_map_t *m, const tgl_tex_pt_t *pts, int nquads)
 {
     eegs_tri_state_t st;
@@ -751,10 +571,7 @@ int eegs_tex_quads(const tgl_tex_map_t *m, const tgl_tex_pt_t *pts, int nquads)
         return -1;
     }
 
-    /* The same scan as the strip's, over the four corners the caller's array holds: representable
-     * in the vertex word or the whole batch is refused, outside the rect and inside the field is
-     * counted and left to the hardware's clip.  Local until the scan completes, for the strip's
-     * reason -- a refusal must not put geometry the GS never saw onto the row. */
+    /* Validate 12.4 fixed-point coordinate bounds and accumulate hardware scissoring count */
     for (i = 0; i < npts; i++) {
         if (pts[i].x_px < -EEGS_GRID_XY_LIMIT || pts[i].x_px >= EEGS_GRID_XY_LIMIT ||
             pts[i].y_px < -EEGS_GRID_XY_LIMIT || pts[i].y_px >= EEGS_GRID_XY_LIMIT) {
@@ -768,30 +585,21 @@ int eegs_tex_quads(const tgl_tex_map_t *m, const tgl_tex_pt_t *pts, int nquads)
     }
     s_grid_over += over;
 
-    /* The walk's pairing, once for the run.  A 0 answer clears the stream's plane and the
-     * `texmiss` demotion below is what keeps a textured primitive from reading the page `TEX0`
-     * happens to hold -- the identical two moves `gl_draw_triangle_fill()` makes per triangle. */
+    /* Bind texture plane for the quad batch */
     eegs_texture(gs_tex_find(m->pixmap));
 
     st.smooth   = m->g.smooth ? 1u : 0u;
-    st.textured = 1u;                    /* the caller's state: the map required the sheet */
+    st.textured = 1u;
     st.blended  = m->g.blended ? 1u : 0u;
-    /* Carried, not honoured while the sheet is there: `prim_word()` keeps a textured primitive in the
-     * context `eegs_texture()` programs.  It becomes the law after `need_plane()` demotes a prim whose
-     * plane never got a VRAM address -- and then it is drawn untextured under the blend the caller
-     * asked for, which is what the software path does with the same factors. */
     st.brighten = m->g.brighten ? 1u : 0u;
-    st.depth_test = 0u;                  /* the strip's reason, and this path really does read it */
+    st.depth_test = 0u;
 
     for (q = 0; q < nquads; q++) {
         const tgl_tex_pt_t *p = &pts[q * 4];
         eegs_vertex_t       v[3];
         int                 k;
 
-        /* vertex.c:270-278's own split: (v0,v1,v2) then (v0,v2,v3).  An edge_flag gymnastics the
-         * walk wraps around it does not reach the GS -- the quad's four colours are the quad's
-         * four colours whichever triangle carries them, and flat vs smooth is decided by the
-         * lifted `smooth`, as the walk decides it. */
+        /* Quad decomposition: (v0, v1, v2) then (v0, v2, v3) */
         for (k = 0; k < 3; k++) {
             const tgl_tex_pt_t *s = (k == 0) ? &p[0] : (k == 1) ? &p[1] : &p[2];
             v[k].x_px = s->x_px;

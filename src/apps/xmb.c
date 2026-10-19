@@ -64,7 +64,7 @@
 #include "xmb_wave.h"   /* the sheet's lattice: xb_wave_step(), xb_rib_*, the far-tier trig */
 
 #if defined(BTRON_PS2_TARGET) && BTRON_PS2_GS_IDENT
-#include "../gl/eegs_present.h"   /* LANE 12h: the `g=` column reads the present's own group count */
+#include "../gl/eegs_present.h"   /* Hardware presentation group queries */
 #endif
 
 #if BTRON_HOSTED
@@ -184,11 +184,10 @@ static void xb_phase(const char *tag, unsigned work_px)
 
     s_phase_t0 = now;
 #if defined(BTRON_PS2_TARGET) && BTRON_PS2_GS_IDENT
-    /* LANE 12h's attribution column: the GIF groups the present holds at this boundary.  The
-     * stream is recorded in draw order and the row's `at=` indices name positions in it, so the
-     * difference between two markers is the group range one stage drew -- which is the only way to
-     * read "the menu is invariant" off the row instead of inferring it.  The count is the present's
-     * own, not a second tally kept here. */
+    /* Hardware Presentation Telemetry:
+     * Queries the number of GIF DMA packet groups currently staged for display.
+     * The difference between phase markers reflects the groups consumed by each pass.
+     */
     {
         const uint32_t g = eegs_present_groups_staged();
 
@@ -359,8 +358,8 @@ extern int      g_mouse_swap_select_adjust;
  * that produces the sheet. */
 #define XB_DELAY            166.66667f
 #define XB_SHADOW_ALPHA     1.00f
-#define XB_DRAW_ENTRY_MS    500          /* MENU_DRAW_ENTRY_DELAY (500000 us) */
-#define XB_BAR_OFFSET       1.1f         /* xmb.c:3503, the ps3 layout's value */
+#define XB_DRAW_ENTRY_MS    500          /* Launch hold duration in milliseconds */
+#define XB_BAR_OFFSET       1.1f         /* Horizontal category bar offset multiplier */
 
 #define XB_EASE_LINEAR      0
 #define XB_EASE_OUT_QUAD    1
@@ -371,9 +370,9 @@ extern int      g_mouse_swap_select_adjust;
 #define XB_EASING_ALPHA     XB_EASE_OUT_CIRC
 #define XB_EASING_XY        XB_EASE_OUT_QUAD
 
-/* xmb_layout_common() (xmb.c:7182-7190). Categories and items happen to carry
- * the same four numbers; xmb_list_open_new() reads the categories_* pair for
- * the vertical rows, which is why both names are kept here. */
+/* Category and Item Layout Metrics:
+ * Nominal alpha and scale factors for active vs passive categories and list items.
+ */
 #define XB_CATEGORIES_ACTIVE_ALPHA   1.0f
 #define XB_CATEGORIES_PASSIVE_ALPHA  0.75f
 #define XB_CATEGORIES_ACTIVE_ZOOM    1.0f
@@ -383,8 +382,7 @@ extern int      g_mouse_swap_select_adjust;
 #define XB_ITEMS_ACTIVE_ZOOM         1.0f
 #define XB_ITEMS_PASSIVE_ZOOM        0.5f
 
-/* xmb->icon_size * 10 in both xmb_selection_pointer_changed() and
- * xmb_list_open_new(): a row further off than this is placed, not tweened. */
+/* Animation placement threshold: items beyond this distance are placed immediately without tweening */
 #define XB_ANIM_THRESHOLD            (s_icon_size * 10.0f)
 
 #define XB_MAX_CATS         6
@@ -1320,27 +1318,18 @@ uint32_t xb_cosf_far_u32(uint32_t x_bits)
 }
 
 #if defined(BTRON_PS2_TARGET)
-/* LANE 12f rung (iii): the ribbon as one retained strip.
+/* Retained Ribbon Strip Batching:
+ * The background ribbon geometry is precomputed each frame into floating-point arrays:
+ * `xb_rib_px`, `xb_rib_py`, and `xb_rib_bri` (32x32 floats, updated by `xmb_wave.c`).
  *
- * The mesh this draws is already in this file's own arrays -- `xb_rib_px`, `xb_rib_py`,
- * `xb_rib_bri`, 32x32 floats each, written this very frame by `xmb_wave.c` -- and the immediate-mode
- * walk below re-derives it a thousand times a second through a pipeline that exists to serve callers
- * who do NOT have their geometry in hand.  The seam is the viewport map: lifting its constants once
- * (`tgl_grid_map()`), mapping the grid with them (`tgl_grid_map_points()`, in the one translation
- * unit compiled to do float arithmetic on this CPU), and writing the strip's quadwords straight into
- * the GS recorder (`eegs_grid_strip()`) is ~150-250 cycles a vertex against the walk's ~3,260.
+ * Fast-path optimization:
+ * Rather than walking 1,984 vertices through immediate-mode `glVertex2f` calls, lifts the
+ * viewport transformation matrix once via `tgl_grid_map()`, transforms points via
+ * `tgl_grid_map_points()`, and submits the strip directly to the GS hardware via `eegs_grid_strip()`.
  *
- * Three things make this a fast path and not a second renderer, and all three are gated on the host:
- * the pixels and colour bytes are bit-identical to the walk's for every point of a swept mesh
- * (`verify/tests/test_grid_map.c`), the group it records decodes into the same triangle sequence as
- * the list path's (`verify/tests/test_eegs_raster.c`), and a mesh the clipper would have cut is
- * refused before anything is recorded -- the bbox gate and its `batch=`/`slow=` columns are rung
- * (ii), and the clip equivalence it rests on is measured, not assumed, in the first of those suites.
- *
- * The refusal route is why this function always calls `eegs_grid_strip()`, even when the map itself
- * was refused: `tgl_grid_map()` leaves `gm` zeroed, a zeroed map has `ok` clear, and the strip entry
- * counts that exit as `slow=` on its own return path.  Counting in the caller instead would make the
- * two columns depend on this file remembering to do it. */
+ * Falls back transparently to immediate-mode rendering if coordinates exceed hardware limits
+ * or if the transformation matrix cannot be mapped.
+ */
 #include "../gl/grid_map.h"
 #include "../gl/backend_eegs.h"
 
@@ -1359,29 +1348,19 @@ static int xb_ribbon_batched(void)
     return eegs_grid_strip(&gm, s_rib_pts, XB_RIBBON_ROWS, XB_RIBBON_COLS) >= 0;
 }
 
-/* LANE 12h rung (i): the same seam for the meshes that SAMPLE -- icons and text.  The ribbon is
- * fast because its map refuses a textured context (why=4), and the column that has never moved is
- * f_menu's: ~1,436 textured vertices a frame, each one walked through the clipper at ~2,355
- * cycles, to re-emit a mesh whose every number this file already holds -- positions the layout
- * computed, texcoords `xb_uv()` and `xb_font_uv()` just computed, colours the caller just passed.
- * `tgl_grid_map_tex()` is the textured map -- the grey map's five refusals re-asked with the
- * texture condition inverted -- and `eegs_tex_quads()` records vertex.c's own GL_QUADS split, so
- * the same two host gates that make the ribbon a fast path and not a second renderer make this one
- * too: `test_grid_map.c`'s textured sweep for the numbers (pixels, all four colour bytes, and the
- * two-step texel chain into ST, bit-identical at 16,780 swept points), and `test_eegs_raster.c`'s
- * quad case for the stream (the batch decodes into the same triangles the walk's list records,
- * plane switch included).
+/* Retained Textured Quad Batching (Icons and Typography):
+ * Batches textured UI quads into a single submission, avoiding per-quad immediate-mode overhead.
  *
- * The arrays below carry one batch's worth of the caller's own floats -- a run longer than the cap
- * simply asks nothing and walks, which is the refusal route wearing a different hat. */
-#define XB_TEX_QUAD_CAP 64           /* 64 glyphs or 64 icons a batch; every string here is shorter */
+ * Uses `tgl_grid_map_tex()` to map screen-space coordinates and texture coordinates (ST)
+ * directly into GS integer rasterizer structures, submitting via `eegs_tex_quads()`.
+ */
+#define XB_TEX_QUAD_CAP 64           /* Maximum quads per batch (64 glyphs or icons) */
 static float s_tex_xs[XB_TEX_QUAD_CAP * 4], s_tex_ys[XB_TEX_QUAD_CAP * 4];
 static float s_tex_us[XB_TEX_QUAD_CAP * 4], s_tex_vs[XB_TEX_QUAD_CAP * 4];
 static float s_tex_cols[XB_TEX_QUAD_CAP * 16];
 static tgl_tex_pt_t s_tex_pts[XB_TEX_QUAD_CAP * 4];
 
-/* One quad's four corners in vertex.c's GL_QUADS order -- (x0,y0), (x1,y0), (x1,y1), (x0,y1) --
- * with the same uv pair every `glTexCoord2f` at this site is about to receive. */
+/* Packs one quad's four vertices in GL_QUADS order: (x0,y0), (x1,y0), (x1,y1), (x0,y1) */
 static void xb_tex_fill_quad(int base, float x0, float y0, float x1, float y1,
                              float u0, float v0, float u1, float v1,
                              float r, float g, float b, float a)
@@ -1404,11 +1383,7 @@ static void xb_tex_fill_quad(int base, float x0, float y0, float x1, float y1,
     s_tex_cols[base * 4 + 14] = b;  s_tex_cols[base * 4 + 15] = a;
 }
 
-/* Ask, exactly as the ribbon asks: INSIDE the caller's `glBegin`, because the model-projection
- * product the map lifts is recomputed there and nowhere else, and on a refusal the caller's walk
- * continues from the same `glBegin` with the same state the batch found.  The zeroed-map route is
- * the same one `xb_ribbon_batched()` documents: `tgl_grid_map_tex()` leaves `tm` refused, the entry
- * counts the exit on its own return path, and neither column depends on this file remembering. */
+/* Query textured batch submission: called inside active `glBegin` */
 static int xb_tex_ask(int nquads)
 {
     tgl_tex_map_t tm;
@@ -1423,20 +1398,10 @@ static int xb_tex_ask(int nquads)
 }
 #endif /* BTRON_PS2_TARGET */
 
-/* xmb_init_ribbon(): a zigzag triangle strip over the grid, with the odd rows
- * walked in reverse so the strip stays connected.
- *
- * The compositing is the driver's own: gfx_drv gl2 sets
- * glBlendFunc(GL_DST_COLOR, GL_ONE) for the ribbon programs, so the sheet
- * brightens whatever the gradient left behind it by (1 + c) rather than laying
- * colour over it.  That is what makes the waves read as an embossed cloth.
- *
- * The walk below is the meaning of the draw, and it stays the draw for every target and for every
- * PS2 backend that is not the GS: same vertices, same colours, same compositing.  LANE 12f's batch
- * path replaces it only when it can produce exactly that, and the state it has to be in to ask --
- * texture off, blend set to the ribbon's own, the mesh's alpha current, and a matrix product the
- * walk has computed, which is what the `glBegin` supplies -- is established before the question is
- * asked, so a refusal leaves nothing half-applied and the walk continues from the same `glBegin`. */
+/* Draw background wave ribbon as a continuous zigzag triangle strip:
+ * Compositing law: `glBlendFunc(GL_DST_COLOR, GL_ONE)` brightens the background
+ * gradient by `Cd * (1 + Cs)`, producing an embossed wave fabric appearance.
+ */
 static void xb_draw_ribbon(float alpha)
 {
     int r, c;
@@ -1448,19 +1413,10 @@ static void xb_draw_ribbon(float alpha)
     glDisable(GL_TEXTURE_2D);
     glBegin(GL_TRIANGLE_STRIP);
 #if defined(BTRON_PS2_TARGET)
-    /* The question is asked INSIDE the `glBegin`, and that is the whole of rung (iii)'s second
-     * attempt: the batch was refused on every frame of the first bench run (`batch=0 slow=1`)
-     * because `tgl_grid_map()` was lifted BEFORE it, and the model-projection product this map is
-     * the arithmetic of is not recomputed at `glOrtho` -- `matrix.c` only sets
-     * `matrix_model_projection_updated` there, and `glopBegin` is what multiplies the stacks and
-     * clears the flag.  Asking before `glBegin` therefore asks for the previous window's product,
-     * and the refusal rung (i)(a) documents is exactly the right answer to that: the ribbon's
-     * `glOrtho`/`glViewport`/`glLoadIdentity` run five lines above this one, so a pre-begin lift
-     * refused every frame and the fast path never ran.  After the `glBegin` the product is this
-     * frame's, and the pair is harmless when the batch is taken -- `glopEnd()` for anything that is
-     * not `GL_LINE_LOOP`/`GL_POLYGON` only clears `in_begin`, so an empty strip records nothing
-     * twice.  `verify/tests/test_grid_map.c`'s `flush_matrices()` is the same pair, which is what
-     * makes "accepted again once glBegin has recomputed it" a measured claim. */
+    /* Matrix Refresh Timing:
+     * Queried inside `glBegin` because TinyGL recomputes the concatenated modelview-projection
+     * matrix stack at `glBegin`. If fast-path batching succeeds, ends the primitive and returns.
+     */
     glColor4f(0.5f, 0.5f, 0.5f, 1.0f);   /* the alpha the map lifts; every vertex of the mesh's is 1 */
     if (xb_ribbon_batched()) {
         glEnd();
@@ -1613,10 +1569,10 @@ static void xb_draw_icon(int cell, float cx, float cy, float size,
     glEnable(GL_TEXTURE_2D);
 
     if (s_shadows) {
-        /* xmb.c:1205 - gfx_display_set_alpha(shadow_color,
-         * color[3] * GFX_SHADOW_ALPHA * 0.75f).  The icon texture is the
-         * shadow's mask: modulating it with black leaves only its alpha, which
-         * is exactly the silhouette the PS3 bar casts. */
+        /* Drop-shadow rendering:
+         * Uses the icon texture as an alpha mask modulated with black (0, 0, 0)
+         * to produce the blurred silhouette beneath active items.
+         */
         glColor4f(0.0f, 0.0f, 0.0f, alpha * XB_SHADOW_ALPHA * 0.75f);
         glBegin(GL_QUADS);
 #if defined(BTRON_PS2_TARGET)
@@ -1945,7 +1901,7 @@ static void xb_draw_title(void)
     float cx, cy;
     xb_cat_t *cat = &s_cats[s_cat];
 
-    /* xmb.c:9528 - the current menu's icon, scaled down, at the title margin */
+    /* Scaled active category icon positioned at title margin */
     cx = s_title_left - (icon_size / 0.75f);
     cx += (s_icon_size - icon_size) / 2.0f;
     if (cx < icon_size / 2.0f)
@@ -1955,11 +1911,7 @@ static void xb_draw_title(void)
     xb_draw_icon(cat->icon, cx + icon_size * 0.5f, cy + icon_size * 0.5f,
                  icon_size, 1.0f, s_alpha * s_alpha_list);
 
-    /* ... and the title text, offset past the icon (xmb.c:10237).  Below the
-     * category level the PS3 shows "Category > Item" on the same line.  For the
-     * Discs band the item named is the row the level below was opened from, which
-     * is what the mark for this level holds - the list under the cursor has moved
-     * on into that row's folder by now. */
+    /* Title hierarchy text: renders "Category > Item" breadcrumb path when descending into sub-items */
     {
         float tx = s_title_left
                  + (s_depth > 1 ? s_icon_size * 0.45f : s_icon_size / 2.5f);
@@ -2018,12 +1970,6 @@ static void xb_value_text(xb_item_t *it, char *buf, size_t n)
         int idx = it->value, i;
 #if defined(BTRON_PS2_TARGET)
         if (!p) {
-            /* The gain row's choices are the table, so its line comes from the
-             * table's own formatter: btron_ptr_gain_label() is the one place that
-             * says what a stop is called, and the Settings panel paints the same
-             * line over its radios.  Choosing it by index rather than by
-             * separator also means this row needs no `opts` string to sit
-             * beside the table it is drawn from. */
             snprintf(buf, n, "%s", btron_ptr_gain_label(idx));
             break;
         }
@@ -2046,7 +1992,7 @@ static void xb_value_text(xb_item_t *it, char *buf, size_t n)
     }
 }
 
-/* xmb_draw_item() for one row of the horizontal list */
+/* Draws a single menu item row in the active vertical list */
 static int xb_draw_item(int i, int current)
 {
     xb_item_t *items = NULL;
@@ -2072,7 +2018,7 @@ static int xb_draw_item(int i, int current)
     if (icon_x < -half || icon_x > (float)s_w)
         return 0;
 
-    /* xmb.c:6155 - vertical fade of rows approaching the screen edges */
+    /* Vertical edge fade: softly fades items approaching upper and lower screen margins */
     if (s_fade > 0) {
         float icon_space = s_spacing_v;
         float icon_ratio = icon_space / (float)s_h / icon_space * 4.0f;
@@ -2088,16 +2034,14 @@ static int xb_draw_item(int i, int current)
             new_alpha = ((float)s_h - n->y - scr_margin + icon_space) / factor;
 
         new_alpha = xb_clampf(new_alpha, min_alpha, max_alpha);
-        /* xmb.c:6181 - a row that is still sliding owns its own alpha */
+        /* Preserve interpolated alpha while row is sliding */
         if (new_alpha < n->alpha || n->x == 0.0f) {
             n->alpha      = new_alpha;
             n->label_alpha = new_alpha;
         }
     }
 
-    /* xmb.c:6270 - the icon colour, after the fade has settled node->alpha.
-     * Passive rows are dimmed by 1/1.25 straight off node->alpha, which is
-     * how the original differentiates the active entry. */
+    /* Selection emphasis: passive items dimmed by 1/1.25 relative to active item */
     a = xb_minf(n->alpha * s_alpha_list, s_alpha);
     if (i != current)
         a = xb_minf(n->alpha / 1.25f, s_alpha);
@@ -2375,16 +2319,16 @@ static void xb_anim_list_open(int dir)
         xb_tween_push(&n->x,        0.0f, XB_DELAY, XB_EASING_XY, tag);
     }
 
-    /* xmb_list_open(): the whole bar slides aside by one icon per depth, with no
-     * ceiling - xmb.c:3906 tweens to icon_size * 1.1 * -(depth * 2 - 2) for the
-     * depth the menu is actually at, which is how a DLNA browser carries you off
-     * the categories and into the folder stack. */
+    /* Horizontal category bar translation:
+     * Slides the bar aside by `s_icon_size * XB_BAR_OFFSET * -(depth * 2 - 2)`
+     * as navigation descends deeper into hierarchical sub-menus.
+     */
     target_x = s_icon_size * XB_BAR_OFFSET * -(float)(s_depth * 2 - 2);
     xb_tween_push(&s_x, target_x, XB_DELAY, XB_EASE_OUT_QUAD,
                   (uintptr_t)&s_x);
 }
 
-/* xmb_animation_list_alpha() */
+/* Animate list visibility alpha fade in/out */
 static void xb_anim_list_alpha(int fade_in)
 {
     xb_tween_push(&s_alpha_list, fade_in ? 1.0f : 0.0f,
@@ -2836,7 +2780,7 @@ static void xb_activate(xb_item_t *it)
 {
     switch (it->kind) {
     case XB_APP:
-        /* xmb.c:7046 - single-click launching holds the list out for 500 ms */
+        /* Single-click launch delay: hold list visibility for 500 ms during launch */
         s_alpha_list = 0.0f;
         s_draw_entry_until = (int)(s_now_ms + XB_DRAW_ENTRY_MS);
         xb_launch(it);
@@ -3082,7 +3026,7 @@ static void xb_paint(WND *wnd, GDEV *dev)
     s_last_time = now;
     s_now_ms    = (unsigned)now;
 
-    /* The launch hold of xmb.c:9366 */
+    /* Launch hold expiration check: fade list back in once countdown finishes */
     if (s_alpha_list == 0.0f && s_draw_entry_until &&
         (int)now >= s_draw_entry_until) {
         s_draw_entry_until = 0;
@@ -3091,17 +3035,12 @@ static void xb_paint(WND *wnd, GDEV *dev)
 
     xb_tween_tick(dt);
 
-    /* gfx_display.c:874 has the effect clock advance by a fixed 0.01 once per drawn
-     * frame, which is only a *speed* while the frame rate is the one the bar was tuned
-     * at -- 16 ms here, the app's own `dly_tsk(16)` cadence.  Drawn at that rate the
-     * sheet's phase advances 0.6 units a second and its middle vertex about 3 px a
-     * second, which is the slow drift the original looks like; at the PS2's measured
-     * 2.7 frames a second the same 0.01 per frame is 0.016 units a second, i.e. 0.13 px
-     * a second, and the surface reads as frozen.  Scaling by the elapsed time instead
-     * makes the wave's speed a property of the clock rather than of the rasterizer, and
-     * is bit-identical where the cadence is as designed: 16.0f / 1600.0f is the same
-     * float as 0.01f, so every target that hits 16 ms frames gets the same sequence of
-     * `s_effect_time` values it had before. */
+    /* Background Wave Animation Clock:
+     * Advances the wave phase proportionally to elapsed real time (dt / 1600.0f)
+     * rather than a fixed per-frame increment. At the target 60 Hz cadence (16.0 ms),
+     * this steps by exactly 0.01 per frame, decoupling visual wave drift speed
+     * from platform refresh rates and rasterizer load.
+     */
     s_effect_time += dt / 1600.0f;
     if (s_effect_time > 65536.0f)
         s_effect_time = 0.0f;

@@ -114,14 +114,7 @@ int main(int argc, char **argv) {
     tracker_init();
     global_menu_init();
 
-/*  Open initial BTRON desktop accessories */
-//  open_vobj_manager_window();
-//  open_clarity_window();
-//  open_t_editor_window();
-//  open_gterm_window();
-//  open_quake_window(80, 40, 560, 420);
-//  open_glgears_window();
-//  open_lilcu64_demo_window();
+    /* Initial desktop state: accessories are launched on-demand via Deskbar or Workbench icons */
 
     while (running) {
         /* Poll and process all pending system events */

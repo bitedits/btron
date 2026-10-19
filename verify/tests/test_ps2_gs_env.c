@@ -18,6 +18,12 @@
  * a layer of its own, and if anyone ever changes the screen size or the window size enough for
  * it to fit, this row is the thing that should notice.
  *
+ * The same arithmetic in PSMCT16 is what LANE 21 is built on, and display_pages() below is the
+ * measurement of it: half the bytes a pixel means half a page, and the page that FRAME.FBA has to
+ * round up to comes out at exactly the number of 8 KB pages one CT32 canvas already occupies.  Two
+ * 16-bit pages are therefore free in a way that no two 32-bit pages are, which is the difference
+ * between "the display is double-buffered" and "there is no room for a second surface".
+ *
  * Copyright 2026 Synrc Research Center. MIT License.
  */
 
@@ -136,6 +142,159 @@ static void vram_pages(void)
     rc = gs_vram_take(&v, 8192u, &byte);
     eqi("take past the end fails", rc, -1);
     eq32("over-take keeps cursor", v.next, 4194304u);
+}
+
+/* ── LANE 21: the display pages, and the arithmetic a flip hangs on ─────────
+ *
+ * Every number below is written out from the field widths rather than computed by the unit under
+ * test, because the claim being gated is an arithmetic coincidence and a coincidence an expression
+ * can assert is not a coincidence at all: 832 x 600 x 4 rounds to 244 pages of 8 KB, and 832 x 600 x
+ * 2 rounds to 122, and 122 x 2 is 244.  If the second page had come out one page bigger, the double
+ * buffer would have moved every texture plane, and the only way to know that before shipping is to
+ * say both numbers as literals and make the code meet them. */
+
+static void display_pages(void)
+{
+    gs_disp_page_t p0, p1;
+    gs_vram_t v;
+    int rc;
+
+    /* The two canvas formats this port can build a page for, and the one it cannot. */
+    eq32("ct32 bytes a pixel", gs_disp_bytes_pp(GS_PSM_CT32), 4u);
+    eq32("ct16 bytes a pixel", gs_disp_bytes_pp(GS_PSM_CT16), 2u);
+    eq32("ct16s bytes a pixel", gs_disp_bytes_pp(GS_PSM_CT16S), 2u);
+    eq32("ct24 has no page", gs_disp_bytes_pp(GS_PSM_CT24), 0u);
+    eq32("ct32 px a quadword", gs_disp_px_per_qw(GS_PSM_CT32), 4u);
+    eq32("ct16 px a quadword", gs_disp_px_per_qw(GS_PSM_CT16), 8u);
+    eq32("ct24 px a quadword", gs_disp_px_per_qw(GS_PSM_CT24), 0u);
+
+    /* Extent and rounded span, for both formats.  The CT32 pair is the number this file has always
+     * asserted; the CT16 pair is the new one: 998,400 written into a 999,424 allocation, so 1,024
+     * bytes of a page go unused and nothing else can be put there (it is not a whole page). */
+    eq32("ct32 page extent", gs_disp_page_bytes(GS_PSM_CT32), 1996800u);
+    eq32("ct32 page span", gs_disp_page_span(GS_PSM_CT32), 1998848u);
+    eq32("ct16 page extent", gs_disp_page_bytes(GS_PSM_CT16), 998400u);
+    eq32("ct16 page span", gs_disp_page_span(GS_PSM_CT16), 999424u);
+    eq32("ct24 page span", gs_disp_page_bytes(GS_PSM_CT24), 0u);
+
+    /* The coincidence, stated twice so a change in either half has to break a row: two 16-bit pages
+     * are one 32-bit page rounded, and the reservation is that number, so gs_vram_init()'s cursor --
+     * and with it every texture plane the bench has ever measured -- is the same byte in both
+     * configurations. */
+    eq32("two ct16 pages", gs_disp_page_span(GS_PSM_CT16) * GS_DISP_PAGES, 1998848u);
+    eq32("reserve is the rounded ct32 page", gs_disp_reserve_bytes(), 1998848u);
+    gs_vram_init(&v);
+    eq32("allocator cursor unchanged", v.base, gs_disp_reserve_bytes());
+    eq32("vram left unchanged", gs_vram_left(&v), 2195456u);
+
+    /* Page 0 in both formats: the offset is 0, so the two field units agree, and the difference
+     * between them is the row_bytes the GIF stream cannot carry -- 3,328 B a row at 32 bpp, 1,664 at
+     * 16.  Note the pitch is the field's 832 px and not the screen's 800. */
+    rc = gs_disp_page(0u, GS_PSM_CT32, &p0);
+    eqi("page 0 ct32", rc, 0);
+    eq32("p0 byte", p0.byte, 0u);
+    eq32("p0 fba", p0.fba, 0u);
+    eq32("p0 tba", p0.tba, 0u);
+    eq32("p0 fbw", p0.fbw, 13u);
+    eq32("p0 rows", p0.rows, 600u);
+    eq32("p0 row bytes", p0.row_bytes, 3328u);
+    eq32("p0 bytes", p0.bytes, 1996800u);
+    eq32("p0 px per qw", p0.px_per_qw, 4u);
+
+    rc = gs_disp_page(0u, GS_PSM_CT16, &p0);
+    eqi("page 0 ct16", rc, 0);
+    eq32("p0 ct16 row bytes", p0.row_bytes, 1664u);
+    eq32("p0 ct16 bytes", p0.bytes, 998400u);
+    /* Eight, not two: a quadword is 16 BYTES, so halving the pixel's width doubles the pixels a
+     * stream word carries.  The upload path's `x &= ~3` becomes `x &= ~7` at 16 bpp, and a change
+     * here that reads as "half the granularity" is the mistake this row exists to catch. */
+    eq32("p0 ct16 px per qw", p0.px_per_qw, 8u);
+
+    /* Page 1 exists only in the format that leaves room for it.  999,424 is 122 pages of 8 KB and
+     * 3,904 blocks of 256 B, and the two numbers are the same offset in the two units the registers
+     * use -- the 32x between them is the mistake this file exists to make unfalsifiable. */
+    rc = gs_disp_page(1u, GS_PSM_CT16, &p1);
+    eqi("page 1 ct16", rc, 0);
+    eq32("p1 byte", p1.byte, 999424u);
+    eq32("p1 fba", p1.fba, 122u);
+    eq32("p1 tba", p1.tba, 3904u);
+    eq32("p1 fbw", p1.fbw, 13u);
+    /* Written extent of page 0 ends 1,024 B before page 1 begins: no texel of either is in the
+     * other's bytes, which is what the rounding above is for. */
+    eq32("pages do not touch", p1.byte - (p0.byte + p0.bytes), 1024u);
+    /* And the second page's rounded span stops exactly where the allocator starts, so a plane can be
+     * laid at 1,998,848 whether the display has one page or two.  Note which number does that: the
+     * page advances by the ROUNDED span, not by the bytes written, because 998,400 is not a whole
+     * number of 8 KB pages and gs_vram_fba() refuses it -- an offset built out of extents would be
+     * a frame buffer no register can address. */
+    rc = gs_vram_fba(p1.byte + gs_disp_page_span(GS_PSM_CT16), &p0.fba);
+    eqi("second page span ends on a page", rc, 0);
+    eq32("span end fba", p0.fba, 244u);
+    rc = gs_vram_fba(p1.byte + p1.bytes, &p0.fba);
+    eqi("written extent is not a page", rc, -1);
+
+    /* The rejections, each naming a different law.  Two CT32 pages would be 488 pages = 3,997,696 B,
+     * which physically fits in 4 MB and is still refused: the reservation is what the atlas and the
+     * font sheet are laid out against, and a second 32-bit page would put them in the dark. */
+    rc = gs_disp_page(1u, GS_PSM_CT32, &p1);
+    eqi("no second ct32 page", rc, -1);
+    rc = gs_disp_page(2u, GS_PSM_CT16, &p1);
+    eqi("no third page", rc, -1);
+    rc = gs_disp_page(0u, GS_PSM_CT24, &p1);
+    eqi("no ct24 page", rc, -1);
+    rc = gs_disp_page(0u, GS_PSM_CT32, 0);
+    eqi("no null out", rc, -1);
+
+    /* ── The live configuration, as the shipped image sees it ──
+     * The default is today's present in every field: CT32, and the page the writers target is the
+     * page being scanned.  That equality is the flicker, and it is also the reason this rung changes
+     * nothing on the wire -- the accessors hand out the constants the writers used to carry. */
+    eq32("default psm", gs_disp_psm(), GS_PSM_CT32);
+    eq32("default not double", gs_disp_is_double(), 0u);
+    (void)gs_disp_shown();
+    eq32("shown page 0", gs_disp_shown()->byte, 0u);
+    eq32("shown ct32", gs_disp_shown()->psm, GS_PSM_CT32);
+    eq32("drawn is shown", gs_disp_drawn()->byte, gs_disp_shown()->byte);
+    eq32("drawn psm is shown psm", gs_disp_drawn()->psm, gs_disp_shown()->psm);
+
+    /* Asking for two pages before the format can hold them is a refusal, not a half-applied dial:
+     * after it the configuration is still the single CT32 page every writer already names. */
+    rc = gs_disp_set_double(1u);
+    eqi("ct32 refuses the flip", rc, -1);
+    eq32("refusal keeps single", gs_disp_is_double(), 0u);
+    eq32("refusal keeps page 0 drawn", gs_disp_drawn()->byte, 0u);
+
+    /* The dial that does work: CT16, then two pages.  A bad format is refused without moving the
+     * format either, so a half-applied dial cannot exist at all. */
+    rc = gs_disp_set_psm(GS_PSM_CT24);
+    eqi("ct24 refused outright", rc, -1);
+    eq32("refused psm unchanged", gs_disp_psm(), GS_PSM_CT32);
+    rc = gs_disp_set_psm(GS_PSM_CT16);
+    eqi("ct16 accepted", rc, 0);
+    eq32("ct16 still single", gs_disp_is_double(), 0u);
+    eq32("ct16 shown is 0", gs_disp_shown()->byte, 0u);
+    rc = gs_disp_set_double(1u);
+    eqi("ct16 accepts the flip", rc, 0);
+    eq32("double drawn is page 1", gs_disp_drawn()->byte, 999424u);
+    eq32("double shown is page 0", gs_disp_shown()->byte, 0u);
+
+    /* The flip, as the state change only -- the PMODE store that makes it real is rung 4's and no
+     * host gate can reach it.  Two commits return to the starting page, and the writer is always on
+     * the page the census is not reading, which is the property the flicker fix rests on. */
+    eq32("flip 1 shows page 1", gs_disp_flip_commit(), 1u);
+    eq32("after flip shown 1", gs_disp_shown()->byte, 999424u);
+    eq32("after flip drawn 0", gs_disp_drawn()->byte, 0u);
+    eq32("flip 2 shows page 0", gs_disp_flip_commit(), 0u);
+    eq32("back to shown 0", gs_disp_shown()->byte, 0u);
+
+    /* Turning the flip off puts the writer back on the scanned page rather than leaving it on a page
+     * nobody displays -- a dial that only half-releases would be a black screen with a live DMA. */
+    (void)gs_disp_set_double(0u);
+    eq32("single again drawn 0", gs_disp_drawn()->byte, gs_disp_shown()->byte);
+    (void)gs_disp_set_psm(GS_PSM_CT32);
+    eq32("restored psm", gs_disp_psm(), GS_PSM_CT32);
+    eq32("restored page", gs_disp_shown()->byte, 0u);
+    eq32("restored row bytes", gs_disp_shown()->row_bytes, 3328u);
 }
 
 /* ── The environment packet ─────────────────────────────────────────────── */
@@ -326,6 +485,7 @@ int main(void)
     printf("==========================================================\n");
 
     vram_pages();
+    display_pages();
     env_stream();
     env_stream_ctx2();
     env_stream_dual();

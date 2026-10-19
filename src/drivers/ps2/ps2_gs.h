@@ -80,12 +80,33 @@ int  ps2_gs_get_width(void);
 int  ps2_gs_get_height(void);
 void ps2_gs_set_bgcolor(uint8_t r, uint8_t g, uint8_t b);
 void ps2_gs_vsync(void);
-void ps2_gs_wait_vsync(void);
+/* Waits for the frame boundary and says whether it saw one: 1 = CSR.SYNC/VSYNC really arrived,
+   0 = the bounded spin ran out.  The second answer is not a slow wait, it is a different machine --
+   a flip that timed out is a DISPFB store at an unknown point of the raster, which is exactly the
+   case rung 4's measurement has to be able to tell apart from the aligned one.  Every caller that
+   cares takes the value; the ones that do not may ignore it, as before. */
+int ps2_gs_wait_vsync(void);
 void ps2_gs_swap_buffers(void);
 void ps2_gs_flush(void);
-/* Copies a rectangle of the RDRAM canvas into the displayed VRAM page with one Host->Local blit.
-   (x, y) is the top-left in canvas pixels; w is rounded up to a quadword (4 px) because the upload stream has no row pitch. */
+/* Copies a rectangle of the RDRAM canvas into the VRAM page this configuration is drawing, with one
+   or more Host->Local blits.  (x, y) is the top-left in canvas pixels and w is rounded up to a
+   quadword, whose pixel count is the PAGE's: 4 px at PSMCT32, 8 px at PSMCT16, because a quadword is
+   16 bytes and the page's format says how many of its pixels fit in 16 bytes (gs_disp_px_per_qw()).
+   A 16-bit page converts on the way out -- gs_pack_5551_row() -- because a Host->Local stream carries
+   no conversion and no row pitch, so its rows are gathered into the stage before they are sent. */
 void ps2_gs_upload(int x, int y, int w, int h);
+
+/* Whether ps2_gs_upload() dithers a 16-bit page or truncates it.  Runtime, because the page is
+   censusable and the difference between a graded background and its banding is a picture: `page`
+   at Stage 1 shows and sets it.  A 32-bit page ignores it. */
+void     ps2_gs_set_dither(uint32_t on);
+uint32_t ps2_gs_dither(void);
+
+/* DISPFB1/2 for the page gs_disp_shown() names, in the fields that describe it.  ps2_gs_set_mode()
+   does this as part of building the CRT timing; the dial that changes a page's format or its index
+   calls this on its own, because the register that must not be left naming the old page is exactly
+   this one. */
+void ps2_gs_dispfb_store(void);
 
 /* Why the last Local->Host read did not deliver pixels.  The two families are different facts:
    GS_READ_BUS_E_BUILD says the rectangle cannot be described by these registers at all -- which law
@@ -101,7 +122,8 @@ typedef enum {
     GS_READ_BUS_E_STR,       /* the request block's channel-1 transfer never finished */
     GS_READ_BUS_E_FINISH,    /* the CSR FINISH receipt never arrived for this packet */
     GS_READ_BUS_E_FIFO,      /* VIF1's FIFO (STAT.FQC) never drained */
-    GS_READ_BUS_E_DATA       /* the pixel download's channel-1 transfer never finished */
+    GS_READ_BUS_E_DATA,      /* the pixel download's channel-1 transfer never finished */
+    GS_READ_BUS_E_PAGE       /* the shown page is in a format this census cannot decode */
 } gs_read_bus_err;
 
 /* Reads a rectangle of GS VRAM back into main memory: the Local->Host direction, and the only way
@@ -115,10 +137,18 @@ typedef enum {
  * either, because the receipt it is waiting for belongs to a packet that has to be the only thing on
  * the pipe (see ps2_gif_hw_busy() and ps2_gif_pending(), both refused on here).
  *
- * (x, y, w, h) are canvas pixels in the displayed page (VRAM page 0, the CT32 format the canvas and
- * VRAM agree on byte for byte) and must satisfy the builder's laws -- for CT32 that is x and w
- * multiples of 4 px.  `dst` must be 16-byte aligned and hold gs_read_image_qwc(w, h, GS_PSM_CT32)
- * quadwords, and the caller should fill it with a sentinel first: a transfer the hardware rounds down
+ * (x, y, w, h) are canvas pixels in the page the PCRTC is showing, which ps2_gs_vram.h's
+ * gs_disp_shown() names -- today page 0 in PSMCT32, and whatever LANE 21 dials it into tomorrow.
+ * The read follows that page's own base, width field and format, so a census cannot be taken against
+ * a page nobody is scanning.  The rectangle still has to satisfy the builder's laws, and those laws
+ * are the page's: a quadword is 16 bytes, so a 32-bit page wants x and w as multiples of 4 px and a
+ * 16-bit page multiples of 8.  PSMCT32 and PSMCT16 both answer, because a 16-bit download is
+ * expanded to canvas words in the destination before this returns (gs_unpack_5551_image()), and a
+ * format that is neither -- CT24's 3-byte pixels, or a swizzled page that is not row-major at all --
+ * is refused with GS_READ_BUS_E_PAGE rather than mis-read as CT32.
+ * `dst` must be 16-byte aligned and hold ONE uint32_t per pixel -- twice what a 16-bit page's
+ * gs_read_image_qwc(w, h, psm) quadwords weigh -- because that is the space the in-place expansion
+ * needs.  The caller should also fill it with a sentinel first: a transfer the hardware rounds down
  * leaves the tail holding whatever was there, which is the failure this signature cannot report.
  * Returns the quadwords asked for, or -1 with the reason in ps2_gs_vram_read_err(). */
 int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst);
@@ -139,7 +169,33 @@ uint32_t *ps2_gs_get_framebuffer(void);
  * GS's byte order -- see BTRON_PIXEL_FB in include/btron/types.h -- which is what
  * lets ps2_gs_upload() stream it without a conversion pass. */
 void ps2_gs_set_framebuffer(uint32_t *canvas);
-void ps2_gs_flip(void);
+/* LANE 21 rung 4's present: make the page that has just been drawn the page the PCRTC reads.
+ *
+ * The order is the whole of it, and every step is there to keep one specific race out:
+ *
+ *   1. drain the GIF ring and reap it -- the page is not a picture until its last quadword has
+ *      landed, and a flip that beats the stream shows a half-updated page instead of the old one;
+ *   2. with `aligned`, wait for the frame boundary, so the store happens in blanking rather than
+ *      at whatever row the raster had reached.  This is the step that turns "the page changed" into
+ *      "the page changed between two frames", and it is the one a passing desktop can afford to
+ *      pay for: ui_period_us is already 16,667 us, so a vsync wait is the display's own clock, not
+ *      a new tax;
+ *   3. gs_disp_flip_commit() -- move the shown/drawn pair, the single owner of which page is whose;
+ *   4. ps2_gs_dispfb_store() -- write DISPFB1/2 for the page that is now shown.
+ *
+ * It does nothing at all while the display is single-buffered, which is the port's shipped
+ * behaviour, and returns 0 when it did.  `aligned` 0 is for the callers that must not be throttled
+ * to the frame rate (a console flush at the prompt); a mid-frame store is still a complete page
+ * made visible, only not a blanking-aligned one.  Returns the microseconds spent in the vsync wait
+ * so the caller can take that idle out of the work it charges its real-time budget against. */
+uint32_t ps2_gs_flip(int aligned);
+
+/* What the flips did, since boot: how many, how many of them timed out instead of seeing a
+ * vsync, and the longest wait.  A flip whose store lands blind is the flicker's own shape, so the
+ * rung that removes it has to be able to say how often it was aligned. */
+uint32_t ps2_gs_flip_count(void);
+uint32_t ps2_gs_flip_unaligned(void);
+uint32_t ps2_gs_flip_wait_max_us(void);
 void ps2_gs_putpixel(int x, int y, uint32_t color);
 void ps2_gs_fill_rect(int x, int y, int w, int h, uint32_t color);
 void ps2_gs_draw_rect(int x, int y, int w, int h, uint32_t color);

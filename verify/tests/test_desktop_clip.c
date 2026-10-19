@@ -599,6 +599,99 @@ static void layer_plate_yields_the_stream_rect(void)
     free(desktop); free(recorded); free(plate); free(painted);
 }
 
+/* ── LANE 22 (task #165): what the freeze actually refuses ──────────────────
+ *
+ * The paint worker's whole saving is a pass in which the application's frame is NOT painted, and
+ * the first build of it measured exactly nothing: the [XMBT] cycle's `paint=` column stayed at
+ * 21.4 ms on every pass of a run whose [PW] row claimed 68% of passes had refused the app.  The
+ * reason is in one term.  A layer window is stale in two senses at once -- its pixmap is
+ * perpetually dirty, because an animating app invalidates its own client rect every frame, and its
+ * picture is not in that pixmap anyway -- and the walk had been asking `!img_valid || (gl_layer &&
+ * !frozen)`, so the app's own invalidation outranked the freeze and re-ran the callback the pass
+ * had just refused.  `wnd_owes_callback()` makes the layer's schedule the PASS's and only the
+ * pass's, which is the difference these four counts measure:
+ *
+ *  1. the control, so a tally that never fires cannot certify anything;
+ *  2. frozen + stale: the layer is refused while the ordinary window in the same walk still
+ *     renders -- the refusal is per window, not per pass;
+ *  3. `wnd_damage_needs_paint()` agrees, so a frozen layer with nothing else stale lets the band
+ *     take its blit-only composite instead of a paint walk that paints nothing;
+ *  4. the debt is not hidden (`img_valid` stays false) and the freeze does not outlive its pass.
+ */
+static void freeze_refuses_the_layer_not_the_pixmap(void)
+{
+    static COLOR fb[800 * 600];
+    const RECT whole = { 0, 0, 800, 600 };
+    char msg[256];
+
+    GDEV *screen = opn_dev_vram(800, 600, fb);
+    if (!screen) { printf("  [FAIL] opn_dev_vram(800,600)\n"); s_fail++; return; }
+    init_wnd_mgr(screen);
+    g_cursor_in_backbuffer = 0;
+
+    WND *lay = opn_wnd("Frozen Layer", 60, 60, 300, 200, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    WND *plain = opn_wnd("Plain Again", 420, 300, 300, 200, WND_ATTR_TITLE | WND_ATTR_BORDER);
+    if (!lay || !plain) { printf("  [FAIL] opn_wnd\n"); s_fail++; return; }
+    s_tally_a = lay;
+    s_tally_b = plain;
+    lay->paint = paint_counted;
+    plain->paint = paint_counted;
+    lay->attr &= (UW)~WND_ATTR_RESIZE;
+    plain->attr &= (UW)~WND_ATTR_RESIZE;
+    lay->gl_layer = TRUE;
+
+    /* 1. The control: unfrozen, both stale, both render. */
+    inval_wnd(lay);
+    inval_wnd(plain);
+    s_paints_a = s_paints_b = 0;
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    CHECK(s_paints_a == 1u && s_paints_b == 1u,
+          "unfrozen and stale, the walk renders the layer and the ordinary window: the tally is wired");
+
+    /* 2. The law the PS2's own measurement refuted first.  Both images are dirtied again -- the
+     *    app animating is what dirties a layer's pixmap, and it does not stop because the pass
+     *    decided to refuse it -- and the freeze outranks that for the layer alone. */
+    inval_wnd(lay);
+    inval_wnd(plain);
+    s_paints_a = s_paints_b = 0;
+    wnd_gl_freeze(1);
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    wnd_gl_freeze(0);
+    snprintf(msg, sizeof msg, "a frozen pass runs the ordinary window's callback (%u) and not the "
+             "layer's (%u) -- the refusal is per window, and an app that dirtied its own rect does "
+             "not outrank it", s_paints_b, s_paints_a);
+    CHECK(s_paints_a == 0u && s_paints_b == 1u, msg);
+    CHECK(lay->img_valid == FALSE,
+          "and the refusal leaves the debt standing: img_valid is not set by a callback that never ran");
+
+    /* 3. The same law one level up, where it decides the composite's SHAPE rather than one
+     *    window's work: a frozen layer with nothing else stale cannot rule out a blit-only pass. */
+    inval_wnd(lay);
+    plain->img_valid = TRUE;
+    wnd_gl_freeze(1);
+    CHECK(wnd_damage_needs_paint(&whole) == FALSE,
+          "a frozen layer and no other stale image: this band needs no paint composite at all");
+    s_paints_a = s_paints_b = 0;
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    wnd_gl_freeze(0);
+    CHECK(s_paints_a == 0u && s_paints_b == 0u, "and the walk that agrees runs neither callback");
+    CHECK(wnd_damage_needs_paint(&whole) == TRUE,
+          "with the latch down the same stale layer is owed its stream again");
+
+    /* 4. Unfrozen, the callback returns -- which is the falsifier for a freeze that could outlive
+     *    its pass and leave a window never painted again. */
+    inval_wnd(plain);
+    s_paints_a = s_paints_b = 0;
+    redraw_baremetal_desktop_rect_paint(screen, &whole);
+    snprintf(msg, sizeof msg, "one clear re-opens the layer's callback (%u) and the plain one (%u)",
+             s_paints_a, s_paints_b);
+    CHECK(s_paints_a == 1u && s_paints_b == 1u, msg);
+
+    lay->gl_layer = FALSE;               /* the stream state is this case's, not the tree's */
+    cls_wnd(lay);
+    cls_wnd(plain);
+}
+
 /* ── LANE 12i rung (ii): the tracker plate is drawn once, not twice ─────────
  *
  * The composite's named residue is this overlay block (PS2.txt LANE 12i), and
@@ -824,6 +917,7 @@ int main(void)
     stale_window_selectivity();
     whole_canvas_reports_its_stages();
     layer_plate_yields_the_stream_rect();
+    freeze_refuses_the_layer_not_the_pixmap();
     overlay_plate_drawn_once();
 
     /* 800x600 is the PS2's workbench.  Both halves failing here is the bug this

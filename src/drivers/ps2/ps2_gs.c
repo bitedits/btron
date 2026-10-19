@@ -19,7 +19,7 @@
 #include "ps2_gs_env.h"      /* the environment packet, and apply's argument type */
 #include "ps2_gs_pack.h"     /* the field encoders the blit path now builds its words with */
 #include "ps2_gs_read.h"     /* LANE 19 rung 2: the pure Local->Host builder this file is the bus for */
-#include "ps2_gs_vram.h"     /* gs_vram_fbw(), the 64-pixel width unit a read names in BITBLTBUF */
+#include "ps2_gs_vram.h"     /* the display pages: the base, width field and format every writer here names */
 #include "ps2_gs_tex.h"      /* the texture-plane registry this file is the bus for */
 
 /* The canvas the GS is fed from, and the one the desktop composites into.
@@ -210,14 +210,22 @@ uint32_t ps2_gif_hw_us(void)
 }
 
 /* One Host->Local setup packet (5 QWs) into an arbitrary VRAM block: where in VRAM, how big,
- * which way.  `dba` is in the 256-byte units BITBLTBUF.DBA counts, not the 8 KB units FRAME.FBA
- * does -- the two field units are ps2_gs_vram.h's, and a caller that mixes them is off by 32x.
+ * which format, which way.  `dba` is in the 256-byte units BITBLTBUF.DBA counts, not the 8 KB units
+ * FRAME.FBA does -- the two field units are ps2_gs_vram.h's, and a caller that mixes them is off by
+ * 32x.
+ *
+ * The PSM arrived as an argument with LANE 21 rung 2 rather than staying CT32 in the body, because
+ * it is the field that says how many bytes a pixel of the incoming stream is: the GS converts nothing
+ * on a Host->Local path, so DBA's format and the caller's packing have to agree or the page fills at
+ * half its width.  Textures still name GS_PSM_CT32 themselves -- they are planes, not the canvas, and
+ * the atlas's format is not the display's.
  *
  * Moved onto the increment-5b encoders from written-out shifts.  The words are the same ones the
  * canvas has been uploaded with since before the encoders existed -- `make test-ps2-gs-pack`
  * compares the encoder output against these literals -- so the already-working path is the
  * instrument for the encoders rather than a second copy of their arithmetic. */
-static void send_trx_setup_at(uint32_t dba, uint32_t dbw, int dx, int dy, int w, int h)
+static void send_trx_setup_at(uint32_t dba, uint32_t dbw, uint32_t psm,
+                              int dx, int dy, int w, int h)
 {
     static uint64_t setup_pkt[5 * 2] __attribute__((aligned(16)));
     uint64_t *p = (uint64_t *)UNCACHED(setup_pkt);
@@ -234,7 +242,7 @@ static void send_trx_setup_at(uint32_t dba, uint32_t dbw, int dx, int dy, int w,
 
         switch (i) {
         case 0u: /* source half unused by a Host->Local stream; destination is the given block */
-            word = gs_pack_bitbltbuf(0u, 0u, 0u, dba, dbw, GS_PSM_CT32);
+            word = gs_pack_bitbltbuf(0u, 0u, 0u, dba, dbw, psm);
             break;
         case 1u:
             word = gs_pack_trxpos(0u, 0u, (uint32_t)dx, (uint32_t)dy, 0u);
@@ -253,10 +261,15 @@ static void send_trx_setup_at(uint32_t dba, uint32_t dbw, int dx, int dy, int w,
     ps2_gs_gif_send(setup_pkt, 5);
 }
 
-/* The canvas's own rectangle: page 0, the width field the screen rounds up to. */
+/* The canvas's own rectangle: the page the CPU blit writes, its width field, its format.  While the
+ * display is single-buffered that is page 0 at 13 units of 64 px and CT32 -- every byte this function
+ * has ever put on the bus -- and rung 2's point is that the three now come from one place, so the
+ * dial that changes them changes one configuration and not four literals. */
 static void send_trx_setup(int dx, int dy, int w, int h)
 {
-    send_trx_setup_at(0u, (PS2_SCREEN_WIDTH + 63u) / 64u, dx, dy, w, h);
+    const gs_disp_page_t *pg = gs_disp_drawn();
+
+    send_trx_setup_at(pg->tba, pg->fbw, pg->psm, dx, dy, w, h);
 }
 
 /* Stream pixel data as IMAGE-format packets.  QWC counts quadwords, so a row of
@@ -299,22 +312,117 @@ static void send_image_stream(const void *src, uint32_t qwc)
  * at all and this branch is bounded by width rather than by area. */
 #define PS2_GS_STAGE_QWC      512u     /* the buffer: 8 kB of contiguous quadwords */
 #define PS2_GS_STAGE_MAX_QWC   16u     /* a rect up to 64 px wide gathers; wider ones stream per row */
+#define PS2_GS_STAGE_BYTES  (PS2_GS_STAGE_QWC * 16u)
+
+/* The one staging buffer, hoisted out of the branch that first needed it so the 16-bit gather below
+ * fills the same 8 kB rather than standing up a second one: two paths that each own a stage are two
+ * paths that can each be given a different size, and the chunking arithmetic in both is written
+ * against PS2_GS_STAGE_BYTES. */
+static uint64_t s_gs_stage[PS2_GS_STAGE_QWC * 2] __attribute__((aligned(16)));
+
+/* Whether the 16-bit packer dithers.  It is a dial rather than a constant because the page is
+ * censusable: a graded canvas background survives 5 bits of channel far better with an ordered 4x4
+ * dither than with truncation, and the difference is a picture, which means it is the operator's
+ * call and not this file's.  `page dither 0|1` sets it at runtime. */
+static uint32_t s_gs_dither = 1u;
+
+void ps2_gs_set_dither(uint32_t on)
+{
+    s_gs_dither = on ? 1u : 0u;
+}
+
+uint32_t ps2_gs_dither(void)
+{
+    return s_gs_dither;
+}
+
+/* A PSMCT16 page, gathered a run of rows at a time and handed to one setup plus one stream.
+ *
+ * This is not the 32-bit path with different shifts, and the difference is the conversion: the
+ * canvas is 4 bytes a pixel and the page is 2, so the bytes cannot be copied, and a Host->Local
+ * IMAGE stream carries no row pitch, so the packing has to land in a contiguous stage before the
+ * DMA sees it.  That is why the full-width fast path in ps2_gs_upload() does not reach here -- it
+ * streams the canvas's own bytes, and those are the wrong width -- and why a 16-bit upload pays a
+ * per-pixel pass the 32-bit one has never paid.
+ *
+ * The chunking is by rows of the stage: a row is w*2 bytes, w is at most the canvas's 800, so a row
+ * is at most 1,600 bytes and PS2_GS_STAGE_BYTES of 8,192 always holds at least five of them.  The
+ * dither phase comes from the canvas position of each row, which is what makes two chunks of one
+ * row agree with each other and with the GS's own DIMX. */
+static void upload_ct16(int x, int y, int w, int h)
+{
+    uint16_t *to = (uint16_t *)UNCACHED(s_gs_stage);
+    const uint32_t row_bytes = (uint32_t)w * 2u;
+    const uint32_t qwc = row_bytes / 16u;
+    const uint32_t per = PS2_GS_STAGE_BYTES / row_bytes;
+    const uint32_t row_words = PS2_SCREEN_PITCH / 4u;
+    const uint32_t *from = (const uint32_t *)ps2_fb()
+                         + (size_t)y * row_words + (size_t)x;
+    uint32_t row = 0u;
+
+    while (row < (uint32_t)h) {
+        uint32_t n = (uint32_t)h - row;
+        uint32_t i;
+
+        if (n > per) n = per;
+        for (i = 0u; i < n; i++) {
+            gs_pack_5551_row(from + (size_t)i * row_words,
+                             to + (size_t)i * (row_bytes / 2u), (uint32_t)w,
+                             (uint32_t)x, (uint32_t)(y + (int)row) + i, s_gs_dither);
+        }
+        send_trx_setup(x, y + (int)row, w, (int)n);
+        send_image_stream(s_gs_stage, qwc * n);
+        /* The chunk's own advance, and the one line this function cannot be without: `from` walks the
+         * canvas by whole rows for the n rows above, and the destination walks by n rows below, so a
+         * missing step here does not shift the picture -- it sends the canvas's FIRST n rows once per
+         * chunk, into every band of the page.  Measured on 2026-10-18 by [BENCH] rung 3a (BENCH_GS=6),
+         * where it read as a page of flawless uniform background and no plate anywhere: the rows it
+         * kept re-packing were navy, so nothing was wrong except the ink.  The 32-bit staged path
+         * advances its own pointer the same way, inside its copy loop. */
+        from += (size_t)n * row_words;
+        row += n;
+    }
+}
 
 void ps2_gs_upload(int x, int y, int w, int h)
 {
+    const gs_disp_page_t *pg;
+    uint32_t ppx;
+    const uint8_t *canvas;
+
     if (w <= 0 || h <= 0) return;
     if (x < 0 || y < 0) return;
     if (x >= PS2_SCREEN_WIDTH || y >= PS2_SCREEN_HEIGHT) return;
     if (x + w > PS2_SCREEN_WIDTH)  w = PS2_SCREEN_WIDTH - x;
     if (y + h > PS2_SCREEN_HEIGHT) h = PS2_SCREEN_HEIGHT - y;
 
-    /* CT32 needs an even RRW and the stream is whole quadwords (4 px) wide;
-     * widen to both, which stays inside the 832-pixel VRAM page. */
-    x &= ~3;
-    w = (w + 3) & ~3;
+    /* Which page this stream lands in, and how many of its pixels one quadword of the stream
+     * carries.  While the display is single-buffered that is page 0 at 4 bytes a pixel and 4 px a
+     * quadword -- the literals this function has always carried -- and the point of reading them from
+     * gs_disp_drawn() is that the flip changes the answer in one place. */
+    pg = gs_disp_drawn();
+
+    /* The stream's granularity, and the widening the destination needs: DBW counts 64-pixel units,
+     * the stream is whole quadwords (ppx px) wide, and at 16 bpp a quadword is EIGHT pixels, so this
+     * is the page's own number and not the shift constant this function used to carry. */
+    ppx = pg->px_per_qw;
+
+    /* The destination needs an even RRW and the stream is whole quadwords (ppx px) wide; widen to
+     * both, which stays inside the 832-pixel VRAM page. */
+    x &= (int)~(ppx - 1u);
+    w = (int)(((uint32_t)w + ppx - 1u) & ~(ppx - 1u));
     if (w > PS2_SCREEN_WIDTH) w = PS2_SCREEN_WIDTH;
 
-    const uint8_t *canvas = (const uint8_t *)ps2_fb();
+    canvas = (const uint8_t *)ps2_fb();
+
+    /* A 16-bit page converts on the way out, because the GS converts nothing on a Host->Local
+     * stream: DBA's format says how many bytes each incoming pixel is, so a CT32 canvas poured into
+     * a PSMCT16 page would fill eight pixels a row instead of four and show the desktop squeezed to
+     * half its width.  Rung 3's answer is the packer, not a refusal. */
+    if (pg->bytes_pp == 2u) {
+        upload_ct16(x, y, w, h);
+        return;
+    }
 
     if (x == 0 && w == PS2_SCREEN_WIDTH) {
         /* Full rows: the canvas rows are contiguous, so one rectangle and one
@@ -323,8 +431,8 @@ void ps2_gs_upload(int x, int y, int w, int h)
         send_image_stream(canvas + (size_t)y * PS2_SCREEN_PITCH,
                           (uint32_t)((size_t)w * (size_t)h / 4u));
     } else if (w / 4 <= (int)PS2_GS_STAGE_MAX_QWC) {
-        static uint64_t stage[PS2_GS_STAGE_QWC * 2] __attribute__((aligned(16)));
-        uint32_t *to = (uint32_t *)UNCACHED(stage);
+        uint64_t *stage = s_gs_stage;
+        uint32_t *to = (uint32_t *)UNCACHED(s_gs_stage);
         const uint32_t *from = (const uint32_t *)(canvas + (size_t)y * PS2_SCREEN_PITCH
                                                                 + (size_t)x * 4u);
         const uint32_t qwc = (uint32_t)(w / 4);
@@ -431,9 +539,25 @@ int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
         return -1;
     }
 
-    req.vram_byte = 0u;                          /* the displayed page: what the census is about */
-    req.sbw64     = gs_vram_fbw(PS2_SCREEN_WIDTH);
-    req.psm       = GS_PSM_CT32;
+    /* The census is of the page the PCRTC is showing -- the same owner the writers go through, which
+     * is the point: a read asked against page 0 while the screen scans page 1 reports a page nobody
+     * painted.  The base, the width field and the format all come from that one description rather
+     * than three literals that happen to agree with it today. */
+    const gs_disp_page_t *shown = gs_disp_shown();
+
+    /* 32-bit and 16-bit pages both answer, because every caller reads a uint32_t image and rung 3
+     * gave this function the decode that makes one out of the other: the DMA below writes `w * h *
+     * 2` bytes into a buffer its caller sized at `w * h * 4`, and gs_unpack_5551_image() expands
+     * them in place.  Any other format is still a refusal -- a CT24 strip would walk 4 bytes at a
+     * time over a 3-byte picture, and a swizzled one is not a row-major image at all. */
+    if (shown == 0 || (shown->bytes_pp != 4u && shown->bytes_pp != 2u)) {
+        s_read_bus_err = GS_READ_BUS_E_PAGE;
+        return -1;
+    }
+
+    req.vram_byte = shown->byte;                  /* the displayed page: what the census is about */
+    req.sbw64     = shown->fbw;
+    req.psm       = shown->psm;
     req.x         = (uint32_t)x;
     req.y         = (uint32_t)y;
     req.w         = (uint32_t)w;
@@ -512,6 +636,15 @@ int32_t ps2_gs_vram_read(int x, int y, int w, int h, uint32_t *dst)
 
     __asm__ volatile("" : : : "memory");
 
+    /* The halfwords the DMA wrote are the page's own pixels; the caller is expecting its canvas's
+     * words.  Expanding in place is what makes every census built on a 32-bit page work on a 16-bit
+     * one without a second buffer, and it is only safe because the image occupies half the space the
+     * caller allocated and the loop runs downward -- see gs_unpack_5551_image()'s header comment.
+     * It is skipped on a failed transfer, where the buffer is whatever the caller last put there and
+     * a decode of that would be a colour invented from garbage. */
+    if (s_read_bus_err == GS_READ_BUS_OK && shown->bytes_pp == 2u)
+        gs_unpack_5551_image(dst, (uint32_t)w * (uint32_t)h);
+
     return (s_read_bus_err == GS_READ_BUS_OK) ? (int32_t)iqwc : -1;
 }
 
@@ -533,7 +666,10 @@ static void ps2_gs_tex_upload(const gs_tex_t *t)
 {
     if (t == 0 || t->plane == 0 || t->qwc == 0u) return;
 
-    send_trx_setup_at(t->tba, t->tbw, 0, 0, (int)t->pad_w, (int)t->pad_h);
+    /* A plane's format is its own, not the display's: the atlas and the font sheet are CT32 and are
+     * sampled as CT32 whatever the canvas is, so this caller names the format instead of inheriting
+     * it from gs_disp_psm(). */
+    send_trx_setup_at(t->tba, t->tbw, GS_PSM_CT32, 0, 0, (int)t->pad_w, (int)t->pad_h);
     send_image_stream(t->plane, t->qwc);
 }
 
@@ -545,6 +681,25 @@ static void ps2_gs_tex_sink(uint32_t index)
 {
     ps2_gs_tex_upload(gs_tex_at(index));
     gs_tex_uploaded(index);
+}
+
+/* The two DISPFB registers, written from the page this configuration says is showing.
+ *
+ * Split out of ps2_gs_set_mode() because the dial that changes the page has to reprogram exactly
+ * this and nothing else: re-issuing SMODE1 would resync the CRT timing mid-session for no reason,
+ * while a DISPFB that still names the old format is a screen of noise -- DISPFB's PSM field is the
+ * PCRTC's own idea of how many bytes a pixel of the page it is scanning is, and it is the one
+ * register a format change cannot leave alone.  rung 4's flip calls the same function after it
+ * moves the shown index, which is the point of it owning the store rather than the mode word. */
+void ps2_gs_dispfb_store(void)
+{
+    const gs_disp_page_t *pg = gs_disp_shown();
+    uint64_t dispfb = ((uint64_t)pg->fba << 0) |
+                      ((uint64_t)pg->fbw << 9) |
+                      ((uint64_t)pg->psm << 15);
+
+    GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
+    GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
 }
 
 void ps2_gs_set_mode(int mode)
@@ -572,11 +727,14 @@ void ps2_gs_set_mode(int mode)
         /* SMODE2: Non-interlaced, progressive scan */
         GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000000ULL);
 
-        /* DISPFB1 & DISPFB2: FBP=0, FBW=13 (832/64), PSM=0 (CT32) */
-        uint32_t fbw = (PS2_SCREEN_WIDTH + 63) / 64;
-        uint64_t dispfb = (0ULL << 0) | ((uint64_t)fbw << 9) | ((uint64_t)GS_PSM_CT32 << 15);
-        GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
-        GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
+        /* DISPFB1 & DISPFB2: the page the PCRTC reads, in the three fields that describe it --
+         * FBP (8 KB page index, bits 0-8), FBW (units of 64 px, bits 9-14) and PSM (bits 15-19).
+         * All three come from gs_disp_shown() through ps2_gs_dispfb_store(), because this store is
+         * what makes a drawn page visible: a writer that targets the page named in ps2_gs_vram.h
+         * while the CRT reads another one produces a black screen, and the two must not be able to
+         * disagree.  Today both are page 0 at FBW=13 in CT32, so this is the same word the literals
+         * made. */
+        ps2_gs_dispfb_store();
 
         /* DISPLAY1 & DISPLAY2: the 720p raster's active-area origin, then
          * MAGH=MAGV=0 so the read is one VRAM pixel per output dot and
@@ -595,6 +753,11 @@ void ps2_gs_set_mode(int mode)
         GS_REG_POKE(GS_PMODE_OFFSET, 0xFF63ULL);
         GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000000ULL);
 
+        /* Deliberately still a literal, and deliberately FBW=10 rather than the canvas's 13: this
+         * timing shows a 640-wide window, which is not the page ps2_gs_vram.h lays out, so routing it
+         * through gs_disp_shown() would describe a buffer the DISPLAY rect does not cover.  Nothing
+         * selects it -- ps2_gs_init() above is this port's only set_mode() call and it asks for
+         * PS2_MODE_800X600.  Whoever reaches it needs a page description of 640 pixels first. */
         uint64_t dispfb = (0ULL << 0) | (10ULL << 9) | ((uint64_t)GS_PSM_CT32 << 15);
         GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
         GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
@@ -611,6 +774,11 @@ void ps2_gs_set_mode(int mode)
         GS_REG_POKE(GS_PMODE_OFFSET, 0xFF63ULL);
         GS_REG_POKE(GS_SMODE2_OFFSET, 0x00000003ULL); /* INT=1, FFMD=1 */
 
+        /* Deliberately still a literal, and deliberately FBW=10 rather than the canvas's 13: this
+         * timing shows a 640-wide window, which is not the page ps2_gs_vram.h lays out, so routing it
+         * through gs_disp_shown() would describe a buffer the DISPLAY rect does not cover.  Nothing
+         * selects it -- ps2_gs_init() above is this port's only set_mode() call and it asks for
+         * PS2_MODE_800X600.  Whoever reaches it needs a page description of 640 pixels first. */
         uint64_t dispfb = (0ULL << 0) | (10ULL << 9) | ((uint64_t)GS_PSM_CT32 << 15);
         GS_REG_POKE(GS_DISPFB1_OFFSET, dispfb);
         GS_REG_POKE(GS_DISPFB2_OFFSET, dispfb);
@@ -816,20 +984,32 @@ void ps2_gs_text_flush(void)
 }
 
 
-void ps2_gs_vsync(void)
+/* CSR bit 3 is the VSYNC event, write-1-to-clear and read-as-set -- the same bit
+ * third_party/ps2sdk's GsVSync() spins on (ee/libgs/src/sync.c, through
+ * GS_SET_CSR_vsync_intrupt / GS_GET_CSR_vsync_intrupt in ee/libgs/include/libgs.h, where the field
+ * order is signal, finish, hsync, vsync: bit 3).  The mask that would deliver it to a handler is
+ * deliberately left closed by ps2_gs_init()'s PutIMR(0xFF00): the flag is still raised, and this
+ * poll is the only reader, which is what makes the count below trustworthy without an interrupt
+ * path this port does not have. */
+static int ps2_gs_vsync_wait_obs(void)
 {
-    /* Clear GS CSR VSync interrupt (bit 3) */
-    GS_REG_POKE(GS_CSR_OFFSET, (1ULL << 3));
-    for (volatile int i = 0; i < 200000; i++) {
-        if (GS_REG_PEEK(GS_CSR_OFFSET) & (1ULL << 3)) {
-            break;
-        }
+    int i;
+
+    GS_REG_POKE(GS_CSR_OFFSET, (1ULL << 3));      /* clear it, so what arrives next is a new frame */
+    for (i = 0; i < 200000; i++) {
+        if (GS_REG_PEEK(GS_CSR_OFFSET) & (1ULL << 3)) return 1;
     }
+    return 0;                                      /* the bound ran out: no frame boundary was seen */
 }
 
-void ps2_gs_wait_vsync(void)
+void ps2_gs_vsync(void)
 {
-    ps2_gs_vsync();
+    (void)ps2_gs_vsync_wait_obs();
+}
+
+int ps2_gs_wait_vsync(void)
+{
+    return ps2_gs_vsync_wait_obs();
 }
 
 void ps2_gs_swap_buffers(void)
@@ -843,11 +1023,53 @@ uint32_t *ps2_gs_get_framebuffer(void)
     return ps2_fb();
 }
 
-void ps2_gs_flip(void)
+/* LANE 21 rung 4's present, and the three counters that say what it did.  See ps2_gs.h for why the
+ * steps are in this order; the numbers are here because the rung's claim is not "the page changed"
+ * but "the page changed at a frame boundary", and only a count of the waits that did not see one can
+ * tell those two apart from a log. */
+static uint32_t s_flip_count;
+static uint32_t s_flip_unaligned;
+static uint32_t s_flip_wait_max_us;
+
+uint32_t ps2_gs_flip(int aligned)
 {
-    ps2_gs_wait_vsync();
-    ps2_gs_flush();
+    uint32_t wait_us = 0u;
+
+    /* Single-buffered: there is no second page to promote, and the writers are already on the one
+     * the CRT reads, so the screen is up to date without a store.  Returning without touching a
+     * register is what keeps the shipped present byte-identical when the dial is off. */
+    if (!gs_disp_is_double()) return 0u;
+
+    /* 1. The page has to be finished before it is named to the CRT.  The ring's own drain is the
+     *    only promise that the last quadword of the last band has left the EE. */
+    (void)ps2_gif_drain();
+    (void)ps2_gif_reap();
+
+    /* 2. The boundary.  `aligned` 0 skips it, which is the prompt's case (a console line must not
+     *    be throttled to 60 a second) and costs the blanking alignment but not the page's complete-
+     *    ness -- step 1 already bought that. */
+    if (aligned) {
+        const uint32_t t0 = ps2_gif_hw_us();
+        const int saw = ps2_gs_wait_vsync();
+
+        wait_us = ps2_gif_hw_us() - t0;
+        if (wait_us > s_flip_wait_max_us) s_flip_wait_max_us = wait_us;
+        if (!saw) s_flip_unaligned++;
+    }
+
+    /* 3 and 4. Whose page is whose, then the register that acts on it.  Nothing else may sit between
+     *    these two: the commit moves the write target to the page the CRT is about to read, so a
+     *    store that did not follow would leave the CRT on a page no writer will visit again. */
+    gs_disp_flip_commit();
+    ps2_gs_dispfb_store();
+
+    s_flip_count++;
+    return wait_us;
 }
+
+uint32_t ps2_gs_flip_count(void)      { return s_flip_count; }
+uint32_t ps2_gs_flip_unaligned(void)  { return s_flip_unaligned; }
+uint32_t ps2_gs_flip_wait_max_us(void){ return s_flip_wait_max_us; }
 
 /* Rasterize solid filled 2D rectangle directly into RDRAM backing store */
 void ps2_gs_draw_rect(int x, int y, int w, int h, uint32_t color)

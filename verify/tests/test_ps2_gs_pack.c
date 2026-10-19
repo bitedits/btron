@@ -351,6 +351,289 @@ static void transfer_words(void)
     }
 }
 
+/* ── A 16-bit page's halfwords ──────────────────────────────────────────────
+ *
+ * This is the word LANE 21 has to write before a second display page means anything: a Host->Local
+ * transfer sizes itself from the destination format and the GS converts nothing on that path, so a
+ * PSMCT16 page is only as good as this conversion.  Nothing on a screen can tell a 5551 from a 5551
+ * with R and B swapped at a glance, and the census reads VRAM, not the display, so the layout is
+ * pinned here by literals: ps2tek's FRAME table for the format's ordinal (02h = PSMCT16) and its
+ * FMSK statement that FRAME's bit 63 lands on the 16-bit colour's bit 15, read together with
+ * ps2sdk's own GS_SET_FMSK16 (third_party/ps2sdk/common/include/gs_gp.h:213-216), which masks R at
+ * 32-bit bit 3, G at 11, B at 19 and alpha at 31.
+ */
+static void pixel_words(void)
+{
+    uint32_t v;
+    uint32_t x, y;
+
+    /* The console's own slate navy, as it lies in the canvas: 0xAABBGGRR with R=0x29, G=0x1B,
+     * B=0x12, A=0xFF.  41>>3 = 5, 27>>3 = 3, 18>>3 = 2, and the alpha bit set:
+     * 0x8000 | 2<<10 | 3<<5 | 5. */
+    eq("5551 navy 0xFF121B29", gs_pack_5551(0xFF121B29u, 0u, 0u, 0u), 0x8865u);
+
+    /* Saturated red, which is the word that says whether R is at the bottom or the top: the canvas
+     * holds 0xFF0000FF for it, and 5551 puts its five bits in bits 0..4. */
+    eq("5551 red = low 5 bits", gs_pack_5551(0xFF0000FFu, 0u, 0u, 0u), 0x801Fu);
+
+    /* All three channels at their top five bits and no alpha: 0x7FFF, so the alpha bit really is
+     * the one bit above them. */
+    eq("5551 white, A=0", gs_pack_5551(0x00F8F8F8u, 0u, 0u, 0u), 0x7FFFu);
+
+    /* The alpha bit is the channel's top bit and nothing else: 0x7F is transparent, 0x80 is not. */
+    eq("5551 A=0x7F -> bit15 clear", gs_pack_5551(0x7F000000u, 0u, 0u, 0u), 0x0000u);
+    eq("5551 A=0x80 -> bit15 set", gs_pack_5551(0x80000000u, 0u, 0u, 0u), 0x8000u);
+
+    /* Truncation is exact, per channel, over the whole 8-bit range: with no dither the term is the
+     * matrix's centre and the result is the top five bits, so nothing in the clamp or the phase can
+     * be hiding behind a rounding rule. */
+    for (v = 0u; v < 256u; v++) {
+        const uint16_t p_r = gs_pack_5551(v, 0u, 0u, 0u);                  /* v as R */
+        const uint16_t p_g = gs_pack_5551(v << 8, 0u, 0u, 0u);             /* v as G */
+        const uint16_t p_b = gs_pack_5551(v << 16, 0u, 0u, 0u);            /* v as B */
+
+        if (p_r != (uint16_t)(v >> 3)) { eq("trunc R exact at 0..255", p_r, v >> 3); break; }
+        if (p_g != (uint16_t)((v >> 3) << 5)) { eq("trunc G exact at 0..255", p_g, (v >> 3) << 5); break; }
+        if (p_b != (uint16_t)((v >> 3) << 10)) { eq("trunc B exact at 0..255", p_b, (v >> 3) << 10); break; }
+    }
+
+    /* The dither moves a channel by at most one quantisation step, never off the end of its field,
+     * at every one of the sixteen phases.  The second half of that is the clamp: drop it and 255 at
+     * a term of +1..+3 becomes 32, which is not a sixth red bit -- it is the green field's bottom
+     * bit, and a saturated pixel would come out cyan-tinged in exactly the four columns of every
+     * fourth row where the matrix is largest. */
+    for (v = 0u; v < 256u; v++) {
+        for (y = 0u; y < 4u; y++) {
+            for (x = 0u; x < 4u; x++) {
+                const uint16_t p = gs_pack_5551(v, x, y, 1u);              /* v as R only */
+                const int want = (int)(v >> 3);
+                const int got = (int)(p & 0x1Fu);
+
+                s_checks++;
+                if (got > want + 1 || got < want - 1 || got > 31) {
+                    s_failures++;
+                    printf("  [FAIL] dither R out of range v=%u x=%u y=%u got=%d want=%d p=0x%04x\n",
+                           (unsigned int)v, (unsigned int)x, (unsigned int)y, got, want,
+                           (unsigned int)p);
+                    goto bias;
+                }
+                /* G, B and the alpha bit must all be clear for a red-only pixel: everything but R's
+                 * own five bits, 0x1F.  A mask that reaches down into bit 3 or 4 would flag the top
+                 * half of a legitimate red, which is what a 0x7FF8 spill test does. */
+                s_checks++;
+                if ((p & 0xFFE0u) != 0u) {
+                    s_failures++;
+                    printf("  [FAIL] dither R spilled into G/B v=%u x=%u y=%u p=0x%04x\n",
+                           (unsigned int)v, (unsigned int)x, (unsigned int)y, (unsigned int)p);
+                    goto bias;
+                }
+            }
+        }
+    }
+
+bias:
+    /* The matrix's own shape, stated as numbers rather than as an intention: four rows of 14, sixty
+     * -one in all, so the mean term added across a full 4x4 cycle is (56 - 64)/16 = -1/2.  A dither
+     * is allowed to be a hair dark; it is not allowed to be dark by a claim. */
+    {
+        int sum = 0;
+
+        for (y = 0u; y < 4u; y++) {
+            int row = 0;
+            for (x = 0u; x < 4u; x++) row += (int)gs_dimx[y][x];
+            eq32("dimx row sum", (uint32_t)row, 14u);
+            sum += row;
+        }
+        eq("dimx total over 16 cells", (uint64_t)(unsigned)sum, 56u);
+    }
+
+    /* The row packer is the same function with a walking phase: a run that starts at x=1 has x=1's
+     * matrix cell under its first pixel, and a rectangle that the upload chopped into pieces still
+     * dithers as one picture. */
+    {
+        static uint32_t src[8];
+        uint16_t dst[8];
+        int mismatch = 0;
+
+        for (v = 0u; v < 8u; v++) src[v] = 0xFF000000u | (v * 32u) | (v * 29u) | (v * 37u);
+        gs_pack_5551_row(src, dst, 8u, 1u, 2u, 1u);
+        for (v = 0u; v < 8u; v++) {
+            if (dst[v] != gs_pack_5551(src[v], 1u + v, 2u, 1u)) mismatch = 1;
+        }
+        eq("row packer = per-pixel, phase walking", (uint64_t)(mismatch ? 1u : 0u), 0u);
+
+        /* ... and the row packer's answer is exactly the same for a dither-off row, which is the
+         * law the census differential relies on: one function, used by the driver and by the check
+         * that reads the page back, so a wrong layout cannot agree with itself twice. */
+        gs_pack_5551_row(src, dst, 8u, 0u, 0u, 0u);
+        for (v = 0u; v < 8u; v++) {
+            if (dst[v] != gs_pack_5551(src[v], v, 0u, 0u)) mismatch = 1;
+        }
+        eq("row packer truncates too", (uint64_t)(mismatch ? 1u : 0u), 0u);
+    }
+
+    /* The halfword is two bytes, and a row of the canvas's 800 pixels is therefore 1,600 bytes = 100
+     * quadwords: whole, which is what lets the upload keep its no-row-pitch IMAGE stream shape at 16
+     * bits as it does at 32.  Pinned here because the buffer width (832 px) is the number that has to
+     * stay whole too: 832 x 2 = 1,664 = 104 quadwords. */
+    eq("800 px of 5551 = 100 quadwords", (uint64_t)(800u * 2u / 16u), 100u);
+    eq("832 px of 5551 = 104 quadwords", (uint64_t)(832u * 2u / 16u), 104u);
+    /* Two of them, in the allocator's own units: 832 x 600 x 2 = 998,400, and the pair is the
+     * 1,996,800 that ps2_gs_vram.h's one CT32 canvas reservation already spends. */
+    eq("one CT16 page", (uint64_t)(832u * 600u * 2u), 998400u);
+    eq("two CT16 pages = today's canvas reservation",
+       (uint64_t)(2u * 832u * 600u * 2u), (uint64_t)(13u * 64u * 600u * 4u));
+
+    /* ── The other direction: a 16-bit page read back by code written for a 32-bit one ──
+     *
+     * rung 3a puts the display on a PSMCT16 page, and every census of that page indexes a uint32_t
+     * image and compares whole canvas words.  So the decode is not a convenience -- it is what keeps
+     * `gsread`, the live-page comparison and the XMB census working when the page halves, and it does
+     * it inside the caller's own buffer, which is where an iteration direction becomes load-bearing
+     * and therefore where it gets a falsifying control rather than a comment. */
+
+    /* The two ends, exactly.  These are the values a census asserts on, because the test colours are
+     * full-scale primaries: 31 -> 0xFF and 0 -> 0x00 is the whole reason the expansion is the shift
+     * form and not v*255/31. */
+    eq("unpack 0x801F = saturated red, opaque", gs_unpack_5551(0x801Fu), 0xFF0000FFu);
+    eq("unpack 0xFFFF = white, opaque",          gs_unpack_5551(0xFFFFu), 0xFFFFFFFFu);
+    eq("unpack 0x8000 = black, opaque",          gs_unpack_5551(0x8000u), 0xFF000000u);
+    eq("unpack 0x0000 = black, alpha clear",     gs_unpack_5551(0x0000u), 0x00000000u);
+    /* The one piece of information the format cannot keep: alpha is a bit, so everything the canvas
+     * stored between 0x80 and 0xFF comes back as 0xFF and everything below 0x80 as 0x00.  Pinned
+     * because a census that counts `other=` over an alpha-blended region is counting this loss and
+     * nobody should have to rediscover it from a picture. */
+    eq("alpha 0x7F is a 0x00 on the way back",
+       gs_unpack_5551(gs_pack_5551(0x7F000000u, 0u, 0u, 0u)), 0x00000000u);
+    eq("alpha 0xFF is a 0xFF on the way back",
+       gs_unpack_5551(gs_pack_5551(0xFF000000u, 0u, 0u, 0u)), 0xFF000000u);
+
+    /* A mid-scale channel loses its low three bits and gets them back as a best guess, and the bound
+     * is not the same number with and without the dither.  It matters because a census compares a
+     * decoded 16-bit page against its canvas: "close" is not assertable, a bound is.
+     *
+     *   truncated -- five = v >> 3 and the decode returns five*8 + (five >> 2), so v is at most 7
+     *                above what comes back (the low three bits leave and only the >>2 term returns).
+     *   dithered  -- the matrix cell moves the 8-bit value by -4..+3 BEFORE the shift, so the stored
+     *                5 bits can be a whole step (8) away from the truncated ones on top of that 7:
+     *                v=11 under the term-0 cells goes 11 -> 7 -> 0 stored -> 0 back, an error of 11,
+     *                and the light side is bounded by the +3 before the shift plus the 7 of the >>2
+     *                term, i.e. 10.
+     *
+     * The two maxima are therefore pinned as measured facts -- 7 and 11 -- with the per-value bounds
+     * (8 and 11, the smallest step-counts that do not fail) checked at every value. */
+    {
+        uint32_t worst_t = 0u, worst_d = 0u;
+
+        for (v = 0u; v < 256u; v++) {
+            const uint32_t chans[3] = { v, v << 8, v << 16 };
+            uint32_t c;
+            for (c = 0u; c < 3u; c++) {
+                const uint32_t word = 0xFF000000u | chans[c];
+                const uint32_t back = gs_unpack_5551(gs_pack_5551(word, 0u, 0u, 0u));
+                const uint32_t got = (back >> (c * 8u)) & 0xFFu;
+                const uint32_t err = got > v ? got - v : v - got;
+
+                s_checks++;
+                if (err > 8u) {
+                    s_failures++;
+                    printf("  [FAIL] truncate round trip v=%u ch=%u got=%u err=%u\n",
+                           (unsigned int)v, (unsigned int)c, (unsigned int)got, (unsigned int)err);
+                }
+                if (err > worst_t) worst_t = err;
+
+                /* The alpha byte is the canvas's own, exactly: it goes in at 0xFF and comes back at
+                 * 0xFF, so a census that compares whole words is not tripped by the channel it
+                 * ignores.  Checked once per value, over all three channels at once. */
+                if (c == 2u) eq("round trip keeps opaque alpha", back & 0xFF000000u, 0xFF000000u);
+            }
+        }
+        eq("truncated round trip worst error = 7", (uint64_t)worst_t, 7u);
+
+        for (y = 0u; y < 4u; y++) {
+            for (x = 0u; x < 4u; x++) {
+                for (v = 0u; v < 256u; v++) {
+                    const uint32_t word = 0xFF000000u | v | (v << 8) | (v << 16);
+                    const uint32_t back = gs_unpack_5551(gs_pack_5551(word, x, y, 1u));
+                    const uint32_t got = back & 0xFFu;
+                    const uint32_t err = got > v ? got - v : v - got;
+
+                    s_checks++;
+                    if (err > 11u) {
+                        s_failures++;
+                        printf("  [FAIL] dither round trip v=%u x=%u y=%u got=%u err=%u\n",
+                               (unsigned int)v, (unsigned int)x, (unsigned int)y,
+                               (unsigned int)got, (unsigned int)err);
+                    }
+                    if (err > worst_d) worst_d = err;
+                }
+            }
+        }
+        eq("dithered round trip worst error = 11", (uint64_t)worst_d, 11u);
+    }
+
+    /* The in-place image expansion, and the direction it must run in.
+     *
+     * `want` is the same picture expanded out-of-place, pixel by pixel, from a copy of the packed
+     * halfwords.  `inplace` is what gs_unpack_5551_image() leaves in a buffer the DMA filled, and it
+     * has to agree.  `forward` is the loop the other way -- the one a reader would write first --
+     * over the same bytes: it must DISAGREE, which is the control that makes the downward order a
+     * measured property instead of a style preference. */
+    {
+        enum { IMG_N = 8u };
+        /* Unions, not casts: the halfword view and the word view are the same object seen two ways,
+         * which is what the DMA buffer is on the real path, and a uint16_t* pointed at a uint32_t[]
+         * would be the test asserting a property of an aliasing-undefined expression. */
+        union { uint32_t w[IMG_N / 2u]; uint16_t h[IMG_N]; } packed;
+        uint32_t inplace[IMG_N];
+        uint32_t want[IMG_N];
+        uint32_t forward[IMG_N];
+        uint32_t ok = 1u, broke = 0u;
+
+        for (v = 0u; v < IMG_N; v++) {
+            packed.h[v] = gs_pack_5551(0xFF000000u | (v * 32u) | (v * 29u) | (v * 37u),
+                                       v, 1u, 0u);
+        }
+        for (v = 0u; v < IMG_N; v++) want[v] = gs_unpack_5551(packed.h[v]);
+
+        for (v = 0u; v < IMG_N / 2u; v++) inplace[v] = packed.w[v];
+        gs_unpack_5551_image(inplace, IMG_N);
+        for (v = 0u; v < IMG_N; v++) if (inplace[v] != want[v]) ok = 0u;
+        eq("in-place expansion, downward, = out-of-place", (uint64_t)(ok ? 1u : 0u), 1u);
+
+        for (v = 0u; v < IMG_N / 2u; v++) forward[v] = packed.w[v];
+        for (v = 0u; v < IMG_N; v++) {
+            const uint32_t word = forward[v >> 1];        /* the same read the real loop makes */
+            const uint16_t half = (uint16_t)(v & 1u ? word >> 16 : word & 0xFFFFu);
+
+            forward[v] = gs_unpack_5551(half);            /* ... and the write that ate the tail */
+        }
+        for (v = 0u; v < IMG_N; v++) if (forward[v] != want[v]) broke = 1u;
+        eq("the same loop run UPWARD corrupts the tail (control)", (uint64_t)broke, 1u);
+
+        /* A second, larger image, because the hazard only shows when a word is both read and written
+         * by different pixels: 64 px is 32 words, and the 8-px case above proves the ordering but not
+         * the reach of the damage. */
+        {
+            enum { BIG_N = 64u };
+            static union { uint32_t w[BIG_N / 2u]; uint16_t h[BIG_N]; } big;
+            uint32_t ref[BIG_N];
+            uint32_t ok2 = 1u;
+
+            for (v = 0u; v < BIG_N; v++) {
+                const uint32_t word = 0xFF000000u | ((v * 37u) & 0xFFu) |
+                                      (((v * 61u) & 0xFFu) << 8) | (((v * 23u) & 0xFFu) << 16);
+
+                big.h[v] = gs_pack_5551(word, v % 8u, v / 8u, 1u);
+                ref[v] = gs_unpack_5551(big.h[v]);
+            }
+            gs_unpack_5551_image(big.w, BIG_N);
+            for (v = 0u; v < BIG_N; v++) if (big.w[v] != ref[v]) ok2 = 0u;
+            eq("64 px expands in place too", (uint64_t)(ok2 ? 1u : 0u), 1u);
+        }
+    }
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -366,6 +649,7 @@ int main(void)
     env_words();
     stream_words();
     transfer_words();
+    pixel_words();
 
     printf("  checks=%d failures=%d\n", s_checks, s_failures);
     if (s_failures) {

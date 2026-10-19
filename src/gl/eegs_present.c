@@ -461,13 +461,19 @@ int eegs_present_send(const RECT *client)
     if (client == 0 || s_groups == 0u) return 0;
     if (client->right <= client->left || client->bottom <= client->top) return 0;
 
-    /* The frame the primitives land in is the displayed canvas: page 0, the width field the
-     * PCRTC reads it with, CT32, and no write mask -- the layer replaces what it covers and
-     * blends into it where ALPHA says to.  ps2_gs_set_mode() programs the same page for display,
-     * which is the only reason drawing there is visible at all. */
-    env.frame_byte   = 0u;
-    env.frame_px_w   = (uint32_t)PS2_SCREEN_WIDTH;
-    env.frame_psm    = GS_PSM_CT32;
+    /* The frame the primitives land in is the page ps2_gs_vram.h says writers own: the shown one
+     * while double-buffering is off, the hidden one when LANE 21 rung 4 turns it on.  Its base,
+     * width and format all come from that one description, which is the same one ps2_gs_set_mode()
+     * programs DISPFB from -- a stream that lands somewhere other than where the CRT reads is a
+     * stream nobody sees, and the two cannot disagree once neither of them writes it out.  The
+     * accessors always describe a page -- a format with no second page leaves that entry zeroed and
+     * gs_disp_set_double() refuses it, so nothing can point the writers at it -- and the mask stays
+     * clear because the layer replaces what it covers and blends into it where ALPHA says to. */
+    const gs_disp_page_t *drawn = gs_disp_drawn();
+
+    env.frame_byte   = drawn->byte;
+    env.frame_px_w   = drawn->fbw * 64u;
+    env.frame_psm    = drawn->psm;
     env.frame_fmsk   = 0u;
 
     if (eegs_depth_test_active()) {
@@ -527,8 +533,13 @@ int eegs_present_send(const RECT *client)
          * hardware depth buffer is clean before rendering this frame's 3D primitives. */
         static uint64_t clr_pkt[18] __attribute__((aligned(16)));
         uint64_t *cp = (uint64_t *)UNCACHED(clr_pkt);
-        uint32_t zba;
+        uint32_t zba = 0u, fba = 0u;
         (void)gs_vram_fba(env.zbuf_byte, &zba);
+        /* The frame side of the same two conversions the environment packet made a few lines above,
+         * from the same env: this clear runs between the environment and the primitives, and a FRAME
+         * here that described a different page than the draws following it would mask the wrong
+         * bytes -- the reason the words come from env and not from another copy of the literals. */
+        (void)gs_vram_fba(env.frame_byte, &fba);
 
         *cp++ = gs_pack_giftag(8u, 1u, 0u, 0u, GS_FLG_PACKED, 1u);
         *cp++ = gs_pack_regs((const uint32_t[]){ GS_NIB_AD }, 1u);
@@ -540,7 +551,7 @@ int eegs_present_send(const RECT *client)
         *cp++ = gs_pack_scissor(0u, (uint32_t)PS2_SCREEN_WIDTH - 1u, 0u, 599u);
         *cp++ = GS_GP_SCISSOR_1;
         /* 3. FRAME: mask all color writes */
-        *cp++ = gs_pack_frame(0u, gs_vram_fbw((uint32_t)PS2_SCREEN_WIDTH), GS_PSM_CT32, 0xFFFFFFFFu);
+        *cp++ = gs_pack_frame(fba, gs_vram_fbw(env.frame_px_w), env.frame_psm, 0xFFFFFFFFu);
         *cp++ = GS_GP_FRAME_1;
         /* 4. ZBUF: unmasked */
         *cp++ = gs_pack_zbuf(zba, env.zbuf_psm, 0u);

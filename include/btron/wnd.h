@@ -154,6 +154,31 @@ typedef struct {
 WND* wnd_gl_layer(void);
 BOOL wnd_gl_layer_rect(RECT *client_out);
 BOOL wnd_gl_layer_take(RECT *client_out);
+
+/* Task #165: the layer's one-paint-per-pass latch.  `wnd_gl_freeze(1)` says "this pass has already
+ * put the layer's frame on the page", and the walk then treats a layer exactly like a window whose
+ * image is valid: no callback, no second recording, no second stream, and `wnd_damage_needs_paint()`
+ * stops answering TRUE on the strength of one.  It is a fact about the page, not a policy, so the
+ * presentation plane is its only author -- the PS2 core raises it after the band that sends the
+ * stream and clears it at the end of the pass, and every other target leaves it clear for the
+ * whole of its life, which is why the two governed tests still give the same answers there.
+ *
+ * It has to OUTRANK `img_valid`, not sit beside it, and that is a measured law rather than a
+ * preference: the first form of the latch was written as `!img_valid || (layer && !frozen)` and the
+ * headless A/B showed the paint column unmoved -- 21.4 ms on every pass, deferred and admitted alike
+ * -- because an application that animates dirties its own client rect, so `img_valid` said "stale"
+ * on the very pass that had just refused to afford a frame.  A layer's paint schedule belongs to the
+ * pass, and `wnd_owes_callback()` in src/window/wnd.c is the one predicate that says it, used by both
+ * the walk and the damage test.  verify/tests/test_desktop_clip.c
+ * `freeze_refuses_the_layer_not_the_pixmap()` fails (4 checks) against the old expression.
+ *
+ * A frozen band that still has a stale *software* window to paint is unaffected: staleness is the
+ * window's own property and the freeze only removes the layer's exemption from it.  The region the
+ * frozen layer would have painted is still cut out of the canvas upload by `wnd_gl_layer_rect()`,
+ * which works on a pass that did not re-record -- so the pixels the callback would have written are
+ * pixels the page already carries. */
+void wnd_gl_freeze(int frozen);
+int  wnd_gl_is_frozen(void);
 void wnd_gl_cover_add(const RECT *r);
 int  wnd_gl_cover_take(wnd_gl_cover *out);
 

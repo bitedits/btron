@@ -25,6 +25,11 @@
 # what the port sends is a [GSREAD] row rather than something to be looked at.  The
 # census replaces the run rather than joining it -- inside a GUI session the desktop
 # presents every frame and its uploads erase the blocks before the read sees them.
+#
+# BENCH_GS=6 takes the same census branch and adds LANE 21 rung 3a at its tail: one plate, uploaded
+# into a PSMCT16 display page and read back three times -- at 32 bits, at 16 with the GS's own
+# dither, at 16 without it.  Its verdict row says MEASURED only when the 16-bit page held the same
+# picture in the same box at half the quadwords, which is the gate rung 4 builds its second page on.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -73,7 +78,7 @@ kill -KILL "$VM" 2>/dev/null || true
 cp "$LOG" "$OUT"
 
 if grep -q '\[BENCH\]' "$LOG"; then
-    grep -E '\[BENCH\]|\[GSREAD\]|\[GSLIVE\]|\[GSTS\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
+    grep -E '\[BENCH\]|\[GSREAD\]|\[GSLIVE\]|\[GSTS\]|\[PW\]|\[PS2\] whole-canvas|\[PSTAT\]|\[MSX\]|\[FATAL\]' "$LOG"
     echo "----------------------------------------------------------"
     echo "[PS2-BENCH] full log: $OUT ($elapsed s)"
     exit 0

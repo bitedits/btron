@@ -44,6 +44,24 @@ static BOOL s_gl_pending = FALSE;
  * inherit it.  See wnd_gl_layer_rect(). */
 static RECT s_gl_rect_last = { 0, 0, 0, 0 };
 static WND *s_gl_rect_last_wnd;
+/* Task #165: the layer's one-paint-per-pass latch, and it is a LATCH and not a policy.
+ *
+ * A layer window is the only window in this walk whose staleness is not a fact about its image:
+ * `wnd_owes_callback()` gives it the callback whenever a band reaches it, because its picture is
+ * the stream the callback records and there is no pixmap to blit.  That is right for the band that
+ * carries the stream and wasteful for every later band of the same pass, which today re-records
+ * an identical stream and sends it again -- and it is why the latch has to outrank `img_valid`
+ * rather than sit beside it: an app that animates dirties its own client rect every frame, so an
+ * `img_valid` term would re-run the callback on a pass that just refused to afford it.  Only the
+ * presentation plane knows which passes already have a frame of this window on the page, so the
+ * decision lives there and this flag is the seam: a caller that has put the layer's frame on the GS
+ * -- or has decided this frame cannot pay for one -- raises it, and the rest of the walk behaves
+ * exactly as it would for a window whose image is valid.
+ *
+ * It is clear at boot and nothing outside the PS2 core's paint pass ever raises it, so every other
+ * target compiles the same two boolean tests into the same answer they always gave.  See
+ * wnd_gl_freeze(). */
+static BOOL s_gl_frozen = FALSE;
 static RECT s_gl_cover[WND_GL_COVER_MAX];
 static int s_gl_cover_n;
 static int s_gl_cover_dropped;
@@ -507,6 +525,25 @@ ER wnd_set_title(WND *wnd, const char *title) {
     return E_OK;
 }
 
+/* The one place that answers "does this window's callback have to run in this composite".
+ *
+ * Two different facts, and conflating them is what made a paint budget do nothing.  For a pixmap
+ * window staleness IS a fact about its image, so `img_valid` is the whole answer and the walk has
+ * always used it.  For a layer window it is not: its picture is the stream its callback records, the
+ * pixmap is never blitted, and the application dirties its own client rect every frame it animates
+ * -- so `img_valid` says "stale" on a pass where the page already carries a better picture than the
+ * one the callback would make.  A layer's schedule is therefore the PASS's, and the pass says it with
+ * `wnd_gl_freeze()`: raised either because this pass already sent the layer's stream (one recording
+ * per pass, however many bands reach it) or because the presentation plane decided the frame cannot
+ * afford a second one (the app keeps its last picture and the desktop takes the frame).
+ *
+ * Nothing outside the PS2 core's paint pass ever raises the freeze, so on every other target this
+ * reduces to the `!img_valid` it has always answered. */
+static BOOL wnd_owes_callback(const WND *w) {
+    if (!w->paint) return FALSE;
+    return w->gl_layer ? !s_gl_frozen : !w->img_valid;
+}
+
 /* TRUE when a composite over `damage` cannot be a pure pixmap blit. */
 BOOL wnd_damage_needs_paint(const RECT *damage) {
     if (!damage) return FALSE;
@@ -515,15 +552,17 @@ BOOL wnd_damage_needs_paint(const RECT *damage) {
         if (curr->bounds.right <= damage->left || curr->bounds.left >= damage->right ||
             curr->bounds.bottom <= damage->top || curr->bounds.top >= damage->bottom)
             continue;
-        /* A layer window's picture is not in any pixmap: it is the stream the paint callback
-         * records.  So a band that touches one has to re-run that callback even when
-         * img_valid says the client image is up to date -- which it will, every frame after
-         * the first, because the layer never blits and never re-uses what it drew. */
-        if (curr->img_valid && !curr->gl_layer) continue;
-        return TRUE;
+        if (wnd_owes_callback(curr)) return TRUE;
     }
     return FALSE;
 }
+
+/* Task #165's seam: see the comment on `s_gl_frozen`.  Set from a paint pass, cleared by the same
+ * pass before it ends; nothing else in the tree raises it, which is what lets the two tests above
+ * be free for every other target.  Reading it back is for the caller that has to decide whether a
+ * band it is about to composite is the one that owns the stream. */
+void wnd_gl_freeze(int frozen) { s_gl_frozen = frozen ? TRUE : FALSE; }
+int  wnd_gl_is_frozen(void) { return s_gl_frozen ? 1 : 0; }
 
 /* A visible layer window counts as invalid for both of these: its image is the GIF stream, not
  * the pixmap, and a band that overlaps it has to re-record the stream or it uploads a canvas
@@ -750,15 +789,13 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
         /* Staleness is a property of one window's image, not of the composite: the
          * walk's caller has already decided that some window in this band has to be
          * re-rendered, and repainting the valid ones with it cost 55 ms of every XMB
-         * frame on the PS2 ([XMBT] cycle's comp= column, doc/txt/PS2.txt).  A layer window is
-         * the exception the rule cannot cover: its picture exists only in the stream this
-         * callback records, so it is re-recorded every time a band reaches it.
-         *
-         * `records` is that exception named once, in the pass's own terms: it is both the
-         * decision to run the callback below and the reason the decoration may skip writing
-         * the rect the callback's stream will bury.  Reading it here rather than at the paint
-         * keeps the two from disagreeing about a window this band is about to draw. */
-        const BOOL must_repaint = wnd->gl_layer || !wnd->img_valid;
+         * frame on the PS2 ([XMBT] cycle's comp= column, doc/txt/PS2.txt).  A layer window
+         * is the exception the rule cannot cover, and `wnd_owes_callback()` is that exception
+         * stated once -- its picture is the stream, so its schedule belongs to the pass, not
+         * to a pixmap nobody blits from.  Reading it here rather than spelling the two terms
+         * again is what keeps this walk and `wnd_damage_needs_paint()` from disagreeing about
+         * a window this band is about to draw. */
+        const BOOL must_repaint = wnd_owes_callback(wnd);
         const BOOL records = !blit_only && wnd->paint && must_repaint &&
                              wnd->dev && wnd->dev->pixels;
 

@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
+        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
         test-xmb-render test-xmb-render-tgl \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -1064,6 +1064,24 @@ PS2_CFLAGS    += -DBTRON_PS2_FP_COUNT=$(PS2_FP_COUNT)
 # rule PS2_FP_COUNT states for its counters.  0 compiles the instrument out of the shipped image.
 PS2_IDENT       ?= 0
 PS2_CFLAGS    += -DBTRON_PS2_GS_IDENT=$(PS2_IDENT)
+# PS2_PW=1 is LANE 22 (task #165): the per-app paint worker.  It compiles the policy in
+# src/drivers/ps2/ps2_paint_worker.c and the seam that uses it in src/cores/core_ps2.c, so a pass can
+# run one window's paint callback once -- priced by what it cost last time, admitted only while the
+# frame's remaining slice can afford it, and forced through when the price would starve the app.
+# The claim is not parallelism: the Emotion EE has one main core, `sta_tsk()` is synchronous and
+# `slp_tsk()` is a no-op, so the only three wins available are fewer redundant callbacks, a bounded
+# pass, and a cost named per application.  Which of the three it actually buys is measured on the
+# [PW] rows and the `paint:`/`loop:` columns, and the answer is readable at run time rather than
+# baked in: `paintw 0|1` and Ctrl+O switch it on one image, so the operator A/B's the smoothness
+# themselves instead of rebuilding for it.  0 leaves the shipped image exactly as it was: the module
+# is not even linked (see PS2_PW_SRCS below), and the compositor path every other target shares is
+# untouched.
+PS2_PW          ?= 0
+ifeq (,$(filter $(PS2_PW),0 1))
+$(error PS2_PW=$(PS2_PW) is not 0 or 1)
+endif
+PS2_CFLAGS    += -DBTRON_PS2_PAINT_WORKER=$(PS2_PW)
+PS2_PW_SRCS     = $(if $(filter 1,$(PS2_PW)),src/drivers/ps2/ps2_paint_worker.c,)
 PS2_STARTUP    = src/cores/core_ps2.c
 # The termios-scope applications gterm hosts: Sokhatsky Commander and Terminal
 # Vision.  They sit in COMMON_SRCS, so the hosted targets have always had them and
@@ -1172,6 +1190,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  src/drivers/ps2/ps2_usb.c \
                  $(CLU_TERMIO_SRCS)       \
                  $(PS2_MSX_SRCS)          \
+                 $(PS2_PW_SRCS)           \
                  $(TINYGL_SRCS)           \
                  $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \
@@ -1278,6 +1297,21 @@ ifeq ($(PS2_MSX),1)
 PS2_CFLAGS    += -DBTRON_PS2_MSX=1
 endif
 
+# LANE 22's dial is a flag on two units and a source list on one, so it is the same staleness as
+# PS2_MSX in three places at once: core_ps2.c's seam compiles under it, the bench object is a second
+# compile of the same source, and ps2_paint_worker.ps2.o must not survive a switch to 0 as an object
+# no header declares any more -- which is what the image-budget ASSERT then charges for .bss nobody
+# references.  A switch to 1 removes nothing but itself: the leaf appears in PS2_SRCS by the same
+# $(filter) test.
+PS2_PW_STAMP = .build/ps2-pw.stamp
+PS2_PW_PREV := $(shell cat $(PS2_PW_STAMP) 2>/dev/null)
+ifneq ($(PS2_PW_PREV),$(PS2_PW))
+$(shell mkdir -p ./.build && echo '$(PS2_PW)' >$(PS2_PW_STAMP) && \
+        rm -f src/cores/core_ps2.ps2.o src/cores/core_ps2.pbench.o \
+              src/drivers/ps2/ps2_paint_worker.ps2.o)
+$(info [PS2] PS2_PW is now $(PS2_PW) (was $(if $(PS2_PW_PREV),$(PS2_PW_PREV),unset)) -- the paint worker's units will rebuild)
+endif
+
 # PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one
 # object is rebuilt with the define and the shipped btron-ps2.elf keeps its own
 # flags -- the artifact measured is not the artifact flashed.  scripts/ps2_bench.sh
@@ -1294,6 +1328,14 @@ BENCH_APP      ?= 0
 # the table's resolution; scripts/ps2_smooth.sh lowers it so a run ends at its
 # sentinel instead of at a harness timeout -- 60 frames of this app is 24 minutes.
 BENCH_APP_FRAMES ?= 60
+# Frames the launcher-by-key CYCLE phase asks for, which is the phase that ends the run at its own
+# sentinel (the frame hook injects Escape when this budget is spent, and the harness stops the
+# emulator at that sentinel).  It is 3 because the phase's question is "did the row open and draw",
+# not "what does a long run look like".  It is a dial because LANE 22's paint worker is judged on a
+# RATIO over many passes -- how often a frame refused the app, what it priced the refusal against --
+# and three passes cannot show a policy deciding.  `BENCH_LAUNCH_FRAMES=40` is what #165's
+# measurement uses.
+BENCH_LAUNCH_FRAMES ?= 3
 # BENCH_GS=1 makes the headless run the GS census instead of the desktop bench: the
 # Local->Host read-back (LANE 19 rung 2) is only honest at the Stage-1 console, because
 # the desktop's own presents erase the read blocks and its ring traffic makes a read
@@ -1304,13 +1346,26 @@ BENCH_APP_FRAMES ?= 60
 # phase's frame hook.  It therefore needs BENCH_APP=1 to have a window up, and it prints nothing
 # between its drawn control and its bands -- the console's own repaint is what the read's idle
 # precondition refuses.
+# BENCH_GS=6 takes the census branch again, and adds LANE 21 rung 3a to it: one plate uploaded into a
+# PSMCT16 display page and read back through VIF1, censused at 32 bits, at 16 with the GS's dither,
+# and at 16 without it.  It is a Stage-1 rung because it is a read of a page nothing else may be
+# writing -- inside a desktop session the present path uploads the same page between the plate and the
+# read, and the verdict row would describe a race instead of a format.
+# BENCH_GS=7 adds LANE 21 rung 4 to the same branch: the two-page rotation.  It dials PSMCT16, turns
+# the second page on, plates four colours across three passes, and censuses the page each flip claims
+# is now being scanned -- including the pass whose damage is one rect on a page that owes another,
+# which is the reading that fails if ps2_rot_owe() is removed.  Stage-1 for the same reason as 6: the
+# rotation is only measurable against a page no compositor is writing.  The flip's vsync wait and its
+# unaligned count print as their own labelled row and are NOT part of the verdict, because whether
+# PCSX2 raises CSR.VSYNC here is a fact about the emulator rather than about the rotation.
 BENCH_GS       ?= 0
 $(PS2_BENCH_OBJ): PS2_CFLAGS += -DBTRON_PS2_BENCH=1 -DBTRON_PS2_BENCH_APP=$(BENCH_APP) \
                                 -DBTRON_PS2_BENCH_APP_FRAMES=$(BENCH_APP_FRAMES)u \
+                                -DBTRON_PS2_BENCH_LAUNCH_FRAMES=$(BENCH_LAUNCH_FRAMES)u \
                                 -DBTRON_PS2_BENCH_GS=$(BENCH_GS)
 
 PS2_BGS_STAMP = .build/ps2-bgs.stamp
-PS2_BGS_KEY := $(BENCH_APP):$(BENCH_GS)
+PS2_BGS_KEY := $(BENCH_APP):$(BENCH_GS):$(BENCH_LAUNCH_FRAMES)
 PS2_BGS_PREV := $(shell cat $(PS2_BGS_STAMP) 2>/dev/null)
 ifneq ($(PS2_BGS_PREV),$(PS2_BGS_KEY))
 $(shell mkdir -p ./.build && echo '$(PS2_BGS_KEY)' >$(PS2_BGS_STAMP) && rm -f $(PS2_BENCH_OBJ))
@@ -1968,6 +2023,28 @@ $(TEST_GIFRING_BIN): $(TEST_GIFRING_OBJS) src/drivers/ps2/ps2_gif_ring.c \
                      src/drivers/ps2/ps2_gif_ring.h
 	@mkdir -p ./.build
 	$(CC) $(TEST_GIFRING_OBJS) -o $@ $(LDFLAGS)
+
+# Task #165: the per-app paint policy, gated on a machine with no compositor in it, in the shape
+# LANE 10's ring established.  The claims this module makes are all about states the shipped image
+# cannot conjure -- a frame whose remaining slice is smaller than one window's price, the same
+# window asked to paint by four bands in one pass, a job so expensive it would never be admitted
+# again -- and a policy that has only ever run inside a live paint pass has not been shown to
+# refuse anything.  The suite is #include-the-source again (PS2_PW_MAX 4 so capacity is reachable)
+# because the table is file-static and the whole law is who gets in and who does not.
+TEST_PAINTW_SRCS = verify/tests/test_ps2_paint_worker.c
+TEST_PAINTW_OBJS = $(TEST_PAINTW_SRCS:.c=.test.o)
+TEST_PAINTW_BIN  = ./.build/test_ps2_paint_worker
+
+test-ps2-paintw: $(TEST_PAINTW_BIN)
+	@echo "=========================================================="
+	@echo " Running PS2 #165: the per-app paint budget and dedup..."
+	@echo "=========================================================="
+	@./$(TEST_PAINTW_BIN)
+
+$(TEST_PAINTW_BIN): $(TEST_PAINTW_OBJS) src/drivers/ps2/ps2_paint_worker.c \
+                    src/drivers/ps2/ps2_paint_worker.h
+	@mkdir -p ./.build
+	$(CC) $(TEST_PAINTW_OBJS) -o $@ $(LDFLAGS)
 
 # The Makefile's `PS2_GL=` dial, measured against the rule it is supposed to drive.  The dial is
 # three -D flags and the rule is a preprocessor branch, so one binary compiled with one value of
@@ -2900,7 +2977,7 @@ $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_BOOT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

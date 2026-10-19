@@ -335,6 +335,74 @@ uint64_t gs_pack_trxreg(uint32_t w, uint32_t h);
 /* TRXDIR: INCD[1:0].  0 = Host->Local, 1 = Local->Host, 2 = Local->Local, 3 = deactivate. */
 uint64_t gs_pack_trxdir(uint32_t dir);
 
+/* ── Pixel formats: one canvas word into one page's halfword ─────────────────
+ *
+ * A 16-bit display page is the only way this port can hold two 800x600 frames AND its texture
+ * planes in the GS's 4 MB at once: a PSMCT16 page of the canvas's own buffer width is
+ * 832 x 600 x 2 = 998,400 bytes, and two of them are exactly the 1,996,800 bytes that
+ * ps2_gs_vram.h already reserves for the single CT32 page it displays today.  So the second
+ * frame costs no VRAM at all -- what it costs is a conversion, because a Host->Local IMAGE
+ * transfer sizes itself from the DESTINATION format (third_party/ps2sdk/ee/libgs/src/
+ * texture.c:27-47: two bytes a pixel when the destination is 16-bit) and the GS converts nothing
+ * on that path.  The sender has to hand it halfwords, which is what these two functions are.
+ *
+ * The halfword is 5551: R in bits 0..4, G in 5..9, B in 10..14, and one alpha bit at 15.  Two
+ * independent readings agree on it.  ps2tek's FRAME table names the formats that live at bits
+ * 24-29 (00h=PSMCT32, 01h=PSMCT24, 02h=PSMCT16, 0Ah=PSMCT16S) and adds, under FMSK, that "bit 63
+ * of FRAME will affect bit 15 (alpha bit) of a 16-bit color" -- the alpha bit's position, stated
+ * on its own.  And ps2sdk's write mask for such a page, GS_SET_FMSK16 at
+ * third_party/ps2sdk/common/include/gs_gp.h:213-216, puts R's five surviving bits at 32-bit bit 3,
+ * G's at 11, B's at 19 and alpha's single bit at 31: the top bit of each channel, first channel
+ * first -- which is the order the canvas's bytes already lie in. */
+
+/* One canvas word -> one PSMCT16 halfword.
+ *
+ * `canvas_word` is a pixel as it lies in RDRAM: 0xAABBGGRR, i.e. byte order R,G,B,A.  That is
+ * BTRON_PIXEL_FB()'s output and the GS's own 32-bit byte order at once, which is precisely why
+ * the CT32 upload has never needed a pass like this one.
+ *
+ * `dither` selects an ordered 4x4 dither at the phase (x mod 4, y mod 4); 0 truncates.  It is a
+ * parameter and not a constant because the page is censusable: the rung that puts the display on
+ * 16 bits checks the read-back page against THIS function applied to the canvas, so whichever law
+ * is in the model is the law the differential proves -- and the dial decides it, not a comment. */
+uint16_t gs_pack_5551(uint32_t canvas_word, uint32_t x, uint32_t y, uint32_t dither);
+
+/* A run of `n` canvas words into `n` halfwords, with the dither phase taken from the canvas
+ * position (x, y) of the run's FIRST pixel: two runs of one row then agree with each other, and
+ * with the GS's own DIMX phase, however the upload happened to chop the rectangle. */
+void gs_pack_5551_row(const uint32_t *src, uint16_t *dst, uint32_t n,
+                      uint32_t x, uint32_t y, uint32_t dither);
+
+/* One PSMCT16 halfword -> one canvas word, the other direction of the same law.
+ *
+ * This exists so a census of a 16-bit page can be read by the code that was written for a 32-bit
+ * one: `gsread` and the live-page comparison both index their buffer as uint32_t pixels and compare
+ * whole words, so the decode has to hand back 0xAABBGGRR again.  It cannot hand back the canvas's
+ * own bytes, because 5 bits of channel cannot carry 8 -- the expansion is the one that fixes the
+ * ends (0 -> 0x00, 31 -> 0xFF), which is what makes a full-scale primary round-trip exactly and
+ * therefore what the differential can assert without a tolerance.  A mid-scale channel does not come
+ * back exactly, and the honest statement is the measured bound rather than "close": truncated, at
+ * most 7 away (the three low bits leave and only the >>2 term returns); dithered, at most 11,
+ * because the matrix cell moves the 8-bit value by up to 4 before the shift and that is a whole
+ * stored step of 8.  verify/tests/test_ps2_gs_pack.c sweeps both -- all 256 values, all three
+ * channels, all sixteen phases -- and pins 7 and 11 as the worst errors it found.  These are
+ * properties of the format, not of this function. */
+uint32_t gs_unpack_5551(uint16_t half);
+
+/* Expand a `n`-pixel PSMCT16 image held in `buf` IN PLACE into `n` canvas words.
+ *
+ * The download's DMA writes halfwords, and every caller of it allocated a uint32_t image, so the
+ * buffer is exactly twice the size the packed picture needs and the expansion can land in it --
+ * provided it runs from the last pixel to the first.  Halfword `i` lives in word `i/2`, and the
+ * write goes to word `i`: for every `i` above 0 that is a word the loop has already left behind
+ * (2i > i, so halfwords 2i and 2i+1 were consumed on an earlier, higher iteration), and for `i`
+ * equal to 0 the read is the first thing that happens.  Run the same loop upward and word 1 is
+ * overwritten while it still holds halfwords 2 and 3, and the second half of the image decodes
+ * from pixels the expansion already ate.  verify/tests/test_ps2_gs_pack.c demonstrates both
+ * orders on one buffer, because a claim about an iteration direction is only worth what the
+ * falsifying control makes it worth. */
+void gs_unpack_5551_image(uint32_t *buf, uint32_t n);
+
 /* ── Stream assembly ───────────────────────────────────────────────────── */
 
 /* GIFTAG: NLOOP[14:0] EOP[15] ID[45:16] PRE[46] PRIM[57:47] FLG[59:58] NREG[63:60].

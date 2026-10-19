@@ -45,6 +45,12 @@
 
 #include "ps2_gs.h"
 #include "ps2_gif_ring.h"
+/* Task #165: the per-app paint policy.  Its own translation unit for the same reason LANE 10's ring
+ * has one -- the claims are about states a live pass cannot conjure (a slice smaller than one
+ * window's price, the same window asked twice in a pass, a job too expensive to ever be admitted),
+ * and a policy that has only ever run inside a paint pass has not been shown to refuse anything.
+ * The file declares no hardware and calls nothing; see its header for what it is for. */
+#include "ps2_paint_worker.h"
 #include "ps2_gs_tex.h"
 #include "ps2_gs_env.h"     /* LANE 19 rung 1: the `gsquad` probe programs the draw environment */
 #include "ps2_gs_vram.h"    /* ... and names the frame and depth pages in the units they take */
@@ -935,6 +941,125 @@ static void ps2_bandset_add(ps2_bandset_t *set, int x0, int x1, int y0, int y1)
     set->n++;
 }
 
+/* ── Per-page damage debt: the rotation LANE 21 rung 4 needs ──────────
+ *
+ * With one page there is one present and it carries the whole canvas, so a band set is
+ * thrown away the moment it has been drawn.  With two, the set describes the CANVAS, and
+ * a page only shows the canvas as of the last time it was plated.  A pass that damages D
+ * and paints D into the hidden page before flipping leaves the other page holding an
+ * older canvas: the next flip puts a frame that missed D on the screen, and the flicker
+ * this rung exists to remove comes back as a stale frame instead of a torn one.
+ *
+ * So each page remembers what the canvas did to it while it was hidden.  Three lines,
+ * in this order, and the order is the whole design:
+ *
+ *   owed[other] := owed[other] union D  -- D is the pass' OWN decision, before any debt
+ *   P           = D union owed[drawn]   -- what this pass has to plate
+ *   owed[drawn] := {}                   -- plated now
+ *
+ * The first line is the one that must not move.  Debt arriving through `owed` is a
+ * catch-up, not a change to the canvas, so the regions it covers must not be re-owed to
+ * the other page or the loop never converges: a full pass puts `full` in one page's debt,
+ * that page pays it as P=full, and re-owing P would put `full` back in the other page's
+ * debt forever -- every pass whole-canvas, which is worse than the single buffer it
+ * replaced.  Consuming the debt in the second line and clearing it in the third is what
+ * makes a forced-full pass cost exactly ONE extra full plate per page and return to
+ * banded.
+ *
+ * D here is the post-decision set -- the canvas whenever a force rule fired -- because a
+ * forced pass is the compositor saying "I do not know what else moved", and a restacked
+ * window is exactly a canvas change the other page has to be told about.
+ *
+ * owed[] is indexed by PAGE INDEX, not by "hidden", because the indices are what flip
+ * commits and what a census names -- gs_disp_drawn()/shown() say which is which now. */
+static ps2_bandset_t s_page_owed[GS_DISP_PAGES];
+
+/* Both pages owe the whole canvas.  Called whenever the page model changes under them --
+ * a format dial, a double-buffer dial, a session start -- because after any of those the
+ * pages hold content that does not describe the present, and the only fix is to plate
+ * both.  Costs exactly one extra full present per page, then decays. */
+static void ps2_rot_owe_all(void)
+{
+    for (unsigned i = 0u; i < GS_DISP_PAGES; i++) ps2_bandset_full(&s_page_owed[i]);
+}
+
+static void ps2_rot_clear(void)
+{
+    for (unsigned i = 0u; i < GS_DISP_PAGES; i++) {
+        s_page_owed[i].n = 0u;
+        s_page_owed[i].overflow = 0;
+    }
+}
+
+/* Fold the damage `d` into the debt of the page that is about to be hidden.  Takes D and
+ * not P: see the law above.  A debt that cannot be held in PS2_BAND_MAX bands is not
+ * dropped, it is a full page -- the same rule ps2_bandset_add() applies to live damage. */
+static void ps2_rot_owe(uint32_t other, const ps2_bandset_t *d)
+{
+    ps2_bandset_t *o = &s_page_owed[other % GS_DISP_PAGES];
+
+    if (d->overflow || !d->n) {
+        if (d->overflow) ps2_bandset_full(o);
+        return;
+    }
+    for (unsigned i = 0u; i < d->n; i++)
+        ps2_bandset_add(o, d->b[i].x0, d->b[i].x1, d->b[i].top, d->b[i].end);
+    if (o->overflow) ps2_bandset_full(o);
+}
+
+/* The page being drawn now has been plated: fold its debt into `set` and clear it.
+ * Returns 1 when it merged anything, 0 when the page owed nothing and `set` is exactly
+ * the damage it was.  Whether the pass has something to present is not this function's
+ * question -- the caller's `if (!set.n)` already answers that, and it answers it AFTER
+ * this call, which is the point: a pass with no new damage but a page in debt must paint
+ * and flip, and a pass with neither must not flip an unplated page. */
+static int ps2_rot_take(uint32_t page, ps2_bandset_t *set)
+{
+    ps2_bandset_t *o = &s_page_owed[page % GS_DISP_PAGES];
+
+    if (o->overflow) ps2_bandset_full(o);
+    if (!o->n) return 0;
+
+    for (unsigned i = 0u; i < o->n; i++)
+        ps2_bandset_add(set, o->b[i].x0, o->b[i].x1, o->b[i].top, o->b[i].end);
+    if (set->overflow) ps2_bandset_full(set);
+    o->n = 0u;
+    o->overflow = 0;
+    return 1;
+}
+
+/* How many bands a page owes -- and 1 is not the whole answer, since a page that owes the
+ * canvas is one band too.  Read by the `page` row: a desktop that is not flipping, or a merge
+ * that keeps re-owing, shows up here as debt that never drains, which is the failure this
+ * rotation could have and a log full of good frames would not say. */
+static int ps2_rot_debt(uint32_t page)
+{
+    const ps2_bandset_t *o = &s_page_owed[page % GS_DISP_PAGES];
+    if (o->overflow) return -1;
+    if (o->n == 1u && ps2_band_is_full(&o->b[0])) return -1;   /* the canvas, in one band */
+    return (int)o->n;
+}
+
+/* One rotation step, in the order the law above needs it: the pass' own decision goes to the
+ * page about to be hidden, and that page's debt is folded INTO the set about to be plated.  It
+ * returns 1 when it merged a catch-up, which is the bit the [CYCLE] row prints.
+ *
+ * A function rather than three calls at the site, because the bench phase has to drive the same
+ * three calls in the same order to measure the rotation at all -- the headless census run has no
+ * desktop to compose -- and two copies of a union's order is the one way this law could be
+ * established by a test that does not describe the shipped path.  With the page model off this is
+ * a no-op that returns 0, which is what makes it safe to call from a pass that does not know. */
+static int ps2_rot_step(ps2_bandset_t *set)
+{
+    uint32_t drawn, other;
+
+    if (!gs_disp_is_double()) return 0;
+    drawn = gs_disp_drawn()->index;
+    other = gs_disp_shown()->index;
+    ps2_rot_owe(other, set);
+    return ps2_rot_take(drawn, set);
+}
+
 /* Dual-output console character emitter (SIO0 UART + GS Framebuffer Text) */
 static void ps2_console_putc(char c)
 {
@@ -1198,6 +1323,8 @@ typedef struct {
 #define PS2_CYCLE_WHY_TIP     32u    /* the IME converting or showing candidates */
 #define PS2_CYCLE_WHY_OVERFLOW 64u   /* more damage than PS2_BAND_MAX bands hold */
 #define PS2_CYCLE_WHY_MERGED  128u   /* band 0 already spanned the canvas, no rule fired */
+#define PS2_CYCLE_WHY_ROTATE  256u   /* rung 4: the band set grew because a page owed a catch-up */
+#define PS2_CYCLE_WHY_PAINTW  512u   /* #165: the pass deferred the app's frame on its own price */
 
 static ps2_cycle_t s_cycle;
 
@@ -2168,6 +2295,114 @@ static void ps2_upload_canvas(int x0, int y0, int x1, int y1, const RECT *hole, 
     ps2_upload_piece((hx1 + 3) & ~3, hy0, x1, hy1, stream, why);
 }
 
+/* ── Task #165: the paint worker, in the compositor's own terms ──────────────────────
+ * The policy is in src/drivers/ps2/ps2_paint_worker.{h,c}; what lives here is the handshake, and
+ * the two claims it can actually make on this machine.
+ *
+ * First, what this is NOT: there is no scheduler here.  `sta_tsk()` runs an app's body on the
+ * caller's stack and `slp_tsk()` is a no-op (see the task-layer comment further down this file), the
+ * EE has one core, and the app's body only ever invalidates its window -- the compositor paints.  So
+ * "offload painting to a per-app worker" cannot mean "in parallel", and anything that claimed it did
+ * would be a word, not a feature.  What a worker CAN mean on a single core is the two things the
+ * compositor currently does not do for a GS layer:
+ *
+ *   (1) ONE paint per pass.  A layer window is exempt from the staleness rule that makes every
+ *   other window paint once and get blited after that -- `must_repaint` gives it the callback
+ *   whenever a band reaches it, because its picture is the stream rather than a pixmap.  On a pass
+ *   whose damage splits into four bands and crosses the client, that is four identical XMB frames
+ *   recorded, four streams staged, and four of them SENT.  The latch that fixes this is
+ *   `wnd_gl_freeze()`: raised once the pass's first stream is on the page, and the rest of the walk
+ *   treats the layer like a window whose image is valid.  Its rect is still cut out of every later
+ *   canvas upload by `wnd_gl_layer_rect()`, which is built to answer on a pass that did not
+ *   re-record, so the pixels the callback would have drawn are pixels the page already carries.
+ *
+ *   (2) A PRICE, and a frame that can refuse it.  Each window's paint is timed (this pass's render
+ *   bracket is the whole of it) and folded into an estimate of the next one's cost.  A pass asks
+ *   before it composites, and if the frame's remaining slice cannot afford the app's frame, the
+ *   app's frame is not painted this pass -- the desktop keeps moving, the pointer keeps moving, and
+ *   the application shows its last picture.  The starve override in the policy module is what makes
+ *   that safe rather than a way to make a window disappear: an age the slice cannot explain forces
+ *   the admission, and `forced=` counts it.
+ *
+ * The slice is `ui_period_us` minus what this pass has already spent (dispatch, the band decision)
+ * minus what a present of this shape usually costs on the bus (the EWMA of the last passes' upload
+ * column, which the worker does not control).  It is deliberately a rough number: the question is
+ * "can this frame afford an XMB repaint", and the answer only has to be wrong by less than a frame.
+ *
+ * Compiled only with `PS2_PW=1`.  With the dial at 0 none of this is in the image -- the module is
+ * not linked, the freeze is never raised, and the present path is the one every measurement in the
+ * book was taken with. */
+#if BTRON_PS2_PAINT_WORKER
+static int      s_pw_on;            /* the runtime arm; seeded at session entry from the dial */
+static uint32_t s_pw_upload_us;     /* EWMA of the pass's own bus column, the unschedulable part */
+static const void *s_pw_layer;      /* the window this pass asked about, or NULL */
+static int      s_pw_recorded;      /* a band of THIS pass has already sent the layer's stream */
+static uint32_t s_pw_passes;        /* passes planned, for the row's own rate */
+static uint32_t s_pw_defer_passes;  /* of those, the passes that refused the app */
+
+static void ps2_pw_row(const ps2_pw_stats_t *p, int taken);
+
+/* The one place the freeze is raised or cleared, so a pass that leaves it standing cannot make the
+ * next one skip the app forever. */
+static void ps2_pw_freeze(int frozen)
+{
+    if (!frozen) s_pw_recorded = 0;
+    wnd_gl_freeze(frozen);
+}
+
+static uint32_t ps2_pw_us(uint32_t t0, uint32_t t1)
+{
+    const uint32_t tpu = btron_ee_ticks_per_us();
+    return (s_timebase_ok && tpu) ? (t1 - t0) / tpu : 0u;
+}
+
+/* Decide this pass before its first band runs: how much of the frame is still unspent, whether the
+ * layer's next frame fits in it, and how many bands would otherwise have recorded the same frame.
+ * Called from ps2_gui_pass() with the band set already final, including rung 4's catch-up bands. */
+static void ps2_pw_plan(const ps2_bandset_t *set, uint32_t spent_us)
+{
+    RECT   r;
+    WND   *l;
+    uint32_t touch = 0u, slice;
+    unsigned i;
+    const uint32_t now = btron_render_perf_us();
+    const uint32_t period = btron_planes()->ui_period_us;
+
+    ps2_pw_freeze(0);
+    s_pw_layer = NULL;
+    s_pw_passes++;
+    if (!s_pw_on) return;
+
+    l = wnd_gl_layer();
+    if (!l || !wnd_gl_layer_rect(&r)) return;      /* no app on the page: nothing to schedule */
+
+    for (i = 0; i < set->n; i++) {
+        const ps2_band_t *b = &set->b[i];
+        if (b->end <= r.top || b->top >= r.bottom) continue;
+        if (b->x1 <= r.left || b->x0 >= r.right) continue;
+        touch++;
+    }
+    if (!touch) return;                            /* this pass's damage misses the client */
+
+    slice = spent_us + s_pw_upload_us < period ? period - spent_us - s_pw_upload_us : 0u;
+    ps2_pw_pass_begin(slice, now);
+    if (ps2_pw_ask(l, 1, now) == PS2_PW_PAINT) {
+        s_pw_layer = (const void *)l;
+        /* Claim (1), counted where it happens: the bands after the one that records the stream. */
+        if (touch > 1u) ps2_pw_credit(touch - 1u);
+    } else {
+        /* Claim (2): nothing in this pass re-records, so the walk takes its blit path everywhere
+         * and the canvas upload keeps the client cut out.  The page shows the app's last frame. */
+        ps2_pw_freeze(1);
+        s_pw_defer_passes++;
+        ps2_cycle_why(PS2_CYCLE_WHY_PAINTW);
+    }
+}
+
+void ps2_shell_paintw(const char *arg);
+static void ps2_pw_apply(uint32_t on);   /* beside the prompt command that reads the same counters */
+#endif /* BTRON_PS2_PAINT_WORKER */
+
 static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int full,
                              uint32_t *r_us, uint32_t *s_us, uint32_t *u_us)
 {
@@ -2531,6 +2766,21 @@ static void ps2_paint_region(GDEV *screen, int x0, int y0, int x1, int y1, int f
     } else {
         *r_us = *s_us = *u_us = 0u;
     }
+
+#if BTRON_PS2_PAINT_WORKER
+    /* #165: the app's frame is priced by the band that actually put it on the page, and that band
+     * is the only one this pass is allowed to be.  `gs_layer` is the strongest true thing available
+     * here -- a stream went out, so the client now holds this frame's pixels -- and `*r_us` is the
+     * render bracket, i.e. the composite that ran the callback, which is the cost the policy is
+     * being asked to predict.  Raising the latch is what stops the next band recording the same
+     * frame a second time; it is cleared at the end of the pass by ps2_pw_freeze(0). */
+    if (s_pw_on && gs_layer && !s_pw_recorded && s_pw_layer &&
+        (const void *)wnd_gl_layer() == s_pw_layer) {
+        s_pw_recorded = 1;
+        ps2_pw_done(s_pw_layer, *r_us, btron_render_perf_us());
+        ps2_pw_freeze(1);
+    }
+#endif
 }
 
 static void ps2_paint_bands(GDEV *screen, const ps2_bandset_t *set,
@@ -2849,6 +3099,9 @@ static void ps2_shell_char(int c);
 /* Defined with the pointer statistics it prints, below ps2_paint_print(). */
 static void ps2_ptr_chord(uint32_t key);
 
+/* Defined beside the `page` dial that reads and writes it, below ps2_shell_page()'s preamble. */
+static int ps2_page_double_apply(uint32_t on);
+
 /* ── Keyboard Auto-Repeat ───────────────────────────────────────── */
 
 /* The three numbers this reads are not this port's invention: they are the ones
@@ -3031,6 +3284,32 @@ void ps2_usb_on_key(uint32_t btron_key, int down, uint8_t mod)
         ps2_ptr_chord(btron_key);
         return;
     }
+    /* Ctrl+P turns LANE 21 rung 4's two-page present on and off, in the desktop, on the live
+     * image.  It is here rather than only at the prompt because the question rung 4 answers is
+     * "is the flicker gone", and a question about a flicker has to be answerable while the
+     * flicker is happening: leaving the desktop to type `page double 1` ends the very frame
+     * sequence whose smoothness is being judged, and coming back repaints the canvas cold.  One
+     * chord, one keystroke between the two pictures, and the operator is the instrument.
+     *
+     * It is a chord and not a bare letter for the same reason Ctrl+Q is: a terminal window binds
+     * what its owner types. */
+    if (s_gui_active && down && btron_key == 'p' && (mod & PS2_MOD_CTRL) != 0u) {
+        ps2_page_double_apply(gs_disp_is_double() ? 0u : 1u);
+        return;
+    }
+#if BTRON_PS2_PAINT_WORKER
+    /* Ctrl+O arms and disarms task #165's paint worker, in the desktop, on the live image, for the
+     * same reason Ctrl+P exists: the question it answers is "does the app animate as smoothly when
+     * the compositor is choosing whether to paint it", and that is a picture, not a log line.  One
+     * image carries both behaviours; the compile-time `PS2_PW=1` is what puts the choice in it.
+     *
+     * With the dial at 0 at build time this chord does not exist and Ctrl+O reaches the window under
+     * the pointer like any other key, which is what keeps the shipped image's input plane alone. */
+    if (s_gui_active && down && btron_key == 'o' && (mod & PS2_MOD_CTRL) != 0u) {
+        ps2_pw_apply(s_pw_on ? 0u : 1u);
+        return;
+    }
+#endif
     if (s_gui_active) {
         ps2_inject_key((UW)btron_key, down);
         /* Armed only for a key that was actually routed: the chords swallowed above are
@@ -4301,10 +4580,15 @@ static void ps2_log_usb_state(int stage)
 #define GS8_VERTEX    0xffffffffu  /* R=G=B=A=255: modulate by 1, so a textured fragment == its texel */
 
 /* The drawing environment both Stage-1 GS verbs program, and the one place in this core that names
- * the displayed page for a draw.  Frame page 0 at the width the PCRTC reads it with -- the same page
- * eegs_present.c presents and the same one ps2_gs_vram_read() takes its census out of, which is the
- * point: a rect that reaches VRAM somewhere other than where the screen is reading is a rect nobody
- * sees.  The depth page is the top page of the 4 MB, which TEST=0 and ZMSK=1 leave untouched but
+ * the displayed page for a draw.  The page comes from gs_disp_shown() -- the page the PCRTC is
+ * reading -- because these verbs are a closed pair: `gsquad` draws and `gsread` censuses, and the
+ * census reads whatever ps2_gs_vram_read() has been pointed at, which is the shown page too.  Draw
+ * and read agreeing under any value of LANE 21's dials is the property; today both are page 0 in
+ * CT32, so this is the same word the literals made.  It is deliberately NOT gs_disp_drawn(), the
+ * writer's page eegs_present.c uses: once rung 4 puts production on the hidden page, a probe that
+ * drew there would be censused as black, because nothing would have flipped to show it.
+ *
+ * The depth page is the top page of the 4 MB, which TEST=0 and ZMSK=1 leave untouched but
  * which still has to hold a format the hardware accepts.  win_x/win_y are 0 so an absolute vertex
  * lands exactly where it says, and the scissor is the whole canvas so nothing about a rect's survival
  * can be blamed on the clip.  ALPHA and TEST are clear: the blend and depth stages are bypassed, a
@@ -4313,9 +4597,11 @@ static void ps2_log_usb_state(int stage)
  * environment that differs from the draw it censuses is reading a page nobody painted. */
 static void ps2_stage1_gs_env(gs_draw_env *env)
 {
-    env->frame_byte  = 0u;
-    env->frame_px_w  = (uint32_t)PS2_SCREEN_WIDTH;
-    env->frame_psm   = GS_PSM_CT32;
+    const gs_disp_page_t *pg = gs_disp_shown();
+
+    env->frame_byte  = pg->byte;
+    env->frame_px_w  = pg->fbw * 64u;
+    env->frame_psm   = pg->psm;
     env->frame_fmsk  = 0u;
     env->zbuf_byte   = GS_VRAM_BYTES - GS_PAGE_FRAME;
     env->zbuf_psm    = GS_PSMZ32;
@@ -4496,6 +4782,7 @@ static const char *gsread_bus_name(gs_read_bus_err e)
     case GS_READ_BUS_E_STR:    return "block-never-finished";
     case GS_READ_BUS_E_FINISH: return "no-finish-receipt";
     case GS_READ_BUS_E_FIFO:   return "vif-fifo-never-drained";
+    case GS_READ_BUS_E_PAGE:   return "page-not-decodable";
     default:                   return "data-never-finished";
     }
 }
@@ -4515,6 +4802,32 @@ static const char *gsread_law_name(gs_read_err e)
     }
 }
 
+/* What the page being scanned answers for a canvas word.
+ *
+ * A census compares whole 32-bit words, and on a PSMCT16 display page the word that comes back is
+ * the expansion of five bits per channel, not the word the CPU wrote: the full-scale primaries are
+ * exact both ways -- which is why RED, BLUE, CYAN, MAGENTA, GREEN and YELLOW have always matched --
+ * but the console's navy is not (its green field is 0x1B, and 27 of 8 bits becomes 24 of 5 then
+ * 24 again), and neither are ORANGE or VIOLET.  Asking a half-width page for the canvas's own words
+ * would count a correctly-drawn screen as `other=` and report a broken screen where the expectation
+ * is what broke, so every expectation goes through here.  On a 32-bit page -- the default, and the
+ * shipped path -- this is the identity.
+ *
+ * The phase is x=0,y=0 because the dither matrix's cell there is 4, the value the no-dither branch
+ * uses, so the answer is the plain truncation and the centre of the spread rather than one of its
+ * edges.  A dithered page does NOT hold one word across a flat field: ±4 around the centre tips
+ * some of the sixteen phase cells into the neighbouring 5-bit value, so on a 16-bit page with the
+ * dither on, `navy=` counts the pixels that land on the centre phase and the rest show up as
+ * `other=` of a colour one step away.  That is what an error-diffused 16-bit background is, and
+ * `page dither 0` is the dial that removes it when the number has to mean pixels. */
+static uint32_t gsread_expect(uint32_t canvas_word)
+{
+    const gs_disp_page_t *pg = gs_disp_shown();
+
+    if (pg == NULL || pg->bytes_pp != 2u) return canvas_word;
+    return gs_unpack_5551(gs_pack_5551(canvas_word, 0u, 0u, ps2_gs_dither()));
+}
+
 /* One strip out of page 0 and one row about it.  The fields are stored into *out one at a time rather
  * than by assigning a finished struct: a struct assignment in a hard-float TU of this port has put
  * sdc1/ldc1 -- illegal on the R5900 -- into the image before, and `make test-ps2` is what catches it.
@@ -4525,6 +4838,11 @@ static void ps2_gsread_strip(const char *label, int y, uint32_t want,
     uint32_t i;
     uint32_t t0;
     int32_t got;
+
+    /* Asked in canvas words, compared in the page's own: see gsread_expect().  The row below prints
+     * this transformed value, so a `want=` on a 16-bit page is the number the read can actually
+     * match rather than the one the canvas holds. */
+    want = gsread_expect(want);
 
     for (i = 0; i < n; i++) buf[i] = GSREAD_SENT;
 
@@ -4656,6 +4974,22 @@ static void gsread_page_census(uint32_t *buf, uint32_t navy, gsread_page_t *o)
     const uint32_t height = (uint32_t)PS2_SCREEN_HEIGHT;
     uint32_t y_start, i, total = 0u;
     uint32_t t0;
+    /* The nine references, asked in the page's own words.  gsread_expect() is the identity on a
+     * 32-bit page -- the default, and every run that has ever printed these rows -- and on a 16-bit
+     * one it is the decode the read performs, so `navy=`/`orange=` count what the census can match
+     * instead of what the canvas holds. */
+    uint32_t exp_red, exp_blue, exp_cyan, exp_magenta, exp_green, exp_yellow;
+    uint32_t exp_orange, exp_violet;
+
+    navy = gsread_expect(navy);           /* the caller handed us the canvas's word */
+    exp_red = gsread_expect(GSQUAD_RED);
+    exp_blue = gsread_expect(GSQUAD_BLUE);
+    exp_cyan = gsread_expect(GSQUAD_CYAN);
+    exp_magenta = gsread_expect(GSQUAD_MAGENTA);
+    exp_green = gsread_expect(GSQUAD_GREEN);
+    exp_yellow = gsread_expect(GSQUAD_YELLOW);
+    exp_orange = gsread_expect(GSQUAD_ORANGE);
+    exp_violet = gsread_expect(GSQUAD_VIOLET);
 
     o->navy = 0u; o->sent = 0u; o->text_other = 0u; o->below_other = 0u;
     o->red = 0u;  o->blue = 0u;  o->first_below = 0u;
@@ -4697,14 +5031,14 @@ static void gsread_page_census(uint32_t *buf, uint32_t navy, gsread_page_t *o)
             if (v == GSREAD_SENT)    { o->sent++; continue; }
             x = i % width;
             y = y_start + i / width;
-            if (v == GSQUAD_RED)  { o->red++;  gsread_box(o->red_box, x, y);   continue; }
-            if (v == GSQUAD_BLUE) { o->blue++; gsread_box(o->blue_box, x, y);  continue; }
-            if (v == GSQUAD_CYAN)    { o->cyan++;    gsread_box(o->cyan_box, x, y);    continue; }
-            if (v == GSQUAD_MAGENTA) { o->magenta++; gsread_box(o->magenta_box, x, y); continue; }
-            if (v == GSQUAD_GREEN)   { o->green++;   gsread_box(o->green_box, x, y);   continue; }
-            if (v == GSQUAD_YELLOW)  { o->yellow++;  gsread_box(o->yellow_box, x, y);  continue; }
-            if (v == GSQUAD_ORANGE)  { o->orange++;  gsread_box(o->orange_box, x, y);  continue; }
-            if (v == GSQUAD_VIOLET)  { o->violet++;  gsread_box(o->violet_box, x, y);  continue; }
+            if (v == exp_red)   { o->red++;     gsread_box(o->red_box, x, y);   continue; }
+            if (v == exp_blue)  { o->blue++;    gsread_box(o->blue_box, x, y);  continue; }
+            if (v == exp_cyan)    { o->cyan++;    gsread_box(o->cyan_box, x, y);    continue; }
+            if (v == exp_magenta) { o->magenta++; gsread_box(o->magenta_box, x, y); continue; }
+            if (v == exp_green)   { o->green++;   gsread_box(o->green_box, x, y);   continue; }
+            if (v == exp_yellow)  { o->yellow++;  gsread_box(o->yellow_box, x, y);  continue; }
+            if (v == exp_orange)  { o->orange++;  gsread_box(o->orange_box, x, y);  continue; }
+            if (v == exp_violet)  { o->violet++;  gsread_box(o->violet_box, x, y);  continue; }
             if (y < GSREAD_TEXT_ROWS) { o->text_other++; continue; }
             if (o->below_other == 0u) o->first_below = v;
             o->below_other++;
@@ -5800,6 +6134,243 @@ void ps2_shell_gsstat(void)
                 "screen does not have.\n");
 }
 
+/* `page` -- LANE 21's display-page dial: what format the canvas's VRAM page is in, and (rung 4's
+ * half of it) whether two of them alternate.
+ *
+ * Runtime rather than build-time because every question it answers is a picture, and the only
+ * honest way to compare two pictures is to change one thing and look: the operator flips between
+ * PSMCT32 and PSMCT16 in one session, on one image, and says which one is flickering-free, which
+ * is worth more than any number of builds made with a different flag.  A build-time dial would
+ * also have been stale by the time it was read -- see the memory note "PS2_GL stamp reset by ANY
+ * make" -- and `page` cannot be stale, because it reads the live configuration back.
+ *
+ * What it does NOT do is re-derive the CRT timing.  Changing a page's format changes one register
+ * pair, DISPFB1/2's PSM field, and the bytes of the page itself; SMODE1 is the same 720p timing
+ * whatever the canvas is stored as.  So the store goes through ps2_gs_dispfb_store() and the
+ * canvas goes out whole, because the old page's bytes are this format's noise.
+ *
+ * `double` is the other half of this dial, and it is the half that cannot be applied blindly.
+ * Turning the page model on moves every writer -- including ps2_gs_text_flush(), which is how the
+ * Stage-1 prompt puts its own characters on the screen -- onto the page nobody is scanning, and
+ * nothing flips it back.  A session that ran `page double 1` at the prompt would be a console that
+ * takes commands and never shows an echo.  So the model is a COMPOSITOR present policy: this is the
+ * dial, ps2_page_double_apply() is the single place that touches the hardware, and it runs at GUI
+ * session entry -- where ps2_gui_pass() exists to do the flipping the dial promises -- and again at
+ * session exit.  Setting it at the prompt is remembered and applied the moment a desktop starts,
+ * which is also when the operator can see whether it worked. */
+static uint32_t s_page_double_wanted;
+
+/* Returns 1 when the page model is now `on`.  Refuses -- by name, with the dial that fixes it --
+ * when the format has no second page inside the display reservation, which is PSMCT32's answer and
+ * the one thing an operator at a serial console cannot see for themselves. */
+static int ps2_page_double_apply(uint32_t on)
+{
+    if (gs_disp_is_double() == (on ? 1u : 0u)) { s_page_double_wanted = on; return (int)on; }
+    if (gs_disp_set_double(on) != 0) {
+        if (on) ps2_kprintf("[PAGE] double refused at %s: a second page would run past the display "
+                            "reservation into the texture planes.  `page 16` first -- two 16-bit "
+                            "pages are exactly the space one 32-bit page takes.\n",
+                            gs_disp_psm() == GS_PSM_CT16 ? "PSMCT16" : "PSMCT32");
+        return 0;
+    }
+    s_page_double_wanted = on;
+    /* Both pages now hold content that does not describe this present: one is what DISPFB points at,
+     * the other has never been written (or was written in the format just left behind).  Owed in
+     * full they are plated in two passes, and the rotation is banded from there. */
+    if (on) ps2_rot_owe_all();
+    ps2_gs_dispfb_store();
+    ps2_kprintf("[PAGE] double=%u: drawing page %u, showing page %u.  A present now plates the page "
+                "nobody is scanning and flips at the frame boundary; what each page owes while it is "
+                "hidden travels with it.\n",
+                (unsigned int)on, (unsigned int)gs_disp_drawn()->index,
+                (unsigned int)gs_disp_shown()->index);
+    return (int)on;
+}
+
+void ps2_shell_page(const char *arg)
+{
+    const gs_disp_page_t *shown = gs_disp_shown();
+    const gs_disp_page_t *drawn = gs_disp_drawn();
+    uint32_t changed = 0u;
+
+    if (arg == 0 || *arg == 0) {
+        /* The question also answers itself, in the units the registers use. */
+    } else if (tkl_strcmp(arg, "16") == 0 || tkl_strcmp(arg, "ct16") == 0) {
+        changed = gs_disp_set_psm(GS_PSM_CT16) == 0 ? 1u : 0u;
+        if (!changed) ps2_kprintf("[PAGE] PSMCT16 refused: gs_disp_page_span() cannot lay a page out "
+                                  "in it.  Nothing changed.\n");
+    } else if (tkl_strcmp(arg, "32") == 0 || tkl_strcmp(arg, "ct32") == 0) {
+        changed = gs_disp_set_psm(GS_PSM_CT32) == 0 ? 1u : 0u;
+        if (!changed) ps2_kprintf("[PAGE] PSMCT32 refused.  Nothing changed.\n");
+    } else if (tkl_strncmp(arg, "dither", 6) == 0) {
+        const char *v = arg + 6;
+        while (*v == ' ') v++;
+        if (*v == '1') { ps2_gs_set_dither(1u); changed = 1u; }
+        else if (*v == '0') { ps2_gs_set_dither(0u); changed = 1u; }
+        else ps2_kprintf("[PAGE] dither takes 0 or 1: 1 is the ordered 4x4, 0 truncates.\n");
+    } else if (tkl_strncmp(arg, "double", 6) == 0) {
+        /* Rung 4's half of this dial, and it is live for exactly one reason: the flicker is a
+         * picture, and the only instrument that can tell a torn frame from a stale one is the
+         * operator's monitor.  Being able to turn the two-page present on and off WITHOUT a rebuild
+         * is what makes that a question with an answer, so the same image carries both.
+         *
+         * Applying it here, mid-session, is safe and is what makes an A/B possible, because
+         * ps2_gui_pass() re-reads gs_disp_is_double() every pass: the desktop's next present is a
+         * flip.  At the prompt it is a promise kept later -- see the comment above ps2_shell_page(). */
+        const char *v = arg + 6;
+        while (*v == ' ') v++;
+        if (*v == '1') ps2_page_double_apply(1u);
+        else if (*v == '0') ps2_page_double_apply(0u);
+        else ps2_kprintf("[PAGE] double takes 0 or 1: 1 draws the hidden page and flips at vsync, "
+                    "0 is the single-buffer present that flickers.\n");
+    } else {
+        ps2_kprintf("[PAGE] usage: page [32|16|dither 0|1|double 0|1]\n");
+    }
+
+    if (changed) {
+        /* Re-point the CRT at the page as it now is, then re-plate the whole canvas into it: half
+         * the bytes of the picture it held are now a different picture's pixels, and no band of the
+         * normal present would rewrite the rest.  A GUI session then needs a full damage rect,
+         * because its canvas is only re-composited where something was invalidated, and the GS
+         * layer's ink lives in the stream, which the next present re-sends over the whole client. */
+        ps2_gs_dispfb_store();
+        ps2_gs_flush();
+        /* Both pages' bytes are now this format's noise, so both owe the canvas -- see the law above
+         * ps2_rot_owe_all().  Without this a rotation that survived the dial would keep presenting
+         * one page's stale pixels and calling it a frame. */
+        ps2_rot_owe_all();
+        if (s_gui_active) {
+            /* Fields one at a time, as this file's rule for a hard-float TU says: a struct move here
+             * is what put sdc1/ldc1 -- illegal on the R5900 -- into the image before. */
+            RECT full;
+            full.left = 0; full.top = 0;
+            full.right = (H)PS2_SCREEN_WIDTH; full.bottom = (H)PS2_SCREEN_HEIGHT;
+            wnd_inval_damage_rect(&full);
+        }
+        shown = gs_disp_shown();
+        drawn = gs_disp_drawn();
+    }
+
+    ps2_kprintf("[PAGE] psm=%s (%u bytes/px, %u px/qword) shown=%u@0x%x drawn=%u@0x%x fbw=%u "
+                "page=%u B\n",
+                gs_disp_psm() == GS_PSM_CT16 ? "PSMCT16" :
+                gs_disp_psm() == GS_PSM_CT32 ? "PSMCT32" : "other",
+                (unsigned int)shown->bytes_pp, (unsigned int)shown->px_per_qw,
+                (unsigned int)shown->index, (unsigned int)shown->byte,
+                (unsigned int)drawn->index, (unsigned int)drawn->byte,
+                (unsigned int)shown->fbw, (unsigned int)shown->bytes);
+    ps2_kprintf("[PAGE] 16-bit packer dither=%s  double=%u  vram_left=%u\n",
+                ps2_gs_dither() ? "4x4 ordered" : "off (truncate)",
+                (unsigned int)gs_disp_is_double(),
+                (unsigned int)gs_tex_vram_left());
+    /* The flip's own three numbers, and the middle one is the reason they are printed: a flip
+     * whose vsync wait timed out lands its DISPFB store at an unknown point of the raster, which
+     * is a torn frame with a good-looking log behind it.  `unaligned` non-zero says PCSX2's GS is
+     * not raising the bit this port polls, and that is a different bug from a flicker.
+     *
+     * `owed` is the rotation's health, and -1 means the canvas: a pass whose present is a catch-up
+     * pays it and clears it, so debt that never drains is either a merge rule gone wrong or a
+     * compositor that is not flipping at all. */
+    ps2_kprintf("[PAGE] flips=%u  unaligned=%u  longest wait=%u us  owed: p0=%d p1=%d\n",
+                (unsigned int)ps2_gs_flip_count(),
+                (unsigned int)ps2_gs_flip_unaligned(),
+                (unsigned int)ps2_gs_flip_wait_max_us(),
+                ps2_rot_debt(0u), ps2_rot_debt(1u));
+}
+
+#if BTRON_PS2_PAINT_WORKER
+/* The row #165 is judged by.  `credit=` is claim (1) -- the composite re-records the pass did not
+ * run -- and `slice_left=`/`longest=` are claim (2): what the frame had left when the app's frame
+ * went out, and the worst single paint it had to fit.  `forced=` is the override firing, and a
+ * worker whose whole saving comes with `forced` equal to `defers` is a worker that deferred nothing
+ * at all, which is why both are printed on the same line rather than one under the other. */
+static void ps2_pw_row(const ps2_pw_stats_t *p, int taken)
+{
+    ps2_kprintf("[PW] %s pass=%u ask=%u paint=%u defer=%u forced=%u dup=%u credit=%u | "
+                "slice=%u left=%u paint_us=%u longest=%u jobs=%u\n",
+                s_pw_on ? "on " : "off",
+                (unsigned int)s_pw_passes, (unsigned int)p->asks, (unsigned int)p->paints,
+                (unsigned int)p->defers, (unsigned int)p->forceds, (unsigned int)p->dups,
+                (unsigned int)p->credit, (unsigned int)p->slice_us,
+                (unsigned int)p->slice_left_us, (unsigned int)p->paint_us,
+                (unsigned int)p->longest_us, (unsigned int)p->jobs);
+    if (!taken) {
+        /* The counters the operator is being shown are the ones since the last `paintw stat`, so a
+         * second row of the same shape reads as "nothing happened in between" rather than as a bug. */
+        ps2_kprintf("[PW]  (totals since boot; `stat` takes one window and clears it)\n");
+    }
+}
+
+/* One line per priced window: the name is the app's own caption, and `est` is the number the next
+ * pass's admission is made against, so a row that reads `defer=900 est=9000` says the app costs a
+ * frame and a half and is being refused for it. */
+static void ps2_pw_jobs(void)
+{
+    ps2_pw_job_t j;
+    uint32_t i;
+
+    for (i = 0u; ps2_pw_job_at(i, &j); i++) {
+        const WND *w = (const WND *)j.wnd;
+        /* Plain `%s`, because ps2_kprintf() parses a field width but not a precision: `%-16.16s`
+         * makes it consume the `.` as an unknown conversion, print the rest of the specifier as
+         * text, and read every argument after it one slot out of place -- which is how the first
+         * version of this row came back with an `est=` of 2,888,526 us for a 21 ms paint. */
+        ps2_kprintf("[PW]   %s %s est=%u last=%u paints=%u us=%u defer=%u forced=%u\n",
+                    w && w->title[0] ? w->title : "?",
+                    j.layer ? "layer" : "canvas",
+                    (unsigned int)j.est_us, (unsigned int)j.last_us, (unsigned int)j.paints,
+                    (unsigned int)j.us_total, (unsigned int)j.defers, (unsigned int)j.forceds);
+    }
+}
+
+/* The runtime arm.  Off, the present path is the shipped one: the latch is dropped, the layer is
+ * re-recorded by every band that reaches it, and no ask happens -- which is what makes this chord an
+ * A/B on one image instead of a rebuild per question, the same reason Ctrl+P exists for rung 4. */
+static void ps2_pw_apply(uint32_t on)
+{
+    s_pw_on = (int)on;
+    s_pw_upload_us = 0u;
+    s_pw_layer = NULL;
+    ps2_pw_freeze(0);
+    if (on) ps2_pw_reset(0u);   /* 0 keeps the module's own bound; a stale price cannot cross an off period */
+    ps2_kprintf("[PW] paint worker %s: %s\n", on ? "ON" : "off",
+                on ? "the layer records once per pass and the app's frame is admitted against the "
+                     "frame's remaining slice"
+                   : "every band re-records the layer, as the shipped image does");
+}
+
+void ps2_shell_paintw(const char *arg)
+{
+    ps2_pw_stats_t st;
+
+    if (arg && *arg) {
+        if (tkl_strcmp(arg, "1") == 0)      { ps2_pw_apply(1u); return; }
+        if (tkl_strcmp(arg, "0") == 0)      { ps2_pw_apply(0u); return; }
+        if (tkl_strncmp(arg, "stat", 4) == 0) {
+            ps2_pw_stats_take(&st);        /* one profiling window, maxima included */
+            ps2_pw_row(&st, 1);
+            ps2_pw_jobs();
+            return;
+        }
+        if (tkl_strncmp(arg, "all", 3) == 0) {
+            ps2_pw_stats(&st);
+            ps2_pw_row(&st, 0);
+            ps2_pw_jobs();
+            return;
+        }
+    }
+    ps2_kprintf("[PW] usage: paintw [0|1|stat|all]   Ctrl+O does the 0/1 part inside a desktop.\n");
+    ps2_kprintf("[PW]   what this is: a per-app PAINT BUDGET on one core, not a second thread.  The\n"
+                "                     EE has no scheduler to move work onto (sta_tsk runs a body on\n"
+                "                     the caller's stack), so the wins are one recording per pass\n"
+                "                     however many bands reach the app, and a frame that can refuse\n"
+                "                     a paint it cannot afford.  `PS2_PW=1` at build time is what\n"
+                "                     puts it in the image at all; this dial only arms and disarms.\n");
+    ps2_kprintf("[PW]   default starve bound=%u us (a job older than this is admitted whatever it costs)\n",
+                (unsigned int)ps2_pw_starve_us());
+}
+#endif /* BTRON_PS2_PAINT_WORKER */
+
 static char cmd_buf[64];
 static int cmd_pos = 0;
 static int esc_state = 0;
@@ -5812,6 +6383,21 @@ static void ps2_shell_exec(const char *cmd)
         ps2_kprintf("  desktop / startx - Launch authentic B-System 800x600 GUI session\n");
         ps2_kprintf("  exit / console   - Exit GUI session and return to Stage 1 shell\n");
         ps2_kprintf("  res              - Display active resolution and GS PCRTC mode\n");
+        ps2_kprintf("  page [32|16|dither 0|1|double 0|1]\n"
+                    "                     - The canvas's VRAM page: its format, the order its pixels\n"
+                    "                     are packed in, and whether two of them alternate.  16 bpp is\n"
+                    "                     what fits TWO pages where one 32-bit page sits today, and\n"
+                    "                     `double 1` draws the hidden one and flips at the frame edge\n"
+                    "                     (LANE 21 rungs 3-4).  Ctrl+P does the same inside a desktop.\n");
+#if BTRON_PS2_PAINT_WORKER
+        ps2_kprintf("  paintw [0|1|stat|all]\n"
+                    "                     - Task #165's per-app paint budget: the GS layer records ONE\n"
+                    "                     frame per pass however many bands reach it, and an app's frame\n"
+                    "                     is admitted against the microseconds this pass has left.\n"
+                    "                     `stat` prints the window since the last ask, `all` the totals.\n"
+                    "                     Ctrl+O does the 0/1 part inside a desktop.  (Not a thread: the\n"
+                    "                     EE has one core and this port no scheduler -- see the header.)\n");
+#endif
         ps2_kprintf("  usb [probe]      - Show OHCI + HID host state (probe = re-measure and re-enumerate)\n");
         ps2_kprintf("  help             - Display this command list\n");
         ps2_kprintf("  info             - Display PS2 system and hardware specifications\n");
@@ -6133,6 +6719,16 @@ static void ps2_shell_exec(const char *cmd)
                     (int)(s_ptr_mult_fp * 100 / 256), (int)s_ptr_max_step);
     } else if (tkl_strcmp(cmd, "gsstat") == 0) {
         ps2_shell_gsstat();
+    } else if (tkl_strncmp(cmd, "page", 4) == 0) {
+        const char *p = cmd + 4;
+        while (*p == ' ') p++;
+        ps2_shell_page(p);
+#if BTRON_PS2_PAINT_WORKER
+    } else if (tkl_strncmp(cmd, "paintw", 6) == 0) {
+        const char *p = cmd + 6;
+        while (*p == ' ') p++;
+        ps2_shell_paintw(p);
+#endif
     } else if (tkl_strcmp(cmd, "gsquad") == 0) {
         if (s_gui_active) {
             ps2_kprintf("[GSQUAD] note: the desktop composites over the canvas every frame, so from\n"
@@ -8365,7 +8961,7 @@ static void ps2_bench_launch(GDEV *screen)
  * out, the end of the run is the only printer and still has to know nobody beat it. */
 static int s_bench_sentinel;
 
-#if BTRON_PS2_BENCH_GS == 1
+#if BTRON_PS2_BENCH_GS == 1 || BTRON_PS2_BENCH_GS >= 6
 /* ── Stage-1 census rung: the GS read-back with no hand and no window ────────
  *
  * The read was written to answer one question without a screen to look at -- does the
@@ -8383,7 +8979,21 @@ static int s_bench_sentinel;
  * report UNTRUSTED and the verdict rows would mean nothing.  A census run therefore
  * boots, draws, reads, prints, and then sits in the Stage-1 shell loop -- the guest
  * cannot shut PCSX2 down, so the harness stops it at the sentinel, exactly as it does
- * for the table. */
+ * for the table.
+ *
+ * BENCH_GS=6 takes the same branch as 1 rather than a GUI one, for the same reason written twice
+ * above: rung 3a's whole-page reads are refused while the desktop is presenting, and its plate is a
+ * canvas upload, which the desktop's own upload would erase between the plate and the read.  It is a
+ * value the census rung answers and nothing else does. */
+#if BTRON_PS2_BENCH_GS >= 6
+static void ps2_bench_page16(void);    /* the rung itself, defined with its own phase below */
+#endif
+#if BTRON_PS2_BENCH_GS >= 7
+static void ps2_bench_flip(void);      /* rung 4: the two-page rotation, same headless path */
+#endif
+#if BTRON_PS2_BENCH_GS >= 7
+static void ps2_bench_flip(void);      /* rung 4: the two-page rotation, same headless path */
+#endif
 static void ps2_bench_gs_census(void)
 {
     ps2_kprintf("\n[BENCH] Stage 1 GS census rung -- no desktop, no hand, no window\n");
@@ -8397,6 +9007,19 @@ static void ps2_bench_gs_census(void)
      * textured fragment samples its uploaded page at all.  It is the rung that names what is left between
      * "a flat sprite lays its colour" and "2,705 textured triangles lay none". */
     ps2_gstex_probe();
+#if BTRON_PS2_BENCH_GS >= 6
+    /* Last, because it is the only rung here that changes the page the others read: it plates a
+     * square, uploads the canvas into a PSMCT16 page, reads it back twice, and restores CT32 with the
+     * plate painted out.  Run before the probes it would leave a dial moved; run after them it leaves
+     * the page, the packer and the canvas as it found them, which is what the sentinel's log needs to
+     * mean the same thing as every census rung before it. */
+    ps2_bench_page16();
+#endif
+#if BTRON_PS2_BENCH_GS >= 7
+    /* After rung 3a, which leaves the page CT32 and the canvas clean: rung 4 needs a 16-bit page
+     * to fit two of them, dials it itself, and restores both on the way out. */
+    ps2_bench_flip();
+#endif
     /* Before anything downstream could print a second one, and marked as spent for the
      * same reason the app phase's frame hook marks it: the harness stops the emulator
      * on this row, so two copies would tell it the run ended in two places. */
@@ -8405,7 +9028,7 @@ static void ps2_bench_gs_census(void)
         s_bench_sentinel = 1;
     }
 }
-#endif /* BTRON_PS2_BENCH_GS == 1 */
+#endif /* BTRON_PS2_BENCH_GS == 1 || BTRON_PS2_BENCH_GS >= 6 */
 
 #if BTRON_PS2_BENCH_APP
 /* ── App phase: is the common GL downstack actually driving frames here? ─────
@@ -8634,6 +9257,16 @@ static void ps2_bench_gs_planes(void)
  * wants the steady-state per-frame cost only needs the third one. */
 #ifndef BTRON_PS2_BENCH_APP_FRAMES
 #define BTRON_PS2_BENCH_APP_FRAMES 60u
+#endif
+
+/* Frames the launcher-by-key CYCLE phase runs before it injects its own Escape -- and therefore the
+ * budget that ends a whole bench run, since this phase is the one that prints the closing sentinel
+ * (`ps2_bench_app()`'s longer ask only begins after it).  Three is right for that phase's own
+ * question, "did the row open and draw", and useless for LANE 22's, which is a RATE: how many passes
+ * refused the app, against how many priced the refusal.  `BENCH_LAUNCH_FRAMES=40` is the dial
+ * #165's measurement turns; the default keeps every existing run's rows and cadence identical. */
+#ifndef BTRON_PS2_BENCH_LAUNCH_FRAMES
+#define BTRON_PS2_BENCH_LAUNCH_FRAMES 3u
 #endif
 
 static void ps2_bench_app(uint32_t frames)
@@ -13311,8 +13944,8 @@ static void ps2_bench_one_cycle(GDEV *screen, const size_t ask, ps2_bench_cycle_
     s_bench_app_over = 0u;
     s_bench_shell_watch = 1;
     s_bench_app_active = 1;
-    s_cycle.left = 3u;
-    s_bench_app_left = 3u;
+    s_cycle.left = BTRON_PS2_BENCH_LAUNCH_FRAMES;
+    s_bench_app_left = BTRON_PS2_BENCH_LAUNCH_FRAMES;
     /* The same three arguments the prompt hands the shell: the terminal's own state and
      * window are only read by the `tv`/`sc` verbs, both of which test for them, so NULL
      * is what `xmb` actually needs. */
@@ -13324,7 +13957,7 @@ static void ps2_bench_one_cycle(GDEV *screen, const size_t ask, ps2_bench_cycle_
      * the one that injects the Escape and walking past it would enter the frame hook's
      * grace frames and end the whole run, and by the window's presence, because a verb
      * that opened nothing has no frames to wait for. */
-    for (guard = 0; guard < 8 && s_bench_app_left &&
+    for (guard = 0; guard < (int)BTRON_PS2_BENCH_LAUNCH_FRAMES + 5 && s_bench_app_left &&
                     ps2_bench_wnd_named("Cross Media Bar"); guard++)
         ps2_gui_pass(screen);
     s_bench_shell_watch = 0;
@@ -13476,6 +14109,596 @@ static void ps2_bench_shell_verb(GDEV *screen)
                 ps2_heap_check() ? ps2_heap_check() : "sound");
 }
 #endif /* BTRON_PS2_BENCH_APP */
+
+#if BTRON_PS2_BENCH_GS >= 6
+/* ── LANE 21 rung 3a: is the picture the same on a 16-bit page? ──────────────────────────
+ *
+ * The host gates prove the arithmetic (13,400 checks: the packer, the decode, its two error
+ * bounds and the in-place expansion's ordering) and `test-eegs-present` proves the 32-bit wire
+ * is byte-for-byte what it was.  Neither of them has ever run the CT16 branch of
+ * ps2_gs_upload(), because that branch only exists in a guest that dials `page 16`.  This phase
+ * is the machine saying so: it plates one rect into the canvas, uploads the whole canvas into a
+ * page the allocator describes as PSMCT16, reads that page back through VIF1, and counts the
+ * plate -- the same census `gsread` prints, on three page descriptions, on one image, with no
+ * hand and no monitor.
+ *
+ * Four readings, because the rung makes two separate claims, the third of these is the control and
+ * the fourth is the shape rung 4 will actually send:
+ *
+ *   CT32 ................. the shipped path.  Its counts are the baseline the other two are
+ *                          quoted against, and if THIS one loses the plate the phase measured
+ *                          nothing about rung 3a at all.
+ *   CT16, dithered ....... the picture the GS's own DIMX law would give: a flat field splits
+ *                          across the 4x4 phases, so `navy=` is expected to fall and `other=`
+ *                          to rise by the same amount.  A count that collapses to zero, halves,
+ *                          or leaves `sent=` above zero says something else -- the upload's
+ *                          geometry, not its palette.
+ *   CT16, truncated ...... the same page with the term pinned at its centre.  Here the field is
+ *                          one word again, so `navy=` and `red=` must agree with the 32-bit
+ *                          census EXACTLY.  That equality is this phase's gate: it is what a
+ *                          wrong px_per_qw (4 instead of 8), a stage whose row pitch leaked
+ *                          into the stream, or a half-width page fill would break -- a CT16
+ *                          upload that got its quadword law wrong cannot draw a 64x64 square at
+ *                          320,272 and have it come back as 4,096 pixels in that box.
+ *   CT16, truncated BAND   rung 4 will present bands, not pages, so the fourth reading uploads
+ *                          only rows 450..599 of a page that already carries the first plate: the
+ *                          plate outside the band has to SURVIVE the upload and the one inside it
+ *                          has to ARRIVE.  This is the reading that says the chunk loop advances
+ *                          its source row, and it earned its place: the first run of this phase,
+ *                          on 2026-10-18, failed the three readings above with a page of flawless
+ *                          uniform navy and no plate anywhere, because upload_ct16() packed the
+ *                          canvas's first five rows once per chunk -- a field of the right colour
+ *                          and none of the right ink, which is the failure a colour count alone
+ *                          calls success and the reason the gate below sums to a whole page.
+ *
+ * The plate is drawn into the canvas rather than through the GS: the question is the upload and
+ * the read, and a stream would answer it with the rasteriser's behaviour on top.  The rects live
+ * below GSREAD_TEXT_ROWS so the console's own glyphs cannot be mistaken for them, and both are
+ * repainted back to the background word on the way out, because this phase runs before the pixel
+ * phases and a red square left in the canvas would travel into every row after it.
+ */
+#define BENCH_P16_X0    320u    /* inside the page, below the text band, and a multiple of 8 px: */
+#define BENCH_P16_Y0    272u    /* the 16-bit read's own alignment law */
+#define BENCH_P16_X1     96u    /* the band reading's second plate: same law, different rows */
+#define BENCH_P16_Y1    472u
+#define BENCH_P16_SIDE   64u
+#define BENCH_P16_PX   ((uint32_t)BENCH_P16_SIDE * (uint32_t)BENCH_P16_SIDE)
+#define BENCH_P16_PAGE  ((uint32_t)PS2_SCREEN_WIDTH * (uint32_t)PS2_SCREEN_HEIGHT)
+#define BENCH_P16_BAND_Y   450u    /* contains Y1..Y1+SIDE, and does not touch Y0..Y0+SIDE */
+#define BENCH_P16_BAND_H   150u
+
+static void bench_p16_plate(uint32_t *cv, uint32_t colour, uint32_t x0, uint32_t y0)
+{
+    uint32_t y, x;
+
+    for (y = 0u; y < BENCH_P16_SIDE; y++) {
+        uint32_t *row = cv + (y0 + y) * (uint32_t)PS2_SCREEN_WIDTH + x0;
+
+        for (x = 0u; x < BENCH_P16_SIDE; x++) row[x] = colour;
+    }
+}
+
+/* Plate, upload, census.  gsread_page_census() prints its own [GSREAD] rows -- this hands the
+ * verdict row the counters they were printed from, so no one has to diff three log lines by eye. */
+static void bench_p16_census(uint32_t *buf, uint32_t navy, gsread_page_t *o)
+{
+    uint32_t *cv = ps2_gs_get_framebuffer();
+
+    ps2_gs_text_clear();
+    bench_p16_plate(cv, GSQUAD_RED, BENCH_P16_X0, BENCH_P16_Y0);
+    ps2_gs_flush();
+    gsread_page_census(buf, navy, o);
+}
+
+/* What the allocator ACTUALLY built after a dial.  Printed, and gated on, because the alternative is
+ * a phase that asks for PSMCT16, gets refused, and then measures a 32-bit page under two labels that
+ * say otherwise -- a green verdict row that means nothing.  `set` is gs_disp_set_psm()'s own answer. */
+typedef struct {
+    int set;
+    uint32_t psm, bytes_pp, px_per_qw;
+} bench_p16_pg_t;
+
+static void bench_p16_set(uint32_t psm, uint32_t dither, bench_p16_pg_t *o)
+{
+    const gs_disp_page_t *pg;
+
+    o->set = gs_disp_set_psm(psm);
+    ps2_gs_set_dither(dither);
+    ps2_gs_dispfb_store();
+    pg = gs_disp_shown();
+    o->psm = gs_disp_psm();
+    o->bytes_pp = pg != NULL ? pg->bytes_pp : 0u;
+    o->px_per_qw = pg != NULL ? pg->px_per_qw : 0u;
+}
+
+/* A plate's own box, all four corners: a count alone could be met by pixels that landed somewhere
+ * else, and a 16-bit upload that gets its row advance wrong moves the square rather than losing it
+ * -- or, as it turned out, loses the ink and keeps the colour, which is what the sums below are for. */
+static int bench_p16_at(const int *box, uint32_t x0, uint32_t y0)
+{
+    return box[0] == (int)x0 && box[1] == (int)y0
+        && box[2] == (int)(x0 + BENCH_P16_SIDE - 1u)
+        && box[3] == (int)(y0 + BENCH_P16_SIDE - 1u);
+}
+
+static int bench_p16_box(const gsread_page_t *c)
+{
+    return bench_p16_at(c->red_box, BENCH_P16_X0, BENCH_P16_Y0);
+}
+
+static void ps2_bench_page16(void)
+{
+    gsread_page_t c32, c16_d, c16_t, c_band;
+    bench_p16_pg_t p32, p16_d, p16_t, p_band, p_out;
+    uint32_t *buf = (uint32_t *)Imalloc((size_t)GSREAD_BAND_QWC * 16u);
+    uint32_t navy;
+    const char *why;
+    int red_ok, navy_ok, no_sent, errs_ok, pp_ok, band_ok;
+
+    ps2_kprintf("\n[BENCH] LANE 21 rung 3a -- one plate, three page descriptions plus a band: "
+                "CT32 / CT16 dithered / CT16 truncated / CT16 band\n");
+    if (!buf) {
+        ps2_kprintf("[BENCH] rung 3a: SKIP -- the pool refused the %u B band buffer, so nothing "
+                    "was read\n", (unsigned int)(GSREAD_BAND_QWC * 16u));
+        return;
+    }
+
+    /* The expectation is read out of the canvas, the way gsread reads it: after the clear, before
+     * anything is plated into it, so the word is the one the upload will send. */
+    ps2_gs_text_clear();
+    navy = ps2_gs_get_framebuffer()[(uint32_t)(GSREAD_CTRL_Y + GSREAD_H / 2)
+                                    * (uint32_t)PS2_SCREEN_WIDTH
+                                    + (uint32_t)(GSREAD_X + GSREAD_W / 2)];
+
+    bench_p16_set(GS_PSM_CT32, 1u, &p32);
+    bench_p16_census(buf, navy, &c32);
+
+    bench_p16_set(GS_PSM_CT16, 1u, &p16_d);
+    bench_p16_census(buf, navy, &c16_d);
+
+    bench_p16_set(GS_PSM_CT16, 0u, &p16_t);
+    bench_p16_census(buf, navy, &c16_t);
+
+    /* The fourth reading, on the truncated page: plate A goes out with a whole flush so the page is
+     * navy-plus-A, plate B is written into the canvas and crosses ONLY in the band upload -- so B is
+     * the pixel that a chunk loop which does not advance its source cannot deliver, and A is the
+     * pixel that one which restarts over the wrong rows would lose. */
+    bench_p16_set(GS_PSM_CT16, 0u, &p_band);
+    {
+        uint32_t *cv = ps2_gs_get_framebuffer();
+
+        ps2_gs_text_clear();
+        bench_p16_plate(cv, GSQUAD_RED, BENCH_P16_X0, BENCH_P16_Y0);
+        ps2_gs_flush();
+        bench_p16_plate(cv, GSQUAD_BLUE, BENCH_P16_X1, BENCH_P16_Y1);
+        ps2_gs_upload(0, (int)BENCH_P16_BAND_Y, PS2_SCREEN_WIDTH, (int)BENCH_P16_BAND_H);
+        gsread_page_census(buf, navy, &c_band);
+    }
+
+    /* Out: the page and the packer as the run found them, and the canvas without this phase's
+     * squares in it. */
+    bench_p16_set(GS_PSM_CT32, 1u, &p_out);
+    ps2_gs_text_clear();
+    bench_p16_plate(ps2_gs_get_framebuffer(), navy, BENCH_P16_X0, BENCH_P16_Y0);
+    bench_p16_plate(ps2_gs_get_framebuffer(), navy, BENCH_P16_X1, BENCH_P16_Y1);
+    ps2_gs_flush();
+    Ifree(buf);
+
+    ps2_kprintf("[BENCH] rung 3a pages (asked/got, set=0 means the dial was accepted): "
+                "CT32 set=%d psm=0x%x %ubpp %upx/qw | CT16+dither set=%d psm=0x%x %ubpp %upx/qw | "
+                "CT16+trunc set=%d psm=0x%x %ubpp %upx/qw | restored set=%d %ubpp\n",
+                p32.set, (unsigned int)p32.psm, (unsigned int)p32.bytes_pp,
+                (unsigned int)p32.px_per_qw,
+                p16_d.set, (unsigned int)p16_d.psm, (unsigned int)p16_d.bytes_pp,
+                (unsigned int)p16_d.px_per_qw,
+                p16_t.set, (unsigned int)p16_t.psm, (unsigned int)p16_t.bytes_pp,
+                (unsigned int)p16_t.px_per_qw, p_out.set, (unsigned int)p_out.bytes_pp);
+
+    ps2_kprintf("[BENCH] rung 3a counts (plate %u px at %u,%u): "
+                "CT32 navy=%u red=%u sent=%u other=%u | CT16+dither navy=%u red=%u sent=%u other=%u | "
+                "CT16-trunc navy=%u red=%u sent=%u other=%u\n",
+                (unsigned int)BENCH_P16_PX, (unsigned int)BENCH_P16_X0, (unsigned int)BENCH_P16_Y0,
+                (unsigned int)c32.navy, (unsigned int)c32.red, (unsigned int)c32.sent,
+                (unsigned int)c32.below_other,
+                (unsigned int)c16_d.navy, (unsigned int)c16_d.red, (unsigned int)c16_d.sent,
+                (unsigned int)c16_d.below_other,
+                (unsigned int)c16_t.navy, (unsigned int)c16_t.red, (unsigned int)c16_t.sent,
+                (unsigned int)c16_t.below_other);
+    ps2_kprintf("[BENCH] rung 3a read cost: CT32=%u us  CT16=%u us for the same %dx%d page "
+                "(the 16-bit download carries half the bytes)\n",
+                (unsigned int)c32.us, (unsigned int)c16_t.us,
+                (unsigned int)PS2_SCREEN_WIDTH, (unsigned int)PS2_SCREEN_HEIGHT);
+    /* The transfer's own length, because it is the row that says which branch of the read ran:
+     * gs_read_image_qwc() is the bytes of the PAGE's format over 16, so a 16-bit census that came
+     * back with the 32-bit count did not download a 16-bit page at all -- it re-read whatever was
+     * still in VRAM, and every count below would be the previous row's. */
+    ps2_kprintf("[BENCH] rung 3a quadwords: CT32=%u  CT16+dither=%u  CT16+trunc=%u "
+                "(the 16-bit page halves this by construction)\n",
+                (unsigned int)c32.qw, (unsigned int)c16_d.qw, (unsigned int)c16_t.qw);
+
+    /* The fourth reading's own row, and the one rung 4 needs: A crossed on the whole flush and sits
+     * OUTSIDE the band, B was written into the canvas after it and crosses ONLY inside the band.
+     * So `blue=0` names a source pointer that never advanced (the pre-fix bug: the band repacks the
+     * canvas's first rows), and `red=0` or a short sum names one that restarted over wrong rows. */
+    ps2_kprintf("[BENCH] rung 3a band (rows %u..%u of the truncated page held %u px at %u,%u; "
+                "a second plate went out ONLY in the band at %u,%u): A kept red=%u bbox=%d,%d..%d,%d | "
+                "B arrived blue=%u bbox=%d,%d..%d,%d | navy=%u sent=%u other=%u\n",
+                (unsigned int)BENCH_P16_BAND_Y,
+                (unsigned int)(BENCH_P16_BAND_Y + BENCH_P16_BAND_H - 1u),
+                (unsigned int)BENCH_P16_PX, (unsigned int)BENCH_P16_X0, (unsigned int)BENCH_P16_Y0,
+                (unsigned int)BENCH_P16_X1, (unsigned int)BENCH_P16_Y1,
+                (unsigned int)c_band.red, c_band.red_box[0], c_band.red_box[1],
+                c_band.red_box[2], c_band.red_box[3],
+                (unsigned int)c_band.blue, c_band.blue_box[0], c_band.blue_box[1],
+                c_band.blue_box[2], c_band.blue_box[3],
+                (unsigned int)c_band.navy, (unsigned int)c_band.sent,
+                (unsigned int)(c_band.text_other + c_band.below_other));
+
+    errs_ok = (c32.err == GS_READ_BUS_OK && c16_d.err == GS_READ_BUS_OK &&
+               c16_t.err == GS_READ_BUS_OK && c_band.err == GS_READ_BUS_OK);
+    /* The non-vacuity check: the two rows labelled CT16 have to be on a page that is 16 bits and
+     * therefore carries eight pixels a quadword, not four -- bytes_pp is the exact predicate both
+     * ps2_gs_upload()'s 16-bit branch and ps2_gs_vram_read()'s decode test -- and the download that
+     * ran has to have been half as long as the 32-bit one's. */
+    pp_ok = (p32.set == 0 && p16_d.set == 0 && p16_t.set == 0 && p_band.set == 0 &&
+             p_out.set == 0 && p32.bytes_pp == 4u && p32.px_per_qw == 4u &&
+             p16_d.bytes_pp == 2u && p16_d.px_per_qw == 8u &&
+             p16_t.bytes_pp == 2u && p16_t.px_per_qw == 8u &&
+             p_band.bytes_pp == 2u && p_band.px_per_qw == 8u && p_out.bytes_pp == 4u &&
+             c16_d.qw * 2u == c32.qw && c16_t.qw * 2u == c32.qw &&
+             c_band.qw * 2u == c32.qw);
+    red_ok = (c32.red == (uint32_t)BENCH_P16_PX && c16_d.red == (uint32_t)BENCH_P16_PX &&
+              c16_t.red == (uint32_t)BENCH_P16_PX &&
+              bench_p16_box(&c32) && bench_p16_box(&c16_d) && bench_p16_box(&c16_t));
+    /* The truncated field is the rung's exact claim; the dithered one is allowed to be smaller,
+     * and only by the pixels the phase spread into a neighbouring word.  The two sums are the other
+     * half of the same claim: a page that is neither background nor plate is a third colour, and a
+     * 16-bit upload that packed the wrong canvas rows produces exactly that -- on 2026-10-18 it
+     * produced it as a page of clean navy with the plate missing, which a count alone reads as
+     * success.  So: navy plus red must be the whole page, on the baseline and on the exact page. */
+    navy_ok = (c32.navy == c16_t.navy && c16_d.navy <= c32.navy &&
+               c32.navy + c32.red == BENCH_P16_PAGE &&
+               c16_t.navy + c16_t.red == BENCH_P16_PAGE);
+    no_sent = (c32.sent == 0u && c16_d.sent == 0u && c16_t.sent == 0u && c_band.sent == 0u);
+    /* Rung 4 sends bands, so the rung's claim is only landed once a partial upload leaves the rest
+     * of the page alone and delivers the rect inside it.  Both plates are full-scale primaries, so
+     * on the truncated page each is exactly 4,096 pixels at its own box, and the field plus the two
+     * plates is the whole page -- which is what makes this reading a partition and not a hunt. */
+    band_ok = (c_band.red == (uint32_t)BENCH_P16_PX &&
+               bench_p16_at(c_band.red_box, BENCH_P16_X0, BENCH_P16_Y0) &&
+               c_band.blue == (uint32_t)BENCH_P16_PX &&
+               bench_p16_at(c_band.blue_box, BENCH_P16_X1, BENCH_P16_Y1) &&
+               c_band.navy + 2u * (uint32_t)BENCH_P16_PX == (uint32_t)BENCH_P16_PAGE);
+
+    /* One sentence, in the order a reader needs it: which failure it is, before whether there is
+     * one.  Every branch names the rows above, because this phase's answer is read from them. */
+    if (!pp_ok) {
+        why = "the page this dial asked for is not the page the counts describe -- either "
+              "gs_disp_set_psm refused and the labels are on a 32-bit page, or the download came back "
+              "at 32-bit length, which means it read the VRAM that was already there.  Read the pages "
+              "and quadwords rows above, not the counts";
+    } else if (!errs_ok) {
+        why = "a census refused or timed out, so no count above describes a page -- read the "
+              "FAILED row's stage name, not a colour";
+    } else if (!no_sent) {
+        why = "pixels the DMA never wrote came back as the sentinel, so a band was cut short and "
+              "the counts are a partial page, not a picture";
+    } else if (!red_ok) {
+        why = "the plate did not come back as 4,096 pixels at its own box on every page -- the "
+              "16-bit upload's geometry (px_per_qw, the stage's row pitch, the page's FBW) is what "
+              "the three [GSREAD] rows above disagree about";
+    } else if (!navy_ok) {
+        why = "the 16-bit page is not the canvas: either its truncated field differs from the 32-bit "
+              "one -- the packer's law failing, not the dither's, so compare navy= on the last two "
+              "counts -- or navy and red do not sum to the whole page on one of them, which means a "
+              "third colour is on the page and the plate is not where the canvas put it";
+    } else if (!band_ok) {
+        why = "a band upload did not leave the page as a band: the plate outside rows 450..599 did "
+              "not survive it, or the one written inside it did not arrive, or the field and the two "
+              "plates do not sum to the page.  Read the band row's red= and blue= -- blue=0 is the "
+              "chunk loop's unadvanced source pointer that this phase found on 2026-10-18, red=0 is "
+              "one that re-sent the canvas's first rows over the plate below the band";
+    } else {
+        why = "the same plate at the same box and the same background field, at 32 bits, at 16 "
+              "with the dither and at 16 without it, and a second plate that crossed only in a band "
+              "while the first one stayed put outside it: the page halves and the picture does not "
+              "move";
+    }
+
+    ps2_kprintf("[BENCH] rung 3a verdict: %s -- %s\n",
+                (pp_ok && errs_ok && red_ok && navy_ok && no_sent && band_ok) ? "MEASURED"
+                                                                             : "NOT MEASURED",
+                why);
+}
+#endif /* BTRON_PS2_BENCH_GS >= 6 */
+
+#if BTRON_PS2_BENCH_GS >= 7
+/* ── LANE 21 rung 4: does the rotation put the right picture on the right page? ───────────
+ *
+ * Rung 3a proved a 16-bit page can carry this canvas.  Rung 4 puts TWO of them under the
+ * compositor, and its claim is not a colour count -- it is an ORDERING: the page nobody is
+ * scanning is plated, the debt a page accumulates while hidden travels with it, and the page
+ * becomes visible at a frame boundary.  Nothing about that is visible in a single-page census,
+ * and none of it is reachable from a host gate, because it is a bus turn on a page index.
+ *
+ * So this phase drives the same three calls ps2_gui_pass() does -- ps2_rot_step(), the band
+ * upload, ps2_gs_flip() -- with a canvas it paints itself, and censuses the page the flip
+ * claims is now being scanned.  Four plate colours, four boxes that do not touch, and one
+ * reading that would fail if the merge were removed:
+ *
+ *   1. CONTROL, at PSMCT32: gs_disp_set_double(1) must be REFUSED.  This is the reservation's
+ *      own law -- two 32-bit pages do not fit under the display -- and a phase that skipped it
+ *      would happily run the rest on a configuration the shipped port says is impossible.
+ *   2. Dial to CT16, truncate, then accept double.  The page that was being scanned keeps its
+ *      pixels (RED, from the pre-dial flush); the newly writeable page is empty VRAM.
+ *   3. Plate BLUE into the canvas and present once.  BLUE's damage goes to the page being shown
+ *      as DEBT, and the hidden page is plated with the whole canvas -- RED and BLUE both -- then
+ *      flipped.  The census of the shown page now carries a box that was only ever in the canvas
+ *      once and only ever uploaded once.
+ *   4. Present again with ORANGE: the page that was just shown owes BLUE and gets it as a
+ *      catch-up, so its census shows RED + BLUE + ORANGE -- the rotation working, because the
+ *      alternative is a page with a hole in it.  A third present with VIOLET puts all four
+ *      colours on the other page, and the sums say each page is a complete picture rather than
+ *      the union of whichever bands happened to land there.
+ *
+ * What this phase CANNOT see is the PCRTC.  gsread reads gs_disp_shown()'s base, and DISPFB is
+ * built from the same page, so a census proves the state machine and the VRAM agree -- it does
+ * not prove the CRT followed them, and only the operator's monitor can say that.  That is what
+ * Ctrl+P is for, and the alignment row below is printed as its own labelled line rather than
+ * folded into the verdict for the same reason: whether PCSX2 raises CSR.VSYNC at all in this
+ * configuration is a fact about the emulator, and a rung that timed out waiting for it would
+ * still pass every count above.
+ */
+#define BENCH_ROT_ORG_X  448u    /* orange's box: 8-px aligned, clear of RED at 320,272 and BLUE at 96,472 */
+#define BENCH_ROT_VIO_X  672u    /* violet's box, same row as orange's -- the fourth colour needs a fourth place */
+#define BENCH_ROT_Y1     272u
+#define BENCH_ROT_Y2     472u
+
+/* The present this phase makes: the band loop ps2_gui_pass() runs after its rotation step,
+ * without the compositor's render half -- there is no desktop here, and the rung's claim is the
+ * page, not the pixels on it.  Times the upload the same way so the row below can say what a
+ * banded catch-up costs against a whole canvas. */
+static uint32_t bench_rot_present(const ps2_bandset_t *set)
+{
+    uint32_t us = 0u;
+
+    for (unsigned i = 0u; i < set->n; i++) {
+        const ps2_band_t *b = &set->b[i];
+        const uint32_t t0 = btron_render_perf_us();
+
+        ps2_gs_upload(b->x0, b->top, b->x1 - b->x0, b->end - b->top);
+        us += btron_render_perf_us() - t0;
+    }
+    return us;
+}
+
+/* One pass of the rotation and its present, shared by the three readings below so the phase
+ * cannot drift from the order ps2_gui_pass() uses: step, upload, flip.  `owed` is the merge's
+ * own answer and `bands` the set the pass ended up plating -- the two columns that say, from
+ * the driver's side, whether a catch-up happened and how big it was. */
+static uint32_t bench_rot_pass(ps2_bandset_t *set, uint32_t *up_us, int *owed, unsigned *bands)
+{
+    uint32_t wait;
+
+    *owed = ps2_rot_step(set);
+    *bands = set->n;
+    *up_us = bench_rot_present(set);
+    wait = ps2_gs_flip(1);
+    return wait;
+}
+
+static void ps2_bench_flip(void)
+{
+    gsread_page_t pre, s1, s2, s3;
+    bench_p16_pg_t p_ctl, p_16, p_out;
+    ps2_bandset_t set;
+    uint32_t *buf, navy, up1 = 0u, up2 = 0u, up3 = 0u, w1, w2, w3;
+    unsigned b1 = 0u, b2 = 0u, b3 = 0u;
+    int ctl_refused, dbl_ok, hidden_ok, flip1_ok, seed_ok, rot_ok, sums_ok, no_sent, errs_ok;
+    int owed1 = 0, owed2 = 0, owed3 = 0;
+    const char *why;
+
+    ps2_kprintf("\n[BENCH] LANE 21 rung 4 -- two pages, one rotation: control / first flip / "
+                "seeded catch-up / damage catch-up\n");
+    buf = (uint32_t *)Imalloc((size_t)GSREAD_BAND_QWC * 16u);
+    if (!buf) {
+        ps2_kprintf("[BENCH] rung 4: SKIP -- the pool refused the %u B band buffer, so no page "
+                    "was read\n", (unsigned int)(GSREAD_BAND_QWC * 16u));
+        return;
+    }
+
+    /* 1. The control, on the shipped format: a second page has no room, and the dial has to say
+     * so.  gs_disp_is_double() is read back afterwards because a refusal that still set the flag
+     * would make every reading below a lie about a configuration that cannot exist. */
+    bench_p16_set(GS_PSM_CT32, 1u, &p_ctl);
+    ctl_refused = (gs_disp_set_double(1u) != 0 && !gs_disp_is_double());
+    if (!ctl_refused)
+        ps2_kprintf("[BENCH] rung 4 CONTROL FAILED: PSMCT32 accepted a second page.  The "
+                    "reservation is not what ps2_gs_vram.h says it is.\n");
+
+    /* 2. The format that fits, with the term pinned so the counts are exact, and a canvas that
+     * holds RED before any of this exists as a two-page configuration. */
+    bench_p16_set(GS_PSM_CT16, 0u, &p_16);
+    ps2_gs_text_clear();
+    bench_p16_plate(ps2_gs_get_framebuffer(), GSQUAD_RED, BENCH_P16_X0, BENCH_P16_Y0);
+    ps2_gs_flush();
+    navy = ps2_gs_get_framebuffer()[(uint32_t)(GSREAD_CTRL_Y + GSREAD_H / 2)
+                                    * (uint32_t)PS2_SCREEN_WIDTH
+                                    + (uint32_t)(GSREAD_X + GSREAD_W / 2)];
+
+    /* Entering the two-page model through the dial the desktop uses, so what is measured is the
+     * path a Ctrl+P takes -- and its refusal, if any, is the row an operator would see. */
+    ps2_page_double_apply(1u);
+    dbl_ok = gs_disp_is_double() == 1u &&
+             gs_disp_drawn()->index != gs_disp_shown()->index &&
+             p_16.bytes_pp == 2u && p_16.px_per_qw == 8u;
+
+    /* The page being scanned, as it is before any rotation: RED from the flush above, and no
+     * BLUE anywhere -- the plate that goes out under the model below has never been sent here. */
+    gsread_page_census(buf, navy, &pre);
+
+    /* 3. First rotation pass: BLUE into the canvas, damage = BLUE's box.  The drawn page owes the
+     * whole canvas from the dial, so this pass uploads the canvas -- and its flip is the first the
+     * port has ever made. */
+    bench_p16_plate(ps2_gs_get_framebuffer(), GSQUAD_BLUE, BENCH_P16_X1, BENCH_P16_Y1);
+    set = (ps2_bandset_t){ { { 0, 0, 0, 0 } }, 0, 0 };
+    ps2_bandset_add(&set, (int)BENCH_P16_X1, (int)(BENCH_P16_X1 + BENCH_P16_SIDE),
+                    (int)BENCH_P16_Y1, (int)(BENCH_P16_Y1 + BENCH_P16_SIDE));
+    w1 = bench_rot_pass(&set, &up1, &owed1, &b1);
+    gsread_page_census(buf, navy, &s1);
+
+    /* 4. Second pass: ORANGE.  The page being drawn is the one that was scanned at the dial, and
+     * its debt is still the seeded whole canvas, so this too is a full plate -- the reading that
+     * says BOTH pages end up holding the picture, not only the one the model started on. */
+    bench_p16_plate(ps2_gs_get_framebuffer(), GSQUAD_ORANGE, BENCH_ROT_ORG_X, BENCH_ROT_Y2);
+    set = (ps2_bandset_t){ { { 0, 0, 0, 0 } }, 0, 0 };
+    ps2_bandset_add(&set, (int)BENCH_ROT_ORG_X, (int)(BENCH_ROT_ORG_X + BENCH_P16_SIDE),
+                    (int)BENCH_ROT_Y2, (int)(BENCH_ROT_Y2 + BENCH_P16_SIDE));
+    w2 = bench_rot_pass(&set, &up2, &owed2, &b2);
+    gsread_page_census(buf, navy, &s2);
+
+    /* 5. Third pass: VIOLET, and this is the one that pays for the rung.  The page drawn now was
+     * shown when ORANGE was damaged, so the ONLY way ORANGE reaches it is ps2_rot_owe() having
+     * folded pass 4's one-rect damage into its debt: this pass' own damage is VIOLET alone, and a
+     * rotation that forgot the merge leaves this page with RED, BLUE and VIOLET and a hole where
+     * the orange box is -- which on a screen is a frame that loses a window every other flip.
+     *
+     * The uploaded band count is the same claim from the other side: with the merge this pass
+     * plates two separate rects, without it one, and the row prints it. */
+    bench_p16_plate(ps2_gs_get_framebuffer(), GSQUAD_VIOLET, BENCH_ROT_VIO_X, BENCH_ROT_Y1);
+    set = (ps2_bandset_t){ { { 0, 0, 0, 0 } }, 0, 0 };
+    ps2_bandset_add(&set, (int)BENCH_ROT_VIO_X, (int)(BENCH_ROT_VIO_X + BENCH_P16_SIDE),
+                    (int)BENCH_ROT_Y1, (int)(BENCH_ROT_Y1 + BENCH_P16_SIDE));
+    w3 = bench_rot_pass(&set, &up3, &owed3, &b3);
+    gsread_page_census(buf, navy, &s3);
+
+    /* Out: single-buffered, both pages cleared of debt, the format and the packer as the run
+     * found them, and the canvas repainted navy -- the same four restorations rung 3a makes, and
+     * for the same reason: the phases after this one read this page. */
+    ps2_page_double_apply(0u);
+    ps2_rot_clear();
+    bench_p16_set(GS_PSM_CT32, 1u, &p_out);
+    ps2_gs_text_clear();
+    ps2_gs_flush();
+    Ifree(buf);
+
+    /* The three readings' counts, one row each, in the order the script makes them. */
+    ps2_kprintf("[BENCH] rung 4 shown page before any flip: red=%u blue=%u orange=%u violet=%u "
+                "navy=%u other=%u sent=%u\n",
+                (unsigned int)pre.red, (unsigned int)pre.blue, (unsigned int)pre.orange,
+                (unsigned int)pre.violet, (unsigned int)pre.navy,
+                (unsigned int)(pre.text_other + pre.below_other), (unsigned int)pre.sent);
+    ps2_kprintf("[BENCH] rung 4 flip 1 (owed=%d bands=%u up=%u us wait=%u us): red=%u blue=%u "
+                "orange=%u violet=%u navy=%u other=%u sent=%u\n",
+                owed1, (unsigned int)b1, (unsigned int)up1, (unsigned int)w1,
+                (unsigned int)s1.red, (unsigned int)s1.blue, (unsigned int)s1.orange,
+                (unsigned int)s1.violet, (unsigned int)s1.navy,
+                (unsigned int)(s1.text_other + s1.below_other), (unsigned int)s1.sent);
+    ps2_kprintf("[BENCH] rung 4 flip 2 (owed=%d bands=%u up=%u us wait=%u us): red=%u blue=%u orange=%u "
+                "violet=%u navy=%u other=%u sent=%u\n",
+                owed2, (unsigned int)b2, (unsigned int)up2, (unsigned int)w2,
+                (unsigned int)s2.red, (unsigned int)s2.blue, (unsigned int)s2.orange,
+                (unsigned int)s2.violet, (unsigned int)s2.navy,
+                (unsigned int)(s2.text_other + s2.below_other), (unsigned int)s2.sent);
+    ps2_kprintf("[BENCH] rung 4 flip 3 (owed=%d bands=%u up=%u us wait=%u us): red=%u blue=%u orange=%u "
+                "violet=%u navy=%u other=%u sent=%u\n",
+                owed3, (unsigned int)b3, (unsigned int)up3, (unsigned int)w3,
+                (unsigned int)s3.red, (unsigned int)s3.blue, (unsigned int)s3.orange,
+                (unsigned int)s3.violet, (unsigned int)s3.navy,
+                (unsigned int)(s3.text_other + s3.below_other), (unsigned int)s3.sent);
+
+    /* The flip's hardware half, printed as its own labelled row and NOT folded into the verdict:
+     * a wait that ran to its bound is a statement about this emulator's GS, and the counts above
+     * would all still pass with the display never having changed page.  `flips=` is the driver's
+     * own count, so this row also says the phase made the three it claims to have made. */
+    ps2_kprintf("[BENCH] rung 4 ALIGNMENT: flips=%u unaligned=%u longest wait=%u us  "
+                "(a 16,667 us frame is the ceiling a wait should land under)\n",
+                (unsigned int)ps2_gs_flip_count(), (unsigned int)ps2_gs_flip_unaligned(),
+                (unsigned int)ps2_gs_flip_wait_max_us());
+
+    errs_ok = (pre.err == GS_READ_BUS_OK && s1.err == GS_READ_BUS_OK &&
+               s2.err == GS_READ_BUS_OK && s3.err == GS_READ_BUS_OK);
+    no_sent = (pre.sent == 0u && s1.sent == 0u && s2.sent == 0u && s3.sent == 0u);
+    /* The scanned page before the first flip holds RED and nothing else of this phase's: a BLUE
+     * already there would mean the writer went to the page being shown, which is the bug rung 4
+     * exists to remove, and would make the two readings below say nothing. */
+    hidden_ok = (pre.red == (uint32_t)BENCH_P16_PX && bench_p16_box(&pre) &&
+                 pre.blue == 0u && pre.orange == 0u && pre.violet == 0u);
+    /* After flip 1 the shown page is the one that was plated: both plates, at their own boxes,
+     * and the field is the rest of the page.  This is the flip moving the read target, which is
+     * the same page DISPFB was re-pointed at. */
+    flip1_ok = (s1.red == (uint32_t)BENCH_P16_PX && bench_p16_at(s1.red_box, BENCH_P16_X0, BENCH_P16_Y0) &&
+                s1.blue == (uint32_t)BENCH_P16_PX && bench_p16_at(s1.blue_box, BENCH_P16_X1, BENCH_P16_Y1) &&
+                s1.orange == 0u && s1.violet == 0u);
+    /* Pass 2's page is the one the dial found already being scanned: its debt was the seeded whole
+     * canvas, so after this flip BOTH pages hold the picture.  That is not the rung's interesting
+     * claim and it is still a gate -- a rotation that only ever completes one page is a desktop that
+     * shows a hole on alternate frames. */
+    seed_ok = (s2.red == (uint32_t)BENCH_P16_PX && s2.blue == (uint32_t)BENCH_P16_PX &&
+               s2.orange == (uint32_t)BENCH_P16_PX &&
+               bench_p16_at(s2.orange_box, BENCH_ROT_ORG_X, BENCH_ROT_Y2) &&
+               s2.violet == 0u);
+    /* THE rotation's gate, and the one a no-merge build fails.  ORANGE was damaged in pass 2, when
+     * this page was being SHOWN; pass 3's own damage was VIOLET alone.  So orange=4096 here can only
+     * be ps2_rot_owe() having folded it into this page's debt, and orange=0 -- with violet there and
+     * correct -- is the merge missing.  `bands=2` on the flip-3 row is the same fact from the bus:
+     * two separate rects went out where one rect was asked for. */
+    rot_ok = (s3.red == (uint32_t)BENCH_P16_PX && s3.blue == (uint32_t)BENCH_P16_PX &&
+              s3.orange == (uint32_t)BENCH_P16_PX && s3.violet == (uint32_t)BENCH_P16_PX &&
+              bench_p16_at(s3.violet_box, BENCH_ROT_VIO_X, BENCH_ROT_Y1) &&
+              b3 == 2u && owed3 == 1);
+    /* Each page is a complete picture: field plus the plates it holds, to the pixel.  A page with
+     * a third colour on it is a plate that landed at the wrong address, and a short sum is a band
+     * that did not cover what it claimed to. */
+    sums_ok = (pre.navy + pre.red == (uint32_t)BENCH_P16_PAGE) &&
+              (s1.navy + s1.red + s1.blue == (uint32_t)BENCH_P16_PAGE) &&
+              (s2.navy + s2.red + s2.blue + s2.orange == (uint32_t)BENCH_P16_PAGE) &&
+              (s3.navy + s3.red + s3.blue + s3.orange + s3.violet == (uint32_t)BENCH_P16_PAGE);
+
+    if (!ctl_refused) {
+        why = "PSMCT32 accepted a second page, so the reservation this whole lane is built on is "
+              "not the one ps2_gs_vram.h describes -- read its gs_disp_reserve_bytes() before any "
+              "count below";
+    } else if (!dbl_ok) {
+        why = "the two-page model did not come up on a 16-bit page, or did not separate the write "
+              "target from the scanned one: the [PAGE] row above ps2_page_double_apply() names "
+              "which";
+    } else if (!errs_ok) {
+        why = "a census refused or timed out, so the counts are a partial page -- read the "
+              "FAILED row's stage name, not a colour";
+    } else if (!no_sent) {
+        why = "the read's own sentinel came back, so a band was cut short and the sums below "
+              "describe a page nobody plated";
+    } else if (!hidden_ok) {
+        why = "the page being scanned was written by the rotation, or does not hold the plate it "
+              "already had -- a writer still on the scanned page is the flicker's root cause and "
+              "makes every reading after it meaningless";
+    } else if (!flip1_ok) {
+        why = "after a flip the census did not name the page that was just plated: "
+              "gs_disp_flip_commit() and ps2_gs_dispfb_store() disagree with each other, or the "
+              "plated page is not the one the counts describe";
+    } else if (!seed_ok) {
+        why = "the page the dial found being scanned never got the whole canvas: read the flip-2 "
+              "row's blue= and orange= -- one of the two is the seeded debt not being paid";
+    } else if (!rot_ok) {
+        why = "the catch-up did not arrive: this pass' damage was one rect and the page it drew "
+              "still owed another, so orange=0 on the flip-3 row (with violet present) is "
+              "ps2_rot_owe() not running -- a hidden page with a hole in it, and the flicker back "
+              "as a stale frame every other flip";
+    } else if (!sums_ok) {
+        why = "a page is not field-plus-plates: something on it is a colour this phase never "
+              "sent, which is a plate at the wrong address rather than a missing one";
+    } else {
+        why = "the hidden page took the picture, the flip moved what is scanned to it, and the "
+              "damage each page owed while hidden arrived on it one pass later -- four colours, "
+              "two pages, exact sums";
+    }
+    ps2_kprintf("[BENCH] rung 4 verdict: %s -- %s\n",
+                (ctl_refused && dbl_ok && errs_ok && no_sent && hidden_ok && flip1_ok &&
+                 seed_ok && rot_ok && sums_ok) ? "MEASURED" : "NOT MEASURED", why);
+}
+#endif /* BTRON_PS2_BENCH_GS >= 7 */
+
 
 /* The price a float op costs the image is not the price the `[FPU]` chain row prints.
  * That chain runs inside ps2_builtins.c -- the one TU built -mhard-float -- so its
@@ -13972,6 +15195,31 @@ static void ps2_gui_pass(GDEV *screen)
                 s_bench_shell_geom[7] = (int)(gs_tex_vram_left() / 1024u);
             }
         }
+        /* The task census, taken from inside a pass the app's own body asked for.  `ps` needs
+         * a prompt the desktop is not holding, so without this row the PS2's btron_list_tasks()
+         * would only ever have been exercised by a host build of the same formatter.  What the
+         * state column means here is decided by where the pass is: RUN is the body on the stack
+         * and not in its hold, SLEEP would mean the hold is marked around the wrong span, NEW
+         * at frame 3 would mean the counted passes are the session loop's and not the body's,
+         * and no row at all would mean cre_tsk() never got a slot. */
+        if (s_bench_app_made == 3u) {
+            char trow[64];
+
+            /* Walked to the end rather than to PS2_MAX_TASKS: that macro belongs to the task
+             * layer further down this file, and a second literal for the table's size here
+             * would be a number that can disagree with the real one.  The formatter answers 0
+             * past the last row and BTRON_TSK_NOWALK when the core has no table, so both
+             * endings stop this loop on their own. */
+            for (int ti = 0; ; ti++) {
+                W trc = btron_task_row_text((W)ti, trow, (W)sizeof(trow));
+                if (trc == 1) {
+                    ps2_kprintf("[BENCH] task: %s\n", trow);
+                    continue;
+                }
+                if (trc == BTRON_TSK_NOWALK) ps2_kprintf("[BENCH] task: this core answers no census\n");
+                break;
+            }
+        }
         /* A heartbeat, because a phase that prints nothing for minutes is ambiguous
          * between a renderer that is slow and one that is stuck, and the elapsed
          * column is the number that tells them apart.  Sparse on purpose: the console
@@ -13986,6 +15234,19 @@ static void ps2_gui_pass(GDEV *screen)
             ps2_kprintf("[BENCH] xmb frame %u at %u ms folded\n",
                         (unsigned int)s_bench_app_made,
                         (unsigned int)((btron_render_perf_us() - s_bench_app_t0) / 1000u));
+#if BTRON_PS2_PAINT_WORKER
+        /* LANE 22's own heartbeat, on the same cadence as the frame one and for the same reason:
+         * the numbers that decide #165 are a RATIO over many passes -- asks against dups, defers
+         * against forced -- and a single closing row cannot say whether the policy was deciding all
+         * along or only at the end.  `take()` clears, so each row is the window between two of them.
+         * Gated on s_pw_on, because a row that reads `off` in the middle of a measured run would be
+         * read as the policy refusing to engage rather than as the dial being down. */
+        if (s_pw_on && (s_bench_app_made <= 3u || (s_bench_app_made % 10u) == 0u)) {
+            ps2_pw_stats_t pw;
+            ps2_pw_stats_take(&pw);
+            ps2_pw_row(&pw, 1);
+        }
+#endif
         /* Twice, because a surface that is black at frame 3 and full at frame 30 is a
          * renderer that needed its textures baked, and one black both times never drew. */
         if (s_bench_app_made == 3u) { ps2_bench_xmb_surface("frame 3 "); ps2_bench_face_stats("frame 3 "); ps2_bench_gs_planes(); }
@@ -14029,6 +15290,22 @@ static void ps2_gui_pass(GDEV *screen)
         ps2_plane_run_print();        /* ... and so are the two planes' budgets */
         ps2_ptr_stroke_row();         /* ... and the pointer's pair, which is the row
                                        * a killed run would otherwise never show */
+#if BTRON_PS2_PAINT_WORKER
+        /* The whole session's decision table, not one window's: the harness kills the VM seconds
+         * after this sentinel, so a run that wanted `paintw stat` never gets to it, and the
+         * per-job lines are the only place a reader can see WHAT the policy priced the app's frame
+         * at -- which is the number that says whether a `defer` was a real refusal or an estimate
+         * of zero. */
+        {
+            ps2_pw_stats_t pw;
+            ps2_pw_stats_take(&pw);
+            ps2_pw_row(&pw, 1);
+            ps2_pw_jobs();
+            ps2_kprintf("[PW] pass plan: planned=%u deferred=%u (%u%% of passes refused the app)\n",
+                        (unsigned int)s_pw_passes, (unsigned int)s_pw_defer_passes,
+                        (unsigned int)(s_pw_passes ? (100u * s_pw_defer_passes) / s_pw_passes : 0u));
+        }
+#endif
         ps2_kprintf("\n[BENCH] run complete\n");
     }
 #endif
@@ -14129,6 +15406,17 @@ static void ps2_gui_pass(GDEV *screen)
     ps2_cycle_damage(&set);
 
     if (force_full || set.overflow || ov) ps2_bandset_full(&set);
+
+    /* LANE 21 rung 4: with two pages this pass's set is not the whole ask.  The page about
+     * to be drawn owes whatever the canvas did while it was hidden, and the page about to be
+     * hidden is owed what this pass did -- in that order, because the debt that arrives here
+     * is a catch-up and must not be re-owed (see the law above s_page_owed).
+     *
+     * Read every pass rather than latched at session entry, which is what makes Ctrl+P an
+     * A/B at all: the present that follows the keystroke is already the flipping one. */
+    const int dbl = (int)gs_disp_is_double();
+    uint32_t flip_wait_us = 0u;
+    if (dbl && ps2_rot_step(&set)) ps2_cycle_why(PS2_CYCLE_WHY_ROTATE);
     ps2_cycle_merged(&set);
 
     if (!set.n) {
@@ -14139,6 +15427,14 @@ static void ps2_gui_pass(GDEV *screen)
 
     ps2_cycle_mark();
 
+#if BTRON_PS2_PAINT_WORKER
+    /* #165, before the first band: the pass's own remaining slice is `ui_period_us` minus what the
+     * dispatch and the band decision already took, and the app's next frame is admitted against it.
+     * `s_pw_upload_us` is the bus column of the pass before this one -- the part of a present the
+     * policy cannot schedule away, because the canvas that has just been composited has to go out. */
+    ps2_pw_plan(&set, ps2_pw_us(ui_t0, ps2_count_read()));
+#endif
+
     {
         uint32_t r_us, s_us, u_us, px;
         uint32_t lat = 0;
@@ -14146,6 +15442,27 @@ static void ps2_gui_pass(GDEV *screen)
         const int dom = s_paint_owed ? s_paint_dom : -1;
 
         ps2_paint_bands(screen, &set, &r_us, &s_us, &u_us, &px);
+
+#if BTRON_PS2_PAINT_WORKER
+        {
+            /* Fold the bus column first: it is the estimate the NEXT pass's slice is cut from, and
+             * a 3:1 EWMA is the same shape the worker uses for a window's price.  Then drop the
+             * latch, which is a fact about this band set and dies with it -- leaving it raised
+             * would make the next pass paint nothing. */
+            if (s_pw_on)
+                s_pw_upload_us = s_pw_upload_us ? ((3u * s_pw_upload_us + u_us + 2u) >> 2) : u_us;
+            ps2_pw_freeze(0);
+            s_pw_layer = NULL;
+        }
+#endif
+
+        /* The page this pass just plated is complete, so it may be shown.  Before the latency
+         * stamp below, because that stamp's whole question is "how old is the pixel the eye
+         * gets", and a present that waits for the frame boundary is older by exactly what it
+         * waited -- a number worth SEEING in `lat:` rather than hiding in a footnote.  It is
+         * not in r_us/s_us/u_us: those three are this pass's work, and the wait is the
+         * display's clock, which is why it comes back separately. */
+        if (dbl) flip_wait_us = ps2_gs_flip(1);
 
         if (s_paint_owed && s_paint_age_f0) {
             /* Frames, not cycles: an OHCI frame is a millisecond and it is the
@@ -14168,8 +15485,19 @@ static void ps2_gui_pass(GDEV *screen)
      * ASYNC_UI_BUDGET_US for the budget, and against the table's ui_period_us for the
      * deadline.  A pass that found no damage returns above and is charged nowhere -- it
      * owed nothing, so it cannot be late, and counting idle passes as misses would make a
-     * still desktop read as a broken one. */
-    ps2_plane_charge(&s_plane_ui, ui_t0, ASYNC_UI_BUDGET_US);
+     * still desktop read as a broken one.
+     *
+     * The flip's wait is moved OUT of that charge, and it is the one term in this port with a
+     * right to be: the plane's 4 ms budget is a question about how much bus time the
+     * compositor takes, and sitting still until the frame boundary takes none -- the GS is
+     * scanning, not being spoken to.  Advancing the start boundary by the wait is what says so
+     * without inventing a second budget: `us = (now - t0)/tpu`, so a t0 pushed forward by
+     * wait*tpu measures the work and not the clock.  With rung 4 off, flip_wait_us is 0 and
+     * this is the same arithmetic it was.  What the wait costs is not lost, it is on the
+     * `lat:` row above, which is where a viewer would look for it. */
+    ps2_plane_charge(&s_plane_ui,
+                     ui_t0 + flip_wait_us * btron_ee_ticks_per_us(),
+                     ASYNC_UI_BUDGET_US);
     ps2_plane_ui_deadline();
     s_shown_x = s_mouse_x;
     s_shown_y = s_mouse_y;
@@ -14207,9 +15535,36 @@ static void ps2_gui_pass(GDEV *screen)
 typedef struct {
     T_CTSK config;
     int    active;
+    /* What the census can prove about this body.  There is no thread here to be running or
+     * blocked, so the states are stated in the only terms this kernel has -- a slot on the
+     * caller's stack, and whether the body is presently inside the part of `dly_tsk()` that
+     * gives bus time back.
+     *
+     *   started   sta_tsk() has entered the body.  False only for a created, never started one.
+     *   holding   inside ps2_task_hold(): no pass runs, nothing is polled, the body is waiting
+     *             for its next slice.  This is the honest equivalent of a μITRON DLY wait, and
+     *             the only wait this core has -- `slp_tsk()` is a no-op.
+     *
+     * A body that came back has its slot cleared rather than being marked DEAD, because that
+     * is what core_posix.c does (`task_wrapper()` drops `active` on return) and its census has
+     * never emitted DEAD either; a μITRON DTS task is one awaiting `del_tsk()`, and this port
+     * has no such caller.  It is also the only shape that works here: `sta_tsk()` is synchronous,
+     * so the pool is what bounds how many apps a session can open, and the measured bench run
+     * put four sequential XMB opens through four slots and left nothing for a fifth.
+     *
+     * Everything else about a started body is RUN -- it is on the stack, either executing or
+     * driving the pass it just asked for.  Two rows can read RUN at once, and that is not a
+     * contradiction on a machine whose bodies nest: it says both are live and unblocked, which
+     * is what the header's law for RUN means.  It does not claim either holds a CPU. */
+    int    started;
+    int    holding;
 } PS2_TASK;
 
 static PS2_TASK  s_ps2_tasks[PS2_MAX_TASKS];
+/* Which body is innermost.  Bodies nest (the contract above), so the one that is waiting is
+ * always the last one started, and a depth-indexed stack answers "whose wait is this" with no
+ * thread-local storage and no lock.  Slot [0] is the session loop and holds no task id. */
+static ID        s_ps2_task_at[PS2_MAX_TASKS + 1];
 static uint32_t  s_task_ms;          /* ms since the desktop session, folded for Count wrap */
 static uint32_t  s_task_us_rem;      /* µs not yet worth a millisecond, always < 1000 */
 static uint32_t  s_task_count_last;
@@ -14217,13 +15572,27 @@ static int       s_task_clock_running;
 /* `s_task_driving` -- body depth, 0 while the session loop drives -- is declared up at
  * ps2_gui_pass(), which is the only reader that comes before this point in the file. */
 
+/* The body that owns the call being made, or NULL when the session loop makes it.  A census
+ * row is only ever taken from the loop or from a pass inside one, and a hold from the loop
+ * belongs to no task, so the NULL is the answer, not a failure. */
+static PS2_TASK* ps2_task_self(void)
+{
+    ID id;
+    if (s_task_driving <= 0 || s_task_driving > PS2_MAX_TASKS) return NULL;
+    id = s_ps2_task_at[s_task_driving];
+    if (id <= 0 || id > PS2_MAX_TASKS) return NULL;
+    return &s_ps2_tasks[id - 1];
+}
+
 ID cre_tsk(const T_CTSK *pk_ctsk)
 {
     if (!pk_ctsk || !pk_ctsk->task) return E_PAR;
     for (int i = 0; i < PS2_MAX_TASKS; i++) {
         if (s_ps2_tasks[i].active) continue;
-        s_ps2_tasks[i].config = *pk_ctsk;
-        s_ps2_tasks[i].active = 1;
+        s_ps2_tasks[i].config   = *pk_ctsk;
+        s_ps2_tasks[i].active   = 1;
+        s_ps2_tasks[i].started  = 0;
+        s_ps2_tasks[i].holding  = 0;
         return i + 1;
     }
     return E_LIMIT;
@@ -14243,9 +15612,21 @@ ER sta_tsk(ID tskid, VW exinf)
     if (exinf != 0) t->config.exinf = exinf;
     /* Returns when the body returns, which for these apps is when their window
      * closes; the desktop loop resumes from the pass that started it. */
+    s_ps2_task_at[s_task_driving + 1] = tskid;
+    t->started = 1;
     s_task_driving++;
     t->config.task(t->config.exinf);
     s_task_driving--;
+    s_ps2_task_at[s_task_driving + 1] = 0;
+    /* The body came back between two of its own frames, so it holds nothing and is finished
+     * with.  Give the slot straight back: here a started task runs to its end inside this
+     * call, so a slot left `active` past the return is a slot no later app open can get, and
+     * the pool -- not the machine -- becomes the limit on how many windows a session can run.
+     * core_posix.c reclaims in exactly this place (`task_wrapper()` clears `active` when its
+     * thread's body returns), so the two cores now answer `ps` under one law. */
+    t->started  = 0;
+    t->holding  = 0;
+    t->active   = 0;
     return E_OK;
 }
 
@@ -14286,12 +15667,20 @@ ER get_tim(SYSTIME *p_time)
  * With no Count to read there is nothing to time against, so the pass is not held. */
 static void ps2_task_hold(uint32_t ms)
 {
+    PS2_TASK *self = ps2_task_self();
+
     if (!s_timebase_ok || ms == 0) return;
     if (ms > 250u) ms = 250u;
     const uint32_t start  = ps2_count_read();
     const uint32_t budget = ms * (1000u * btron_ee_ticks_per_us());
+    /* The only wait this kernel can observe, so the only one the census may report.  Set
+     * around the loop and not around ps2_task_dly(): the pass that precedes the hold is the
+     * body doing work, and a row that called that sleeping would hide exactly the frame cost
+     * `ps` is read for. */
+    if (self) self->holding = 1;
     while ((uint32_t)(ps2_count_read() - start) < budget)
         ps2_delay_cycles(200u);
+    if (self) self->holding = 0;
 }
 
 /* One frame for a task body: present what it just invalidated, then give back the
@@ -14322,6 +15711,34 @@ ER tk_dly_tsk(W dlytim)
     return E_OK;
 }
 
+/* The InterCore worker census (include/btron/itron.h), answered from the table above rather
+ * than from the canned four-line InterCore table `ps` used to print.  Slots are walked in the
+ * order cre_tsk() hands them out, which is ascending tskid, so the shell's rows are stable
+ * across a session and a worker keeps its line when another opens.
+ *
+ * Zero here is a true answer on a PS2 that has just booted -- no app has called cre_tsk() yet
+ * -- and gterm's `ps` prints its own line for that case.  This function never returns
+ * BTRON_TSK_NOWALK: this core does have a table, and the weak default in core_init.c was the
+ * only thing saying it did not. */
+W btron_list_tasks(BTRON_TSK_ROW *out, W max)
+{
+    W n = 0;
+
+    if (!out || max <= 0) return 0;
+    for (int i = 0; i < PS2_MAX_TASKS && n < max; i++) {
+        const PS2_TASK *t = &s_ps2_tasks[i];
+        if (!t->active) continue;
+        out[n].tskid = (ID)(i + 1);
+        out[n].name  = t->config.name;
+        out[n].pri   = t->config.itskpri;
+        out[n].entry = t->config.task;
+        out[n].state = !t->started ? BTRON_TSK_NEW :
+                       t->holding ? BTRON_TSK_SLEEP : BTRON_TSK_RUN;
+        n++;
+    }
+    return n;
+}
+
 void launch_ps2_desktop_session(void)
 {
     ps2_kprintf("\n[PS2] Switching to Authentic B-System 800x600 Workbench Desktop...\n");
@@ -14342,6 +15759,30 @@ void launch_ps2_desktop_session(void)
     btron_desktop_note_size(PS2_SCREEN_WIDTH, PS2_SCREEN_HEIGHT);
     workbench_init(PS2_SCREEN_WIDTH);
 
+    /* LANE 21 rung 4: the present policy the `page double` dial asked for is applied HERE, at
+     * the one point where a flipping compositor exists to honour it, and cleared on the way out
+     * (see the session end below).  Both halves are load-bearing: the GS text path writes the
+     * drawn page, so leaving the model on after Ctrl+Q is a Stage-1 console that takes input and
+     * shows nothing, and turning it on before the cold paint below is a cold paint into a page
+     * nobody is scanning. */
+    ps2_page_double_apply(s_page_double_wanted);
+    ps2_rot_owe_all();
+
+#if BTRON_PS2_PAINT_WORKER
+    /* Task #165: a build made with `PS2_PW=1` enters the desktop with the worker ARMED, because that
+     * is what the operator asked for by building it -- and the table is reset here rather than at
+     * boot because a price learned about a previous session's XMB window is a price about freed
+     * memory.  Ctrl+O turns it off, `paintw 0` at the console turns it off, and either way the next
+     * pass is the shipped present path. */
+    ps2_pw_reset(0u);
+    s_pw_on  = 1;
+    s_pw_passes = 0u;
+    s_pw_defer_passes = 0u;
+    ps2_kprintf("[PS2] Paint worker #165 armed (this image was built PS2_PW=1): one layer record per\n");
+    ps2_kprintf("[PS2] pass, and an app's frame admitted against the frame's remaining slice.\n");
+    ps2_kprintf("[PS2] [Ctrl]+[O] turns it off and on; 'paintw stat' prints what it decided.\n");
+#endif
+
     /* Initial paint & blit to GS eDRAM.  Timed and printed, because this is the
      * cost a whole-canvas pass pays and it needs no protocol to observe: whatever
      * the cursor's latency turns out to be, this row is the denominator for every
@@ -14359,11 +15800,36 @@ void launch_ps2_desktop_session(void)
                     (unsigned int)((r_us + s_us + u_us) % 1000u));
     }
 
+    /* The other page has to hold the same desktop before the first flip, or the first frame the
+     * operator sees is the page this session never wrote -- VRAM that the previous format's bytes
+     * describe as noise.  Cold-starting into noise is not a flicker, but it is a wrong picture for
+     * two frames and it is the one thing that would make a rung-4 A/B unreadable.  So: plate what
+     * the cold paint just drew, show it, plate the page it moved off of, and leave the debt clear
+     * -- two full presents at entry, which is exactly what the rotation is supposed to pay once and
+     * never again. */
+    if (gs_disp_is_double()) {
+        ps2_bandset_t whole = { { { 0, 0, 0, 0 } }, 0, 0 };
+        uint32_t r_us, s_us, u_us, px;
+
+        ps2_gs_flip(1);
+        ps2_bandset_full(&whole);
+        ps2_paint_bands(screen, &whole, &r_us, &s_us, &u_us, &px);
+        ps2_rot_clear();
+        ps2_kprintf("[PS2] second page plated at entry (rung 4): render=%u us  swap=%u us  "
+                    "upload=%u us  flips=%u\n", (unsigned int)r_us, (unsigned int)s_us,
+                    (unsigned int)u_us, (unsigned int)ps2_gs_flip_count());
+    }
+
     ps2_kprintf("[PS2] Real B-System Workbench rendered via Host->Local GIF DMA (800x600).\n");
     ps2_kprintf("[PS2] Controls: Mouse/Pad/Kbd.  [Ctrl]+[Q] returns to this console.\n");
     ps2_kprintf("[PS2] [Ctrl]+[ [ ] and [Ctrl]+[ ] ] set the cursor's speed without leaving the\n");
     ps2_kprintf("[PS2] desktop, and [Ctrl]+[ \\\\ ] prints the counts behind it.  The gain row\n");
     ps2_kprintf("[PS2] names the constant to ship; 'ptrstat' and 'sens' at Stage 1 are the same numbers.\n");
+    ps2_kprintf("[PS2] [Ctrl]+[P] turns the two-page present on and off -- the flicker A/B, in the\n");
+    ps2_kprintf("[PS2] desktop, on this image.  The row it prints names which half is live.\n");
+#if BTRON_PS2_PAINT_WORKER
+    ps2_kprintf("[PS2] [Ctrl]+[O] arms and disarms the paint worker (#165): once per pass, priced.\n");
+#endif
     ps2_kprintf("btron-ps2> ");
 
     /* Interactive Event Loop */
@@ -14395,6 +15861,39 @@ void launch_ps2_desktop_session(void)
 #endif
 
     while (s_gui_active) ps2_gui_pass(screen);
+
+    /* Rung 4's present policy ends with the session, before the console is cleared -- and the
+     * order is not stylistic.  Text mode writes to gs_disp_drawn(), and with the model left on
+     * that is the page the PCRTC is not scanning: a Stage-1 prompt that takes every command and
+     * shows none of them.  Turning it off puts the writer back on the page being read and re-points
+     * DISPFB at it, which is what makes the exit row below readable at all.
+     *
+     * `s_page_double_wanted` is deliberately left as the operator set it -- this is the session
+     * ending, not the dial being reset -- and the entry above re-applies it next time. */
+    ps2_page_double_apply(0u);
+    ps2_rot_clear();
+    ps2_kprintf("[PS2] flip totals this session: %u flips, %u not vsync-aligned, longest wait %u us\n",
+                (unsigned int)ps2_gs_flip_count(), (unsigned int)ps2_gs_flip_unaligned(),
+                (unsigned int)ps2_gs_flip_wait_max_us());
+#if BTRON_PS2_PAINT_WORKER
+    {
+        ps2_pw_stats_t pw;
+
+        /* The session's own decisions, in the form the two claims are judged in: `credit` is the
+         * re-records that did not happen, `defer` the frames the budget refused, and `forced` the
+         * ones the age rule rescued anyway.  Printed at exit for the same reason [PSTAT] is -- the
+         * prompt takes no keystrokes while the desktop owns them, so the only window that can hold
+         * this session's numbers is the one that closes it. */
+        ps2_pw_stats(&pw);
+        ps2_pw_row(&pw, 0);
+        ps2_kprintf("[PS2] paint worker this session: %u of %u passes refused the app (off: %u)\n",
+                    (unsigned int)s_pw_defer_passes, (unsigned int)s_pw_passes,
+                    (unsigned int)(s_pw_on ? 0u : 1u));
+        ps2_pw_jobs();
+        ps2_pw_freeze(0);
+        s_pw_on = 0;
+    }
+#endif
 
     /* Clean return to Stage 1 text console */
     ps2_gs_text_clear();
@@ -14979,12 +16478,13 @@ void ps2_kernel_main(void)
     btron_core_banner();
     ps2_kprintf("\n");
 
-#if BTRON_PS2_BENCH_GS == 1
+#if BTRON_PS2_BENCH_GS == 1 || BTRON_PS2_BENCH_GS >= 6
     /* The census instead of the desktop -- see the rung's note on why a read is only
      * honest at Stage 1.  The shell loop below still runs, because nothing here can
      * stop PCSX2: the harness stops it when the sentinel reaches the log.  Value 2 is
      * deliberately NOT this branch: rung 6 reads a live desktop's page, so it has to
-     * boot the session the census rung refuses to start. */
+     * boot the session the census rung refuses to start.  6 IS this branch, because
+     * rung 3a reads a page nothing else may be writing -- see its own note. */
     ps2_bench_gs_census();
 #elif defined(BTRON_AUTO_GUI) && (BTRON_AUTO_GUI == 1)
     ps2_kprintf("[BOOT] AUTO_GUI=1: launching the B-System Desktop workbench\n");

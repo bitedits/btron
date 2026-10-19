@@ -419,24 +419,32 @@ static BOOL gl_client_rect(const WND *wnd, RECT *out) {
 }
 
 BOOL wnd_gl_layer_rect(RECT *out) {
-    WND *wnd = find_gl_layer();
-
-    if (!wnd) {
-        s_gl_rect_last_wnd = NULL;
-        return FALSE;
+    BOOL found = FALSE;
+    RECT u = { 0, 0, 0, 0 };
+    for (WND *c = g_wnd_head; c; c = c->next) {
+        if (c->visible && c->gl_layer) {
+            RECT cr;
+            if (gl_client_rect(c, &cr)) {
+                if (!found) {
+                    u = cr;
+                    found = TRUE;
+                } else {
+                    if (cr.left < u.left) u.left = cr.left;
+                    if (cr.top < u.top) u.top = cr.top;
+                    if (cr.right > u.right) u.right = cr.right;
+                    if (cr.bottom > u.bottom) u.bottom = cr.bottom;
+                }
+            }
+        }
     }
-    if (gl_client_rect(wnd, out)) {
-        s_gl_rect_last = *out;
-        s_gl_rect_last_wnd = wnd;
+    if (found) {
+        if (out) *out = u;
+        s_gl_rect_last = u;
+        s_gl_rect_last_wnd = find_gl_layer();
         return TRUE;
     }
-    /* The window is on the screen and is a layer, but its device is not there this instant (freed
-     * and reallocated across a re-bake, or a resize in flight).  The GS does not stop owning those
-     * pixels because the device blinked: the ink from the last stream is still on the page, and the
-     * canvas holds no picture of it.  The last rect this window provably had is the one the present
-     * path must keep cutting, and it is kept per window so a different layer never inherits it. */
-    if (s_gl_rect_last_wnd == wnd) {
-        *out = s_gl_rect_last;
+    if (s_gl_rect_last_wnd) {
+        if (out) *out = s_gl_rect_last;
         return TRUE;
     }
     return FALSE;
@@ -823,11 +831,18 @@ void redraw_all_windows_clip(const RECT *damage, BOOL blit_only) {
             t_paint += btron_render_perf_us() - t_mark;
             wnd->img_valid = TRUE;
             if (wnd->gl_layer) {
-                s_gl_pending = TRUE;
-                /* Screen rect of the client area, in the units the environment packet wants:
-                 * the window's origin is XYOFFSET's page point and the clip is this rect.
-                 * One formula, shared with wnd_gl_layer_rect(). */
-                gl_client_rect(wnd, &s_gl_client);
+                RECT cr;
+                if (gl_client_rect(wnd, &cr)) {
+                    if (!s_gl_pending) {
+                        s_gl_client = cr;
+                    } else {
+                        if (cr.left < s_gl_client.left) s_gl_client.left = cr.left;
+                        if (cr.top < s_gl_client.top) s_gl_client.top = cr.top;
+                        if (cr.right > s_gl_client.right) s_gl_client.right = cr.right;
+                        if (cr.bottom > s_gl_client.bottom) s_gl_client.bottom = cr.bottom;
+                    }
+                    s_gl_pending = TRUE;
+                }
             }
         }
         /* The GS draws these pixels, into the same VRAM this canvas was just uploaded to.

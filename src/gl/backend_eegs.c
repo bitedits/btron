@@ -883,3 +883,26 @@ uint32_t eegs_big_c1(void)      { return s_big_c1; }
 uint32_t eegs_big_c2(void)      { return s_big_c2; }
 uint32_t eegs_big_smooth(void)  { return s_big_smooth; }
 int      eegs_depth_test_active(void) { return s_depth_test_active; }
+
+void eegs_set_window_origin(int32_t win_x, int32_t win_y,
+                            int32_t clip_x0, int32_t clip_y0,
+                            int32_t clip_x1, int32_t clip_y1)
+{
+    static const uint32_t regs[4] = {
+        GS_GP_XYOFFSET_1, GS_GP_SCISSOR_1,
+        GS_GP_XYOFFSET_2, GS_GP_SCISSOR_2
+    };
+    uint64_t words[4];
+
+    if (clip_x1 < clip_x0 || clip_y1 < clip_y0) return;
+
+    words[0] = gs_pack_xyoffset(GS_XYOFFSET_PAGE - ((uint32_t)win_x << 4),
+                                GS_XYOFFSET_PAGE - ((uint32_t)win_y << 4));
+    words[1] = gs_pack_scissor((uint32_t)clip_x0, (uint32_t)clip_x1,
+                               (uint32_t)clip_y0, (uint32_t)clip_y1);
+    words[2] = words[0];
+    words[3] = words[1];
+
+    gs_rec_ad(words, regs, 4u);
+    s_prim_valid = 0;
+}

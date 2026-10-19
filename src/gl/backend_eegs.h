@@ -283,4 +283,9 @@ uint32_t eegs_big_smooth(void);
 /* Returns 1 if any primitive in the current frame requested depth testing. */
 int eegs_depth_test_active(void);
 
+/* Set the window origin and clip scissor for subsequent primitives in the stream. */
+void eegs_set_window_origin(int32_t win_x, int32_t win_y,
+                            int32_t clip_x0, int32_t clip_y0,
+                            int32_t clip_x1, int32_t clip_y1);
+
 #endif /* BTRON_GL_BACKEND_EEGS_H */

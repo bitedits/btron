@@ -11,6 +11,9 @@
 #if defined(BTRON_GL_BACKEND_TINYGL)
 #include "backend_tinygl.h"
 #endif
+#if defined(BTRON_PS2_TARGET)
+#include "backend_eegs.h"
+#endif
 #include <btron/btron.h>
 #include <btron/dp.h>        /* btron_render_perf_us(), the overlay's clock */
 #include <stdlib.h>
@@ -197,10 +200,10 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
      * picture and must keep being blitted. */
     if (gl_active_backend() == GL_BACKEND_EEGS) {
 #if defined(BTRON_PS2_TARGET)
-        /* Under EEGS on PS2, the hardware GS stream owns one designated layer window (XMB).
-         * Concurrent companion windows (GL Gears, Quake) are rendered into their client
+        /* Under EEGS on PS2, hardware GS stream supports designated 3D layer windows
+         * (XMB, Lil Cu 64). Companion windows (GL Gears, Quake) are rendered into their client
          * pixmaps via TinyGL software rasterization so all desktop quadrants remain visible. */
-        if (!wnd || !wnd->title || !(strstr(wnd->title, "Cross Media Bar") || strstr(wnd->title, "XMB"))) {
+        if (!wnd || !wnd->title || !(strstr(wnd->title, "Cross Media Bar") || strstr(wnd->title, "XMB") || strstr(wnd->title, "Lil Cu"))) {
             wnd->gl_layer = FALSE;
         } else {
             wnd->gl_layer = TRUE;
@@ -235,6 +238,12 @@ void egl_make_current(EGL_SURFACE *surf) {
 #if defined(BTRON_PS2_TARGET)
         if (surf->wnd && surf->wnd->gl_layer) {
             gl_set_active_backend(GL_BACKEND_EEGS);
+            const H title_h = (surf->wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
+            const H border  = (surf->wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+            const H dest_x  = surf->wnd->bounds.left + border;
+            const H dest_y  = surf->wnd->bounds.top + title_h + border;
+            eegs_set_window_origin(dest_x, dest_y, dest_x, dest_y,
+                                   dest_x + surf->width - 1, dest_y + surf->height - 1);
         } else {
             gl_set_active_backend(GL_BACKEND_TINYGL);
         }

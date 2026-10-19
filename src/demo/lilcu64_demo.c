@@ -17,6 +17,7 @@
 #include "../gl/gl_dispatch.h"
 #include "../gl/egl_surface.h"
 #include "../drivers/ps2/ps2_vu0_kernel.h"
+#include <btron/wnd.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -1371,7 +1372,7 @@ static void update_kinematics(float dt) {
 
 /* ── 2D UI Dashboard Drawing Overlay ──────────────────────────────── */
 
-static void render_2d_dashboard(GDEV *dev) {
+static void render_2d_dashboard(WND *wnd, GDEV *dev) {
     if (!dev) return;
 
     /* Top banner tag */
@@ -1397,6 +1398,47 @@ static void render_2d_dashboard(GDEV *dev) {
                  "[Space/P] Pulse  [W] Walk  [F] Float  [D] Dance  [1-4] Trk  [M] Mute");
     }
     drw_tc_string(dev, 32, dev->height - 32, hint_buf, COLOR_WHITE, 0);
+
+#if defined(BTRON_PS2_TARGET)
+    if (wnd && wnd->gl_layer) {
+        GDEV *screen = wnd_mgr_get_screen();
+        if (screen && screen->pixels) {
+            const H title_h = (wnd->attr & WND_ATTR_TITLE) ? WND_TITLE_HEIGHT : 0;
+            const H border  = (wnd->attr & WND_ATTR_BORDER) ? 4 : 0;
+            const H dest_x  = wnd->bounds.left + border;
+            const H dest_y  = wnd->bounds.top + title_h + border;
+
+            /* Blit bottom speech bubble / hint area (dev->height - 68 .. dev->height) to screen */
+            H y0 = dev->height > 68 ? dev->height - 68 : 0;
+            H y1 = dev->height;
+            for (H y = y0; y < y1; y++) {
+                H sy = dest_y + y;
+                if (sy < 0 || sy >= screen->height) continue;
+                for (H x = 0; x < dev->width; x++) {
+                    H sx = dest_x + x;
+                    if (sx < 0 || sx >= screen->width) continue;
+                    screen->pixels[sy * screen->width + sx] = dev->pixels[y * dev->width + x];
+                }
+            }
+            RECT r_bubble = { dest_x, dest_y + y0, dest_x + dev->width, dest_y + y1 };
+            wnd_gl_cover_add(&r_bubble);
+
+            /* Blit top banner area (0 .. 48) to screen */
+            H top_h = dev->height < 48 ? dev->height : 48;
+            for (H y = 0; y < top_h; y++) {
+                H sy = dest_y + y;
+                if (sy < 0 || sy >= screen->height) continue;
+                for (H x = 0; x < dev->width; x++) {
+                    H sx = dest_x + x;
+                    if (sx < 0 || sx >= screen->width) continue;
+                    screen->pixels[sy * screen->width + sx] = dev->pixels[y * dev->width + x];
+                }
+            }
+            RECT r_banner = { dest_x, dest_y, dest_x + dev->width, dest_y + top_h };
+            wnd_gl_cover_add(&r_banner);
+        }
+    }
+#endif
 }
 
 /* ── Window Paint & Render Callback ───────────────────────────────── */
@@ -1469,7 +1511,7 @@ static void demo_paint(WND *wnd, GDEV *dev) {
     egl_swap_buffers(surf);
 
     /* Draw 2D BTRON Dashboard & Speech Bubble */
-    render_2d_dashboard(dev);
+    render_2d_dashboard(wnd, dev);
 }
 
 /* ── Window Event Callback ────────────────────────────────────────── */

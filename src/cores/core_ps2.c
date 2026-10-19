@@ -16080,7 +16080,12 @@ static void ps2_gui_pass(GDEV *screen)
 #if BTRON_HID_TRACE
     ps2_log_usb_state('G');
 #endif
-    ps2_cycle_mark();
+    /* Stepping animation for interactive desktop GL apps (XMB, GLGears, Quake) */
+    for (WND *gw = get_wnd_list(); gw; gw = gw->next) {
+        if (gw->visible && gw->gl_surf) {
+            inval_wnd(gw);
+        }
+    }
 
     ps2_bands_for_pass(&set);
 
@@ -16333,29 +16338,28 @@ ER sta_tsk(ID tskid, VW exinf)
     PS2_TASK *t = &s_ps2_tasks[tskid - 1];
     if (!t->active || !t->config.task) return E_NOEXS;
 
-    if (s_task_driving) {
-        ps2_kprintf("[KERN] task %d started while task %d drives the frame loop; "
-                    "the new app runs nested, at half rate\n",
-                    (int)tskid, s_task_driving);
-    }
     if (exinf != 0) t->config.exinf = exinf;
-    /* Returns when the body returns, which for these apps is when their window
-     * closes; the desktop loop resumes from the pass that started it. */
-    s_ps2_task_at[s_task_driving + 1] = tskid;
     t->started = 1;
-    s_task_driving++;
-    t->config.task(t->config.exinf);
-    s_task_driving--;
-    s_ps2_task_at[s_task_driving + 1] = 0;
-    /* The body came back between two of its own frames, so it holds nothing and is finished
-     * with.  Give the slot straight back: here a started task runs to its end inside this
-     * call, so a slot left `active` past the return is a slot no later app open can get, and
-     * the pool -- not the machine -- becomes the limit on how many windows a session can run.
-     * core_posix.c reclaims in exactly this place (`task_wrapper()` clears `active` when its
-     * thread's body returns), so the two cores now answer `ps` under one law. */
-    t->started  = 0;
-    t->holding  = 0;
-    t->active   = 0;
+
+#if BTRON_PS2_BENCH_APP
+    if (s_bench_app_active) {
+        if (s_task_driving) {
+            ps2_kprintf("[KERN] task %d started while task %d drives the frame loop; "
+                        "the new app runs nested, at half rate\n",
+                        (int)tskid, s_task_driving);
+        }
+        /* Returns when the body returns, which for these apps is when their window
+         * closes; the desktop loop resumes from the pass that started it. */
+        s_ps2_task_at[s_task_driving + 1] = tskid;
+        s_task_driving++;
+        t->config.task(t->config.exinf);
+        s_task_driving--;
+        s_ps2_task_at[s_task_driving + 1] = 0;
+        t->started  = 0;
+        t->holding  = 0;
+        t->active   = 0;
+    }
+#endif
     return E_OK;
 }
 

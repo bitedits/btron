@@ -214,6 +214,10 @@ EGL_SURFACE* egl_create_window_surface(WND *wnd) {
 void egl_make_current(EGL_SURFACE *surf) {
     if (!surf || !surf->wnd || !surf->wnd->dev) return;
     surf->pixels = surf->wnd->dev->pixels;
+    if (surf->width != surf->wnd->dev->width || surf->height != surf->wnd->dev->height) {
+        surf->width = surf->wnd->dev->width;
+        surf->height = surf->wnd->dev->height;
+    }
 #if defined(BTRON_GL_BACKEND_TINYGL)
     if (gl_tinygl_pipeline()) {
         tinygl_backend_resize(surf->width, surf->height, surf->pixels);

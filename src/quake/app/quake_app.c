@@ -91,6 +91,10 @@ static void quake_paint(WND *wnd, GDEV *dev) {
         R_Resize(dev->width, dev->height);
     }
 
+#if defined(BTRON_PS2_TARGET)
+    SV_ServerFrame(1.0f / 60.0f);
+#endif
+
     R_BeginFrame();
     R_RenderView();
     R_EndFrame();

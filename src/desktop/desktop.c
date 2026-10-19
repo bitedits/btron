@@ -518,6 +518,32 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
     tip_init();
     init_evt_sys();
 
+#if defined(BTRON_PS2_TARGET)
+    btron_desktop_note_size(w, h);
+    /* 4 OpenGL apps opened in Tile mode:
+     * 1) Terminal
+     * 2) XMB
+     * 3) GL Gears
+     * 4) Quake
+     * opn_wnd prepends each new window to g_wnd_head.
+     * To tile in order (0: Terminal, 1: XMB, 2: GL Gears, 3: Quake),
+     * we open in reverse order: Quake, GL Gears, XMB, Terminal.
+     */
+    WND *w_quake = open_quake_window ? open_quake_window(120, 60, 480, 360) : NULL;
+    WND *w_gears = open_glgears_window ? open_glgears_window() : NULL;
+    WND *w_xmb   = open_xmb_window ? open_xmb_window() : NULL;
+    WND *w_cli   = open_gterm_window ? open_gterm_window() : NULL;
+    (void)w_quake;
+    (void)w_gears;
+    (void)w_xmb;
+
+    wnd_tile_all();
+
+    if (w_cli) {
+        top_wnd(w_cli);
+        w_cli->focused = TRUE;
+    }
+#else
     open_vobj_manager_window();
     open_t_editor_window();
     WND *w_cli = open_gterm_window();
@@ -525,6 +551,7 @@ GDEV* init_baremetal_desktop(uint32_t *fb, uint32_t w, uint32_t h) {
         top_wnd(w_cli);
         w_cli->focused = TRUE;
     }
+#endif
 
     /* Initial paint to backbuffer (caller blits to GPU VRAM after this returns) */
     redraw_baremetal_desktop(screen, w, h);

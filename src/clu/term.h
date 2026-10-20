@@ -19,7 +19,7 @@
 #ifndef TERM_MAXC
 #define TERM_MAXC 256
 #endif
-#define TERM_STYLES 32
+#define TERM_STYLES 64
 
 /* Keys: Unicode scalar values below K_BASE are text; everything else here. */
 #define K_BASE 0x110000
@@ -52,6 +52,7 @@ extern int term_rows, term_cols;
 
 /* Styles are SGR parameter strings, e.g. "1;97;104".  id 0 is the default. */
 void term_style(int id, const char *sgr);
+void term_draw_function_bar(int row, const char *const labels[10]);
 
 /* Drawing (back buffer). Coordinates are 0-based; all calls clip. */
 void scr_fill(int row, int col, int w, uint32_t cp, int style);

@@ -187,7 +187,7 @@ static void tv_draw_header(void)
                        ((g_wrap_mode == LANG_WRAP_CHAR) ? "CHAR" : "OFF");
 
     if (g_view_mode) {
-        (void)snprintf(title, sizeof(title), " %s  %s [TEXT]", fname, vstr);
+        (void)snprintf(title, sizeof(title), " %s  %s [TEXT] [WRAP:%s]", fname, vstr, wstr);
     } else {
         (void)snprintf(title, sizeof(title), " %s  %s%s [WRAP:%s]",
                        fname, vstr, g_modified ? " [+]" : "", wstr);
@@ -248,7 +248,7 @@ static int tv_count_remaining_visual_rows(int from_line, int from_sub)
 
 static void tv_scroll_down(int count)
 {
-    int text_rows = term_rows - 2;
+    int text_rows = term_rows - 3;
     if (text_rows < 1) text_rows = 1;
 
     while (count-- > 0) {
@@ -305,16 +305,20 @@ static void tv_get_selection_range(size_t *r1, size_t *b1, size_t *r2, size_t *b
 
 static void tv_draw_footer(void)
 {
-    int r = term_rows - 1;
+    static const char *const labels[10] = {
+        "F1 Help", "F2 Empty", "F3 Select", "F4 Edit", "F5 Wrap",
+        "F6 Word-Wrap", "F7 Empty", "F8 Empty", "F9 Empty", "F10 Quit"
+    };
+    int r = term_rows - 2;
     scr_fill(r, 0, term_cols, ' ', STYLE_FOOTER);
 
     char left_str[80];
     if (g_view_mode) {
-        (void)snprintf(left_str, sizeof(left_str), " [VIEW MODE: TEXT] F4 Edit  ^Q/q Exit");
+        (void)snprintf(left_str, sizeof(left_str), " [VIEW: TEXT]");
     } else if (g_sel_active) {
-        (void)snprintf(left_str, sizeof(left_str), " [SEL] F1 Help  F3 Unmark  ^C Copy  ^X Cut  ^V Paste");
+        (void)snprintf(left_str, sizeof(left_str), " [SEL]");
     } else {
-        (void)snprintf(left_str, sizeof(left_str), " [EDIT] F1 Help  F3 Mark  F5 Wrap  ^S Save  ^Q Exit");
+        (void)snprintf(left_str, sizeof(left_str), " [EDIT]");
     }
     scr_str(r, 0, left_str, STYLE_FOOTER);
 
@@ -327,7 +331,7 @@ static void tv_draw_footer(void)
     const char *pos_tag = "";
     if (g_scroll_y == 0 && g_scroll_sub == 0) {
         pos_tag = "Top";
-    } else if (tv_count_remaining_visual_rows(g_scroll_y, g_scroll_sub) <= (term_rows - 2)) {
+    } else if (tv_count_remaining_visual_rows(g_scroll_y, g_scroll_sub) <= (term_rows - 3)) {
         pos_tag = "End";
     }
 
@@ -344,11 +348,12 @@ static void tv_draw_footer(void)
     if (col > (int)strlen(left_str) + 1) {
         scr_str(r, col, right_str, STYLE_FOOTER);
     }
+    term_draw_function_bar(term_rows - 1, labels);
 }
 
 static void tv_draw_text(void)
 {
-    int text_rows = term_rows - 2;
+    int text_rows = term_rows - 3;
     if (text_rows < 1) text_rows = 1;
 
     size_t line_idx = (size_t)g_scroll_y;
@@ -436,7 +441,7 @@ static void tv_update_cursor(void)
     TvLine *l = &g_lines[g_cur_line];
     if (g_cur_byte > l->len) g_cur_byte = l->len;
 
-    int text_rows = term_rows - 2;
+    int text_rows = term_rows - 3;
     if (text_rows < 1) text_rows = 1;
 
     if (g_view_mode) {
@@ -883,7 +888,7 @@ static void tv_draw_help_dialog(void)
     scr_str(dr + 4, dc + 3, "^W / Cmd+W : Wrap Mode  ^N / Cmd+N : New File", STYLE_MENU);
     scr_str(dr + 5, dc + 3, "^O / Cmd+O : Reload     ^C/^X/^V   : Copy/Cut/Paste", STYLE_MENU);
     scr_str(dr + 6, dc + 3, "Opt+Left/Right: Word    Cmd+Up/Dn  : File Top/End", STYLE_MENU);
-    scr_str(dr + 7, dc + 3, "F1: Help   F3: Select   F4: Edit   F5: Wrap Mode", STYLE_MENU);
+    scr_str(dr + 7, dc + 3, "F1: Help   F3: Select   F4: Edit   F6: Word-Wrap", STYLE_MENU);
     scr_str(dr + 9, dc + 12, "[ Press ESC or ENTER to Close ]", STYLE_MENU_SEL);
 
     scr_cursor(dr + 9, dc + 13, 1);
@@ -1066,7 +1071,8 @@ int tv_session_step(int k)
         g_view_mode = 0;
         break;
 
-    case K_F5:
+    case K_F6:
+    case K_F5: /* Keep the former wrap shortcut working. */
     case K_CTRL('W'):
         g_wrap_mode = (g_wrap_mode + 1) % LANG_WRAP_MODES;
         g_scroll_sub = 0;
@@ -1132,7 +1138,7 @@ int tv_session_step(int k)
 
     case K_CTRL('U'):
         if (g_view_mode) {
-            int text_rows = term_rows - 2;
+            int text_rows = term_rows - 3;
             tv_scroll_up(text_rows > 2 ? text_rows / 2 : 1);
         } else {
             tv_kill_to_sol();
@@ -1141,7 +1147,7 @@ int tv_session_step(int k)
 
     case K_CTRL('D'):
         if (g_view_mode) {
-            int text_rows = term_rows - 2;
+            int text_rows = term_rows - 3;
             tv_scroll_down(text_rows > 2 ? text_rows / 2 : 1);
         } else {
             tv_delete_char();
@@ -1267,7 +1273,7 @@ int tv_session_step(int k)
         break;
 
     case K_PGUP: {
-        int text_rows = term_rows - 2;
+        int text_rows = term_rows - 3;
         int step = (text_rows > 3) ? (text_rows - 3) : 1;
         tv_scroll_up(step);
         if (!g_view_mode) {
@@ -1278,7 +1284,7 @@ int tv_session_step(int k)
     }
 
     case K_PGDOWN: {
-        int text_rows = term_rows - 2;
+        int text_rows = term_rows - 3;
         int step = (text_rows > 3) ? (text_rows - 3) : 1;
         tv_scroll_down(step);
         if (!g_view_mode) {
@@ -1327,16 +1333,16 @@ int tv_session_step(int k)
             if (k == 'j') tv_scroll_down(1);
             else if (k == 'k') tv_scroll_up(1);
             else if (k == ' ' || k == 'f') {
-                int text_rows = term_rows - 2;
+                int text_rows = term_rows - 3;
                 tv_scroll_down(text_rows > 3 ? text_rows - 3 : 1);
             } else if (k == 'b') {
-                int text_rows = term_rows - 2;
+                int text_rows = term_rows - 3;
                 tv_scroll_up(text_rows > 3 ? text_rows - 3 : 1);
             } else if (k == 'd') {
-                int text_rows = term_rows - 2;
+                int text_rows = term_rows - 3;
                 tv_scroll_down(text_rows > 2 ? text_rows / 2 : 1);
             } else if (k == 'u') {
-                int text_rows = term_rows - 2;
+                int text_rows = term_rows - 3;
                 tv_scroll_up(text_rows > 2 ? text_rows / 2 : 1);
             } else if (k == 'g') {
                 g_scroll_y = 0;

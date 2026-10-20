@@ -201,29 +201,12 @@ void draw_command_line(void)
 void draw_bottom_bar(void)
 {
     int row = term_rows - 1;
-    if (row < 0) return;
-
-    scr_fill(row, 0, term_cols, ' ', SC_STYLE_BOTTOM);
-
-    static const struct { const char *num; const char *label; } fkeys[] = {
-        {"1", "Help "},
-        {"2", "App "},
-        {"3", "View "},
-        {"4", "Edit "},
-        {"5", "Copy "},
-        {"6", "Move "},
-        {"7", "Mkdir "},
-        {"8", "Delete "},
-        {"9", "Menu "},
-        {"10", "Exit "}
+    static const char *const labels[10] = {
+        "F1 Help", "F2 Empty", "F3 View", "F4 Edit", "F5 Copy",
+        "F6 Empty", "F7 Mkdir", "F8 Delete", "F9 Menu", "F10 Quit"
     };
-
-    int c = 0;
-    c += scr_str(row, c, "∀ ", SC_STYLE_HEADER);
-    for (int i = 0; i < 10 && c < term_cols; i++) {
-        c += scr_str(row, c, fkeys[i].num, SC_STYLE_TEXT);
-        c += scr_str(row, c, fkeys[i].label, SC_STYLE_BOTTOM);
-    }
+    if (row < 0) return;
+    term_draw_function_bar(row, labels);
 }
 
 void append_to_history_display(const char *command, const char *output)

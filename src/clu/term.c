@@ -278,6 +278,41 @@ void term_style(int id, const char *sgr)
     g_sgr[id][i] = '\0';
 }
 
+void term_draw_function_bar(int row, const char *const labels[10])
+{
+    const int button_style = 40;
+    const int gap_style = 41;
+    const int function_key_style = 42;
+    int col = 0;
+
+    if (row < 0 || row >= term_rows || labels == NULL) return;
+    term_style(button_style, "38;2;16;25;32;48;2;58;150;221");
+    term_style(gap_style, "38;2;12;12;12;48;2;12;12;12");
+    term_style(function_key_style, "1;96;48;2;58;150;221");
+    scr_fill(row, 0, term_cols, ' ', gap_style);
+    for (int i = 0; i < 10 && col < term_cols; ++i) {
+        if (labels[i] == NULL) continue;
+        int label_len = (int)strlen(labels[i]);
+        int width = label_len + 2;
+        if (col + width > term_cols) break;
+        scr_fill(row, col, width, ' ', button_style);
+        const char *action = strchr(labels[i], ' ');
+        if (action && action > labels[i]) {
+            int key_len = (int)(action - labels[i]);
+            char key_label[4];
+            if (key_len > 3) key_len = 3;
+            memcpy(key_label, labels[i], (size_t)key_len);
+            key_label[key_len] = '\0';
+            scr_str(row, col + 1, key_label, function_key_style);
+            scr_str(row, col + 2 + key_len, action + 1, button_style);
+        } else {
+            scr_str(row, col + 1, labels[i], button_style);
+        }
+        col += width;
+        if (i < 9 && col < term_cols) col++;
+    }
+}
+
 static Cell blank(int style)
 {
     Cell c;
@@ -584,36 +619,64 @@ void term_set_size(int rows, int cols)
 
 void term_get_style_colors(int style, uint32_t *fg, uint32_t *bg)
 {
-    uint32_t f = 0xFFFFFFFF;
-    uint32_t b = 0xFF001A4E; /* Classic SC midnight blue */
+    static const uint32_t ansi[16] = {
+        0xFF000000, 0xFFAA0000, 0xFF00AA00, 0xFFFFFF00,
+        0xFF0000AA, 0xFFAA00AA, 0xFF00AAAA, 0xFFCCCCCC,
+        0xFF555555, 0xFFFF5555, 0xFF55FF55, 0xFFFFFF00,
+        0xFF5555FF, 0xFFFF55FF, 0xFF55FFFF, 0xFFFFFFFF
+    };
+    uint32_t f = 0xFFFFFFFF, b = 0xFF001A4E;
+    const char *p = (style > 0 && style < TERM_STYLES) ? g_sgr[style] : "";
 
-    switch (style) {
-    case 0: /* DEF / RESET */
-        f = 0xFFCCCCCC; b = 0xFF001A4E; break;
-    case 1: /* HEADER */
-        f = 0xFFFFFF00; b = 0xFF001A4E; break;
-    case 2: /* TEXT */
-        f = 0xFFFFFFFF; b = 0xFF001A4E; break;
-    case 3: /* HIGHLIGHT */
-        f = 0xFF000000; b = 0xFF00D2D2; break;
-    case 4: /* DIR */
-        f = 0xFFFFFF33; b = 0xFF001A4E; break;
-    case 5: /* BORDER */
-        f = 0xFF00E5E5; b = 0xFF001A4E; break;
-    case 6: /* BOTTOM / FOOTER */
-        f = 0xFF000000; b = 0xFFCCCCCC; break;
-    case 7: /* MENU / ACCENT */
-        f = 0xFF000000; b = 0xFF00D2D2; break;
-    case 8: /* MENU_SEL */
-        f = 0xFF000000; b = 0xFFFFFFFF; break;
-    case 9:
-        f = 0xFFFFFFFF; b = 0xFF990099; break;
-    case 10:
-        f = 0xFFFFFF00; b = 0xFF990099; break;
-    case 11:
-        f = 0xFF000000; b = 0xFFFFFFFF; break;
-    default:
-        f = 0xFFFFFFFF; b = 0xFF001A4E; break;
+    /* Keep the historical palette for legacy styles without an SGR entry. */
+    if (*p == '\0') {
+        switch (style) {
+        case 0: f = 0xFFCCCCCC; break;
+        case 1: f = 0xFFFFFF00; break;
+        case 3: f = 0xFF000000; b = 0xFF00D2D2; break;
+        case 4: f = 0xFFFFFF33; break;
+        case 5: f = 0xFF00E5E5; break;
+        case 6: f = 0xFF000000; b = 0xFFCCCCCC; break;
+        case 7: f = 0xFF000000; b = 0xFF00D2D2; break;
+        case 8: case 11: f = 0xFF000000; b = 0xFFFFFFFF; break;
+        case 9: b = 0xFF990099; break;
+        case 10: f = 0xFFFFFF00; b = 0xFF990099; break;
+        default: break;
+        }
+        if (fg) *fg = f;
+        if (bg) *bg = b;
+        return;
+    }
+
+    /* GTerm paints cells itself, so mirror each registered ANSI style. */
+    while (*p) {
+        int code = 0;
+        if (*p < '0' || *p > '9') { ++p; continue; }
+        while (*p >= '0' && *p <= '9') code = code * 10 + (*p++ - '0');
+        if (code == 0) { f = 0xFFFFFFFF; b = 0xFF001A4E; }
+        else if (code >= 30 && code <= 37) f = ansi[code - 30];
+        else if (code >= 90 && code <= 97) f = ansi[code - 90 + 8];
+        else if (code >= 40 && code <= 47) b = ansi[code - 40];
+        else if (code >= 100 && code <= 107) b = ansi[code - 100 + 8];
+        else if ((code == 38 || code == 48) && *p == ';') {
+            int is_bg = (code == 48), mode = 0, r = 0, g = 0, bl = 0;
+            ++p;
+            while (*p >= '0' && *p <= '9') mode = mode * 10 + (*p++ - '0');
+            if (mode == 2 && *p == ';') {
+                ++p;
+                while (*p >= '0' && *p <= '9') r = r * 10 + (*p++ - '0');
+                if (*p == ';') ++p;
+                while (*p >= '0' && *p <= '9') g = g * 10 + (*p++ - '0');
+                if (*p == ';') ++p;
+                while (*p >= '0' && *p <= '9') bl = bl * 10 + (*p++ - '0');
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (bl > 255) bl = 255;
+                if (is_bg) b = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+                else f = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+            }
+        }
+        if (*p == ';') ++p;
     }
     if (fg) *fg = f;
     if (bg) *bg = b;

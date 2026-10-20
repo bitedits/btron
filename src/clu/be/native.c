@@ -10,7 +10,8 @@ enum { BE_STYLE_DEFAULT = 0, BE_STYLE_HEADER = 20, BE_STYLE_TEXT = 21,
        BE_STYLE_FOOTER = 25, BE_STYLE_ERROR = 26, BE_STYLE_MENU = 27,
        BE_STYLE_MENU_ITEM = 28, BE_STYLE_MENU_SELECT = 29,
        BE_STYLE_MENU_FOCUS = 30, BE_STYLE_LOGO = 31,
-       BE_STYLE_LOGO_ICON = 26 };
+       BE_STYLE_LOGO_ICON = 26, BE_STYLE_ARCH_MENU = 32,
+       BE_STYLE_ARCH_TITLE = 33 };
 #if defined(BTRON_PS2_TARGET)
 #define BE_NATIVE_CONTEXTS 1
 #else
@@ -32,7 +33,9 @@ static void be_setup_styles(void)
     term_style(BE_STYLE_HEADER, "90;106");
     term_style(BE_STYLE_TEXT, "0;93;104");
     term_style(BE_STYLE_SELECT, "1;97;45");
-    term_style(BE_STYLE_BYTE, "4;94;104");
+    /* Bright-blue foreground and background are identical in GTerm; use
+       bright white text so highlighted bytes remain readable. */
+    term_style(BE_STYLE_BYTE, "4;97;104");
     term_style(BE_STYLE_BYTE_CURSOR, "1;37;43");
     term_style(BE_STYLE_FOOTER, "37;44");
     term_style(BE_STYLE_ERROR, "1;37;41");
@@ -40,6 +43,8 @@ static void be_setup_styles(void)
     term_style(BE_STYLE_MENU_ITEM, "37;44");
     term_style(BE_STYLE_MENU_SELECT, "30;47");
     term_style(BE_STYLE_MENU_FOCUS, "1;37;44");
+    term_style(BE_STYLE_ARCH_MENU, "30;43");
+    term_style(BE_STYLE_ARCH_TITLE, "1;30;43");
     term_style(BE_STYLE_LOGO, "48;2;255;105;180;1;37");
     term_style(BE_STYLE_LOGO_ICON, "1;33;44");
 }
@@ -255,14 +260,14 @@ static void be_draw_menu(BeNativeContext *ctx)
     arch_col = left + 2;
     bits_col = left + (width > 44 ? 34 : width / 2);
     for (row = 0; row < height; row++)
-        scr_fill(top + row, left, width, ' ', BE_STYLE_MENU);
-    scr_str(top, left + 2, "Supported Architectures", BE_STYLE_MENU_FOCUS);
-    scr_str(top + 1, arch_col, "Architecture", BE_STYLE_MENU);
-    scr_str(top + 1, bits_col, "Bitness", BE_STYLE_MENU);
+        scr_fill(top + row, left, width, ' ', BE_STYLE_ARCH_MENU);
+    scr_str(top, left + 2, "Supported Architectures", BE_STYLE_ARCH_TITLE);
+    scr_str(top + 1, arch_col, "Architecture", BE_STYLE_ARCH_MENU);
+    scr_str(top + 1, bits_col, "Bitness", BE_STYLE_ARCH_MENU);
     for (row = 0; row < 9 && row + 3 < height; row++) {
         int selected = ctx->menu_arch == row + 1;
         int style = (ctx->menu_focus == 0 && selected) ?
-                    BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM;
+                    BE_STYLE_MENU_SELECT : BE_STYLE_ARCH_MENU;
         (void)snprintf(line, sizeof(line), "%c %d  %-12s",
                        ctx->menu_focus == 0 && selected ? '>' : (selected ? '*' : ' '),
                        row + 1, g_be_arch_names[row + 1]);
@@ -270,27 +275,27 @@ static void be_draw_menu(BeNativeContext *ctx)
     }
     for (row = 0; row < 5 && row + 3 < height; row++) {
         int style = (ctx->menu_focus == 1 && ctx->menu_bitness == row) ?
-                    BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM;
+                    BE_STYLE_MENU_SELECT : BE_STYLE_ARCH_MENU;
         (void)snprintf(line, sizeof(line), "(%c) %d  %3d-bit",
                        ctx->menu_bitness == row ? 'o' : ' ',
                        row + 1, g_be_bitness_values[row]);
         scr_str(top + 2 + row, bits_col, line, style);
     }
     if (height >= 2)
-        scr_str(top + height - 1, left + 2, "Arrows/Tab choose | Enter apply | Esc cancel", BE_STYLE_FOOTER);
+        scr_str(top + height - 1, left + 2, "Arrows/Tab choose | Enter apply | Esc cancel", BE_STYLE_ARCH_MENU);
     if (width >= 2 && height >= 2) {
         int edge;
-        scr_str(top, left, "+", BE_STYLE_MENU_FOCUS);
-        scr_str(top, left + width - 1, "+", BE_STYLE_MENU_FOCUS);
-        scr_str(top + height - 1, left, "+", BE_STYLE_MENU_FOCUS);
-        scr_str(top + height - 1, left + width - 1, "+", BE_STYLE_MENU_FOCUS);
+        scr_str(top, left, "+", BE_STYLE_ARCH_TITLE);
+        scr_str(top, left + width - 1, "+", BE_STYLE_ARCH_TITLE);
+        scr_str(top + height - 1, left, "+", BE_STYLE_ARCH_TITLE);
+        scr_str(top + height - 1, left + width - 1, "+", BE_STYLE_ARCH_TITLE);
         for (edge = 1; edge < width - 1; edge++) {
-            scr_str(top, left + edge, "-", BE_STYLE_MENU_FOCUS);
-            scr_str(top + height - 1, left + edge, "-", BE_STYLE_MENU_FOCUS);
+            scr_str(top, left + edge, "-", BE_STYLE_ARCH_TITLE);
+            scr_str(top + height - 1, left + edge, "-", BE_STYLE_ARCH_TITLE);
         }
         for (edge = 1; edge < height - 1; edge++) {
-            scr_str(top + edge, left, "|", BE_STYLE_MENU_FOCUS);
-            scr_str(top + edge, left + width - 1, "|", BE_STYLE_MENU_FOCUS);
+            scr_str(top + edge, left, "|", BE_STYLE_ARCH_TITLE);
+            scr_str(top + edge, left + width - 1, "|", BE_STYLE_ARCH_TITLE);
         }
     }
 }
@@ -300,7 +305,7 @@ static void be_draw_asm(BeNativeContext *ctx)
     char instruction[256];
     char line[TERM_MAXC + 1];
     size_t offset = ctx->top;
-    int visible = ctx->rows - 2;
+    int visible = ctx->rows - 3;
     int divider = ctx->cols > 66 ? 50 : ctx->cols - 16;
     int row;
     ctx->asm_line_count = 0;
@@ -349,6 +354,10 @@ static void be_draw_asm(BeNativeContext *ctx)
 
 static void be_draw(BeNativeContext *ctx)
 {
+    static const char *const labels[10] = {
+        "F1 Help", "F2 Arch", "F3 Quit", "F4 Ins/Rep", "F5 Save",
+        "F6 Edit/View", "F7 Empty", "F8 Empty", "F9 Empty", "F10 Quit"
+    };
     char line[BE_NATIVE_PATH_MAX];
     int r, visible, per_line, start_col;
     int cursor_row, cursor_col;
@@ -374,7 +383,7 @@ static void be_draw(BeNativeContext *ctx)
         be_draw_asm(ctx);
     } else {
         per_line = be_screen_octets(ctx);
-        visible = ctx->rows - 2;
+        visible = ctx->rows - 3;
         start_col = 18;
         for (r = 0; r < visible; r++) {
             size_t base = ctx->top + (size_t)r * (size_t)per_line;
@@ -401,16 +410,17 @@ static void be_draw(BeNativeContext *ctx)
             }
         }
     }
-    scr_fill(ctx->rows - 1, 0, ctx->cols, ' ', BE_STYLE_FOOTER);
+    scr_fill(ctx->rows - 2, 0, ctx->cols, ' ', BE_STYLE_FOOTER);
     (void)snprintf(line, sizeof(line), " %s | %02X @ %08X | Size %lu B | %lu%% | F6 edit/view D disasm A asm F2 arch F5 save",
                    ctx->status[0] ? ctx->status : (ctx->view_asm ? "ASM" : "HEX"),
                    ctx->cursor < ctx->length ? ctx->bytes[ctx->cursor] : 0u,
                    (unsigned int)ctx->cursor, (unsigned long)ctx->length,
                    ctx->length ? (unsigned long)((ctx->cursor + 1u) * 100u / ctx->length) : 0u);
-    scr_str(ctx->rows - 1, 0, line, BE_STYLE_FOOTER);
+    scr_str(ctx->rows - 2, 0, line, BE_STYLE_FOOTER);
+    term_draw_function_bar(ctx->rows - 1, labels);
     per_line = be_screen_octets(ctx);
     cursor_row = ctx->view_asm ? ctx->asm_cursor_row + 1 : (int)((ctx->cursor - ctx->top) / (size_t)per_line) + 1;
-    if (cursor_row > ctx->rows - 2) cursor_row = ctx->rows - 2;
+    if (cursor_row > ctx->rows - 3) cursor_row = ctx->rows - 3;
     if (cursor_row < 1) cursor_row = 1;
     cursor_col = ctx->view_asm ?
                  (ctx->asm_cursor_row >= 0 ? 18 + (int)(ctx->cursor - ctx->asm_offsets[ctx->asm_cursor_row]) * 2 : 0) :
@@ -460,7 +470,7 @@ static void be_reveal_cursor(BeNativeContext *ctx)
     }
     int per_line = be_screen_octets(ctx);
     size_t page;
-    page = (size_t)per_line * (size_t)(ctx->rows > 2 ? ctx->rows - 2 : 1);
+    page = (size_t)per_line * (size_t)(ctx->rows > 3 ? ctx->rows - 3 : 1);
     if (ctx->cursor < ctx->top) ctx->top = (ctx->cursor / (size_t)per_line) * (size_t)per_line;
     if (ctx->cursor >= ctx->top + page) ctx->top = (ctx->cursor / (size_t)per_line) * (size_t)per_line;
 }
@@ -609,7 +619,7 @@ static void be_move_cursor(BeNativeContext *ctx, int key)
     else if (key == K_UP && ctx->cursor >= amount) ctx->cursor -= amount;
     else if (key == K_DOWN && ctx->cursor + amount <= ctx->length) ctx->cursor += amount;
     else if (key == K_PGUP || key == K_PGDOWN) {
-        amount *= (size_t)(ctx->rows > 2 ? ctx->rows - 2 : 1);
+        amount *= (size_t)(ctx->rows > 3 ? ctx->rows - 3 : 1);
         if (key == K_PGUP) ctx->cursor = ctx->cursor > amount ? ctx->cursor - amount : 0;
         else if (ctx->cursor + amount <= ctx->length) ctx->cursor += amount;
     } else if (key == K_HOME) ctx->cursor = (ctx->cursor / amount) * amount;

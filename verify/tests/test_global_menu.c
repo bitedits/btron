@@ -14,6 +14,7 @@
 #include <btron/tip.h>
 #include <btron/tracker.h>
 #include <btron/global_menu.h>
+#include <btron/desktop.h>
 #include <btron/app_menu.h>
 
 static int g_tests_total = 0;

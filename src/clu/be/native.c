@@ -430,15 +430,26 @@ static void be_draw(BeNativeContext *ctx)
         be_draw_menu(ctx);
         scr_cursor(0, 0, 0);
     } else if (ctx->exit_confirm) {
-        int modal_width = ctx->cols < 34 ? ctx->cols : 34;
+        int modal_width = ctx->cols < 46 ? ctx->cols : 46;
+        int modal_height = 6;
         int modal_left = (ctx->cols - modal_width) / 2;
-        int modal_top = ctx->rows / 2;
-        scr_fill(modal_top, modal_left, modal_width, ' ', BE_STYLE_MENU);
-        scr_str(modal_top, modal_left + 2, "Return to SC? Y/N", BE_STYLE_MENU_FOCUS);
-        if (modal_top + 1 < ctx->rows - 1) {
-            scr_fill(modal_top + 1, modal_left, modal_width, ' ', BE_STYLE_MENU);
-            scr_str(modal_top + 1, modal_left + 2, "N or Esc: stay in BE", BE_STYLE_FOOTER);
+        int modal_top = (ctx->rows - modal_height) / 2;
+        if (modal_top < 0) modal_top = 0;
+        for (int r = 0; r < modal_height; r++)
+            scr_fill(modal_top + r, modal_left, modal_width, ' ', BE_STYLE_MENU);
+        for (int c = 0; c < modal_width; c++) {
+            scr_str(modal_top, modal_left + c, (c == 0 || c == modal_width - 1) ? "+" : "-", BE_STYLE_MENU_FOCUS);
+            scr_str(modal_top + modal_height - 1, modal_left + c,
+                    (c == 0 || c == modal_width - 1) ? "+" : "-", BE_STYLE_MENU_FOCUS);
         }
+        for (int r = 1; r < modal_height - 1; r++) {
+            scr_str(modal_top + r, modal_left, "|", BE_STYLE_MENU_FOCUS);
+            scr_str(modal_top + r, modal_left + modal_width - 1, "|", BE_STYLE_MENU_FOCUS);
+        }
+        scr_str(modal_top + 2, modal_left + 4, "File modified. Save before exiting?", BE_STYLE_MENU_FOCUS);
+        scr_str(modal_top + 4, modal_left + 3, "[ Save & Exit ]", ctx->exit_sel == 0 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
+        scr_str(modal_top + 4, modal_left + 20, "[ Discard ]", ctx->exit_sel == 1 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
+        scr_str(modal_top + 4, modal_left + 33, "[ Cancel ]", ctx->exit_sel == 2 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
         scr_cursor(0, 0, 0);
     }
     scr_flush();
@@ -695,16 +706,29 @@ int be_native_session_step(BeNativeContext *ctx, int key)
     if (ctx == NULL) return 0;
     if (ctx->menu_open) return be_menu_step(ctx, key);
     if (ctx->exit_confirm) {
-        if (key == 'y' || key == 'Y') return 0;
-        if (key == 'n' || key == 'N' || key == K_ESC || key == K_F3 ||
-            key == K_F10 || key == K_CTRL('x')) ctx->exit_confirm = 0;
+        if (key == K_LEFT || key == K_BTAB || key == K_UP) ctx->exit_sel = (ctx->exit_sel + 2) % 3;
+        else if (key == K_RIGHT || key == K_TAB || key == K_DOWN) ctx->exit_sel = (ctx->exit_sel + 1) % 3;
+        else if (key == 'y' || key == 'Y') ctx->exit_sel = 0;
+        else if (key == 'n' || key == 'N') ctx->exit_sel = 1;
+        else if (key == K_ESC || key == K_F3 || key == K_F10 || key == K_CTRL('x')) ctx->exit_sel = 2;
+        if (key == K_ENTER || key == 'y' || key == 'Y' || key == 'n' || key == 'N' ||
+            key == K_ESC || key == K_F3 || key == K_F10 || key == K_CTRL('x')) {
+            if (ctx->exit_sel == 0) {
+                if (be_save(ctx) == 0) return 0;
+            } else if (ctx->exit_sel == 1) {
+                return 0;
+            } else if (ctx->exit_sel == 2) {
+                ctx->exit_confirm = 0;
+            }
+        }
         be_draw(ctx);
         return 1;
     }
     if (key == K_RESIZE) { be_draw(ctx); return 1; }
     if (key == K_ESC || key == K_F3 || key == K_F10 || key == K_CTRL('x')) {
-        if (ctx->embedded) {
+        if (ctx->dirty) {
             ctx->exit_confirm = 1;
+            ctx->exit_sel = 0;
             be_draw(ctx);
             return 1;
         }

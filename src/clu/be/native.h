@@ -32,6 +32,7 @@ typedef struct {
     int menu_bitness;
     int embedded;
     int exit_confirm;
+    int exit_sel;
     int rows;
     int cols;
     size_t asm_offsets[TERM_MAXR];

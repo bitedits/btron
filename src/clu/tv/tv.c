@@ -182,12 +182,16 @@ static void tv_draw_header(void)
 
     char title[128];
     const char *fname = (g_filename[0] != '\0') ? g_filename : "[New File]";
-    const char *vstr = g_view_mode ? "[VIEW]" : (g_sel_active ? "[SEL]" : (g_insert_mode ? "[INS]" : "[REP]"));
+    const char *vstr = g_view_mode ? "[VIEW MODE]" : (g_sel_active ? "[EDIT MODE: SEL]" : (g_insert_mode ? "[EDIT MODE: INS]" : "[EDIT MODE: REP]"));
     const char *wstr = (g_wrap_mode == LANG_WRAP_WORD) ? "WORD" :
                        ((g_wrap_mode == LANG_WRAP_CHAR) ? "CHAR" : "OFF");
 
-    (void)snprintf(title, sizeof(title), " %s  %s%s [WRAP:%s]",
-                   fname, vstr, g_modified ? " [+]" : "", wstr);
+    if (g_view_mode) {
+        (void)snprintf(title, sizeof(title), " %s  %s [TEXT]", fname, vstr);
+    } else {
+        (void)snprintf(title, sizeof(title), " %s  %s%s [WRAP:%s]",
+                       fname, vstr, g_modified ? " [+]" : "", wstr);
+    }
     scr_str(0, 5, title, STYLE_HEADER);
 }
 
@@ -306,7 +310,7 @@ static void tv_draw_footer(void)
 
     char left_str[80];
     if (g_view_mode) {
-        (void)snprintf(left_str, sizeof(left_str), " [VIEW] F1 Help  F4 Edit  F5 Wrap  ^Q/q Exit");
+        (void)snprintf(left_str, sizeof(left_str), " [VIEW MODE: TEXT] F4 Edit  ^Q/q Exit");
     } else if (g_sel_active) {
         (void)snprintf(left_str, sizeof(left_str), " [SEL] F1 Help  F3 Unmark  ^C Copy  ^X Cut  ^V Paste");
     } else {
@@ -862,6 +866,18 @@ static void tv_draw_help_dialog(void)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
+    scr_str(dr, dc, "+", STYLE_MENU_SEL);
+    scr_str(dr, dc + dw - 1, "+", STYLE_MENU_SEL);
+    scr_str(dr + dh - 1, dc, "+", STYLE_MENU_SEL);
+    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU_SEL);
+    for (int i = 1; i < dw - 1; i++) {
+        scr_str(dr, dc + i, "-", STYLE_MENU_SEL);
+        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU_SEL);
+    }
+    for (int i = 1; i < dh - 1; i++) {
+        scr_str(dr + i, dc, "|", STYLE_MENU_SEL);
+        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU_SEL);
+    }
     scr_str(dr + 1, dc + 14, "TV - Terminal Vision Help", STYLE_MENU_SEL);
     scr_str(dr + 3, dc + 3, "^S / Cmd+S : Save       ^Q / Cmd+Q : Quit", STYLE_MENU);
     scr_str(dr + 4, dc + 3, "^W / Cmd+W : Wrap Mode  ^N / Cmd+N : New File", STYLE_MENU);
@@ -876,7 +892,7 @@ static void tv_draw_help_dialog(void)
 
 static void tv_draw_exit_dialog(int sel)
 {
-    int dw = 46, dh = 5;
+    int dw = 46, dh = 6;
     int dr = (term_rows - dh) / 2;
     int dc = (term_cols - dw) / 2;
     if (dr < 0) dr = 0;
@@ -885,17 +901,29 @@ static void tv_draw_exit_dialog(int sel)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
-    scr_str(dr + 1, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
+    scr_str(dr, dc, "+", STYLE_MENU_SEL);
+    scr_str(dr, dc + dw - 1, "+", STYLE_MENU_SEL);
+    scr_str(dr + dh - 1, dc, "+", STYLE_MENU_SEL);
+    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU_SEL);
+    for (int i = 1; i < dw - 1; i++) {
+        scr_str(dr, dc + i, "-", STYLE_MENU_SEL);
+        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU_SEL);
+    }
+    for (int i = 1; i < dh - 1; i++) {
+        scr_str(dr + i, dc, "|", STYLE_MENU_SEL);
+        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU_SEL);
+    }
+    scr_str(dr + 2, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
 
     const char *b0 = "[ Save & Exit ]";
     const char *b1 = "[ Discard ]";
     const char *b2 = "[ Cancel ]";
 
-    scr_str(dr + 3, dc + 3,  b0, sel == 0 ? STYLE_MENU_SEL : STYLE_MENU);
-    scr_str(dr + 3, dc + 20, b1, sel == 1 ? STYLE_MENU_SEL : STYLE_MENU);
-    scr_str(dr + 3, dc + 33, b2, sel == 2 ? STYLE_MENU_SEL : STYLE_MENU);
+    scr_str(dr + 4, dc + 3,  b0, sel == 0 ? STYLE_MENU_SEL : STYLE_MENU);
+    scr_str(dr + 4, dc + 20, b1, sel == 1 ? STYLE_MENU_SEL : STYLE_MENU);
+    scr_str(dr + 4, dc + 33, b2, sel == 2 ? STYLE_MENU_SEL : STYLE_MENU);
 
-    scr_cursor(dr + 3, dc + (sel == 0 ? 4 : (sel == 1 ? 21 : 34)), 1);
+    scr_cursor(dr + 4, dc + (sel == 0 ? 4 : (sel == 1 ? 21 : 34)), 1);
     scr_flush();
 }
 
@@ -957,7 +985,15 @@ int tv_session_step(int k)
         }
         if (k == K_ENTER) {
             if (g_modal_sel == 0) {
-                (void)tv_save_file();
+                if (tv_save_file() != 0) {
+                    g_modal_mode = TV_MODAL_NONE;
+                    tv_draw_header();
+                    tv_draw_text();
+                    tv_draw_footer();
+                    tv_update_cursor();
+                    scr_flush();
+                    return 1;
+                }
                 return 0; /* Save & Exit */
             } else if (g_modal_sel == 1) {
                 return 0; /* Discard & Exit */

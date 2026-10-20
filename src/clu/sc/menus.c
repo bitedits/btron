@@ -155,7 +155,8 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
 void draw_menu(void)
 {
     scr_fill(0, 0, term_cols, ' ', SC_STYLE_MENU);
-    scr_str(0, 0, " SC ", SC_STYLE_HEADER);
+    scr_str(0, 0, "▄", SC_STYLE_HEADER);
+    scr_str(0, 1, " SC ", SC_STYLE_HEADER);
 
     const char *menu_tabs[] = {"Left", "File", "Command", "Options", "Right"};
     int start_col = 12;

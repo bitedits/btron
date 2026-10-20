@@ -178,7 +178,8 @@ static int tv_save_file(void)
 static void tv_draw_header(void)
 {
     scr_fill(0, 0, term_cols, ' ', STYLE_HEADER);
-    scr_str(0, 0, " TV ", STYLE_ACCENT);
+    scr_str(0, 0, "▄", STYLE_ACCENT);
+    scr_str(0, 1, " TV ", STYLE_ACCENT);
 
     char title[128];
     const char *fname = (g_filename[0] != '\0') ? g_filename : "[New File]";

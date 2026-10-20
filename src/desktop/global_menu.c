@@ -21,6 +21,12 @@
 #include <btron/about.h>
 #include <btron/app_menu.h>
 #include <btron/chokanji.h>
+#include <btron/desktop.h>
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak, weak_import)) BTRON_DESKTOP* get_btron_desktop(void);
+__attribute__((weak, weak_import)) ER snd_evt(const EVT *p_evt);
+#endif
 
 #include <btron/libc_shim.h>
 #if BTRON_HOSTED
@@ -142,14 +148,16 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
     {
         .title = "システム(S)",
         .rect = { 96, 2, 210, 23 },
-        .item_count = 6,
+        .item_count = 8,
         .items = {
             { "システム情報 (About B-System...)",  "Alt+?", GMENU_CMD_SYS_ABOUT,    FALSE, FALSE, TRUE },
             { "環境設定 (Control Panel...)",        "Alt+P", GMENU_CMD_SYS_SETTINGS, FALSE, FALSE, TRUE },
             { "画面表示 (Display Settings...)",     "",      GMENU_CMD_SYS_DISPLAY,  FALSE, FALSE, TRUE },
             { "音響設定 (Audio Settings...)",       "",      GMENU_CMD_SYS_AUDIO,    FALSE, FALSE, TRUE },
             { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
-            { "外観: Cho-Kanji Classic / Modern",   "",      GMENU_CMD_APP_STYLE_CLASSIC, FALSE, FALSE, TRUE }
+            { "外観: Cho-Kanji Classic / Modern",   "",      GMENU_CMD_APP_STYLE_CLASSIC, FALSE, FALSE, TRUE },
+            { "---", "", GMENU_CMD_NONE, TRUE, FALSE, FALSE },
+            { "システム終了 (Quit B-System)",       "Alt+Q", GMENU_CMD_SYS_QUIT,    FALSE, FALSE, TRUE }
         }
     },
 
@@ -500,8 +508,8 @@ static void global_menu_execute_cmd(int cmd) {
         case GMENU_CMD_SYS_RESTART:
             break;
         case GMENU_CMD_SYS_SHUTDOWN:
-            break;
         case GMENU_CMD_SYS_QUIT:
+            btron_system_quit();
             break;
 
         /* ── アプリ(A) — general apps ── */
@@ -756,9 +764,35 @@ BOOL global_menu_handle_mouse_down(H x, H y) {
     return FALSE;
 }
 
+/* ── Global System Quit ───────────────────────────────────────── */
+void btron_system_quit(void) {
+    global_menu_close();
+    if (get_btron_desktop) {
+        BTRON_DESKTOP *dt = get_btron_desktop();
+        if (dt) dt->running = FALSE;
+    }
+    if (snd_evt) {
+        EVT ev;
+        memset(&ev, 0, sizeof(EVT));
+        ev.type = EV_WND_CLOSE;
+        snd_evt(&ev);
+    }
+}
+
 /* ── Keyboard navigation ──────────────────────────────────────── */
 BOOL global_menu_handle_key(UW key, VW mod) {
-    (void)mod;
+    /* Global Accelerators: Alt+Q / Cmd+Q / Alt+F4 to quit system */
+    BOOL has_alt = (mod & (BTRON_KMOD_ALT | 0x0300 | 0x0100 | 0x0200)) != 0;
+    BOOL has_gui = (mod & (BTRON_KMOD_GUI | 0x0C00 | 0x0400 | 0x0800)) != 0;
+    if ((key == 'q' || key == 'Q' || key == 0x71) && (has_alt || has_gui)) {
+        btron_system_quit();
+        return TRUE;
+    }
+    if ((key == 0x4000003Du /* SDLK_F4 */ || key == 0x11e /* BTRON_KEY_F4 */) && has_alt) {
+        btron_system_quit();
+        return TRUE;
+    }
+
     if (!global_menu_is_open()) return FALSE;
 
     if (key == BTRON_KEY_ESCAPE) { global_menu_close(); return TRUE; }

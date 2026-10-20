@@ -122,6 +122,7 @@ int main(int argc, char **argv) {
         while (get_evt(&ev, 0) == E_OK) {
             if (ev.type == EV_WND_CLOSE) {
                 running = FALSE;
+                break;
             } else if (ev.type == EV_BUT_DOWN) {
                 raise_sdl_window();
                 /* 0. Check Global System Menu (Deskbar & Chokanji Top Menus) */

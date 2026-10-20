@@ -13,6 +13,10 @@
 
 #include <btron/libc_shim.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak, weak_import)) void btron_system_quit(void);
+#endif
+
 /* Freestanding-safe string helpers */
 static void tracker_safe_copy(char *dst, const char *src, int max_len) {
     if (!dst || max_len <= 0) return;
@@ -343,7 +347,11 @@ static void tracker_execute_item(H index) {
             open_about_window();
             break;
         case TRACKER_CMD_RESTART:
+            break;
         case TRACKER_CMD_SHUTDOWN:
+        case TRACKER_CMD_QUIT:
+            if (btron_system_quit) btron_system_quit();
+            break;
         default:
             break;
     }

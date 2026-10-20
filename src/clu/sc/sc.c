@@ -57,10 +57,10 @@ static void sc_init_styles(void)
     term_style(SC_STYLE_DIR, "1;37;44");         /* bold white on blue */
     term_style(SC_STYLE_BORDER, "36;44");        /* cyan on blue */
     term_style(SC_STYLE_BOTTOM, "30;47");        /* black on white */
-    term_style(SC_STYLE_MENU, "30;46");          /* black on cyan */
+    term_style(SC_STYLE_MENU, "37;44");          /* white on blue */
     term_style(SC_STYLE_MENU_SEL, "30;47");      /* black on white */
-    term_style(SC_STYLE_PINK, "37;45");          /* white on magenta */
-    term_style(SC_STYLE_WHITE, "1;37;45");       /* bold white on magenta */
+    term_style(SC_STYLE_PINK, "37;44");          /* white on blue */
+    term_style(SC_STYLE_WHITE, "37;44");          /* white on blue */
     term_style(SC_STYLE_BUTTON_HL, "30;47");     /* black on white */
 }
 

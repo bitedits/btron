@@ -34,12 +34,12 @@ static void be_setup_styles(void)
     term_style(BE_STYLE_SELECT, "1;97;45");
     term_style(BE_STYLE_BYTE, "4;94;104");
     term_style(BE_STYLE_BYTE_CURSOR, "1;37;43");
-    term_style(BE_STYLE_FOOTER, "1;37;45");
+    term_style(BE_STYLE_FOOTER, "37;44");
     term_style(BE_STYLE_ERROR, "1;37;41");
-    term_style(BE_STYLE_MENU, "37;45");
-    term_style(BE_STYLE_MENU_ITEM, "1;37;45");
+    term_style(BE_STYLE_MENU, "37;44");
+    term_style(BE_STYLE_MENU_ITEM, "37;44");
     term_style(BE_STYLE_MENU_SELECT, "30;47");
-    term_style(BE_STYLE_MENU_FOCUS, "1;37;45");
+    term_style(BE_STYLE_MENU_FOCUS, "1;37;44");
     term_style(BE_STYLE_LOGO, "48;2;255;105;180;1;37");
     term_style(BE_STYLE_LOGO_ICON, "1;33;44");
 }
@@ -280,35 +280,26 @@ static void be_draw_menu(BeNativeContext *ctx)
         scr_str(top + height - 1, left + 2, "Arrows/Tab choose | Enter apply | Esc cancel", BE_STYLE_FOOTER);
     if (width >= 2 && height >= 2) {
         int edge;
-        scr_str(top, left, "┌", BE_STYLE_MENU);
-        scr_str(top, left + width - 1, "┐", BE_STYLE_MENU);
-        scr_str(top + height - 1, left, "└", BE_STYLE_MENU);
-        scr_str(top + height - 1, left + width - 1, "┘", BE_STYLE_MENU);
+        scr_str(top, left, "+", BE_STYLE_MENU_FOCUS);
+        scr_str(top, left + width - 1, "+", BE_STYLE_MENU_FOCUS);
+        scr_str(top + height - 1, left, "+", BE_STYLE_MENU_FOCUS);
+        scr_str(top + height - 1, left + width - 1, "+", BE_STYLE_MENU_FOCUS);
         for (edge = 1; edge < width - 1; edge++) {
-            scr_str(top, left + edge, "─", BE_STYLE_MENU);
-            scr_str(top + height - 1, left + edge, "─", BE_STYLE_MENU);
+            scr_str(top, left + edge, "-", BE_STYLE_MENU_FOCUS);
+            scr_str(top + height - 1, left + edge, "-", BE_STYLE_MENU_FOCUS);
         }
         for (edge = 1; edge < height - 1; edge++) {
-            scr_str(top + edge, left, "│", BE_STYLE_MENU);
-            scr_str(top + edge, left + width - 1, "│", BE_STYLE_MENU);
+            scr_str(top + edge, left, "|", BE_STYLE_MENU_FOCUS);
+            scr_str(top + edge, left + width - 1, "|", BE_STYLE_MENU_FOCUS);
         }
     }
-}
-
-static size_t be_asm_aligned_top(const BeNativeContext *ctx, size_t offset)
-{
-    size_t align = 1u;
-    if (ctx->arch == 2 || ctx->arch == 4) align = 4u;
-    else if (ctx->arch == 5 || ctx->arch == 6 || ctx->arch == 8) align = 2u;
-    else if (ctx->arch == 9) align = 8u;
-    return offset - offset % align;
 }
 
 static void be_draw_asm(BeNativeContext *ctx)
 {
     char instruction[256];
     char line[TERM_MAXC + 1];
-    size_t offset = be_asm_aligned_top(ctx, ctx->top);
+    size_t offset = ctx->top;
     int visible = ctx->rows - 2;
     int divider = ctx->cols > 66 ? 50 : ctx->cols - 16;
     int row;
@@ -368,9 +359,9 @@ static void be_draw(BeNativeContext *ctx)
     if (ctx->arch == 2) arch_name = ctx->bitness > 32 ? "AArch64" : "AArch32";
     scr_clear(BE_STYLE_DEFAULT);
     scr_fill(0, 0, ctx->cols, ' ', BE_STYLE_HEADER);
-    (void)snprintf(line, sizeof(line), "%12s [%03i][%s][%02x][%016lx] Size: %012luB",
+    (void)snprintf(line, sizeof(line), "%12s [%03i][%s][%s][%02x][%016lx] Size: %012luB",
                    arch_name,
-                   ctx->bitness, ctx->view_asm ? "ASM" : "HEX",
+                   ctx->bitness, ctx->view_asm ? "ASM" : "HEX", ctx->view_only ? "VIEW" : "EDIT",
                    ctx->cursor < ctx->length ? ctx->bytes[ctx->cursor] : 0u,
                    (unsigned long)ctx->cursor, (unsigned long)ctx->length);
     scr_str(0, 0, "▄", BE_STYLE_LOGO_ICON);
@@ -411,7 +402,7 @@ static void be_draw(BeNativeContext *ctx)
         }
     }
     scr_fill(ctx->rows - 1, 0, ctx->cols, ' ', BE_STYLE_FOOTER);
-    (void)snprintf(line, sizeof(line), " %s | %02X @ %08X | Size %lu B | %lu%% | Esc exit F2 arch F4 view F5 save",
+    (void)snprintf(line, sizeof(line), " %s | %02X @ %08X | Size %lu B | %lu%% | F6 edit/view D disasm A asm F2 arch F5 save",
                    ctx->status[0] ? ctx->status : (ctx->view_asm ? "ASM" : "HEX"),
                    ctx->cursor < ctx->length ? ctx->bytes[ctx->cursor] : 0u,
                    (unsigned int)ctx->cursor, (unsigned long)ctx->length,
@@ -447,9 +438,9 @@ static void be_draw(BeNativeContext *ctx)
             scr_str(modal_top + r, modal_left + modal_width - 1, "|", BE_STYLE_MENU_FOCUS);
         }
         scr_str(modal_top + 2, modal_left + 4, "File modified. Save before exiting?", BE_STYLE_MENU_FOCUS);
-        scr_str(modal_top + 4, modal_left + 3, "[ Save & Exit ]", ctx->exit_sel == 0 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
-        scr_str(modal_top + 4, modal_left + 20, "[ Discard ]", ctx->exit_sel == 1 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
-        scr_str(modal_top + 4, modal_left + 33, "[ Cancel ]", ctx->exit_sel == 2 ? BE_STYLE_MENU_FOCUS : BE_STYLE_FOOTER);
+        scr_str(modal_top + 4, modal_left + 3, "[ Save & Exit ]", ctx->exit_sel == 0 ? BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM);
+        scr_str(modal_top + 4, modal_left + 20, "[ Discard ]", ctx->exit_sel == 1 ? BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM);
+        scr_str(modal_top + 4, modal_left + 33, "[ Cancel ]", ctx->exit_sel == 2 ? BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM);
         scr_cursor(0, 0, 0);
     }
     scr_flush();
@@ -464,7 +455,7 @@ static void be_reveal_cursor(BeNativeContext *ctx)
             end = ctx->asm_offsets[last] + ctx->asm_lengths[last];
         }
         if (ctx->cursor < ctx->top || ctx->cursor >= end)
-            ctx->top = be_asm_aligned_top(ctx, ctx->cursor);
+            ctx->top = ctx->cursor;
         return;
     }
     int per_line = be_screen_octets(ctx);
@@ -692,7 +683,7 @@ static int be_menu_step(BeNativeContext *ctx, int key)
         ctx->arch = ctx->menu_arch;
         ctx->bitness = g_be_bitness_values[ctx->menu_bitness];
         ctx->menu_open = 0;
-        if (ctx->view_asm) ctx->top = be_asm_aligned_top(ctx, ctx->cursor);
+        if (ctx->view_asm) ctx->top = ctx->cursor;
         (void)snprintf(ctx->status, sizeof(ctx->status), "%s %d-bit", g_be_arch_names[ctx->arch], ctx->bitness);
         be_set_decoder_status(ctx);
         be_reveal_cursor(ctx);
@@ -724,6 +715,12 @@ int be_native_session_step(BeNativeContext *ctx, int key)
         be_draw(ctx);
         return 1;
     }
+    if (key == K_F6) {
+        ctx->view_only = !ctx->view_only;
+        (void)snprintf(ctx->status, sizeof(ctx->status), "%s mode", ctx->view_only ? "View" : "Edit");
+        be_draw(ctx);
+        return 1;
+    }
     if (key == K_RESIZE) { be_draw(ctx); return 1; }
     if (key == K_ESC || key == K_F3 || key == K_F10 || key == K_CTRL('x')) {
         if (ctx->dirty) {
@@ -740,26 +737,37 @@ int be_native_session_step(BeNativeContext *ctx, int key)
         ctx->menu_arch = ctx->arch;
         ctx->menu_bitness = be_bitness_index(ctx->bitness);
         be_draw(ctx);
-    } else if (key == K_F5 || key == K_CTRL('s')) {
+    } else if ((key == K_F5 || key == K_CTRL('s')) && !ctx->view_only) {
         (void)be_save(ctx);
     } else if (key == K_TAB || key == K_F4) {
         ctx->view_asm = !ctx->view_asm;
+        if (ctx->view_asm) ctx->top = ctx->cursor;
         be_set_decoder_status(ctx);
     } else if (key == K_LEFT || key == K_RIGHT || key == K_UP || key == K_DOWN ||
                key == K_PGUP || key == K_PGDOWN || key == K_HOME || key == K_END) {
         be_move_cursor(ctx, key);
-    } else if (key == K_INSERT) {
+    } else if (ctx->view_only && (key == 'd' || key == 'D')) {
+        ctx->view_asm = 1;
+        ctx->top = ctx->cursor;
+        ctx->nibble = 0;
+        be_set_decoder_status(ctx);
+    } else if (ctx->view_only && (key == 'a' || key == 'A')) {
+        if (!ctx->view_asm) ctx->top = ctx->cursor;
+        ctx->view_asm = 1;
+        ctx->nibble = 0;
+        be_set_decoder_status(ctx);
+    } else if (key == K_INSERT && !ctx->view_only) {
         ctx->insert_mode = !ctx->insert_mode;
         (void)snprintf(ctx->status, sizeof(ctx->status), "%s mode", ctx->insert_mode ? "Insert" : "Overwrite");
-    } else if (key == K_BACKSPACE && ctx->cursor > 0u) {
+    } else if (key == K_BACKSPACE && ctx->cursor > 0u && !ctx->view_only) {
         be_delete_byte(ctx, 1);
-    } else if (key == K_DELETE && ctx->cursor < ctx->length) {
+    } else if (key == K_DELETE && ctx->cursor < ctx->length && !ctx->view_only) {
         be_delete_byte(ctx, 0);
     } else if (((key >= '0' && key <= '9') || (key >= 'a' && key <= 'f') ||
-                (key >= 'A' && key <= 'F')) && ctx->cursor < BE_NATIVE_MAX_BYTES) {
+                (key >= 'A' && key <= 'F')) && ctx->cursor < BE_NATIVE_MAX_BYTES && !ctx->view_only) {
         be_edit_key(ctx, key);
     } else if (key == K_F1) {
-        (void)snprintf(ctx->status, sizeof(ctx->status), "CUA: Esc exit | F2 arch | F4 view | F5 save");
+        (void)snprintf(ctx->status, sizeof(ctx->status), "F6 edit/view | D disasm at cursor | A asm | F2 arch | F5 save");
     }
     be_reveal_cursor(ctx);
     be_draw(ctx);

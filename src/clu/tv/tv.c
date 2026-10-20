@@ -80,8 +80,8 @@ static void tv_setup_styles(void)
     term_style(STYLE_HEADER,    "1;37;44");
     term_style(STYLE_TEXT,      "1;96;104");
     term_style(STYLE_HIGHLIGHT, "1;30;47");
-    term_style(STYLE_MENU,      "90;106");
-    term_style(STYLE_MENU_SEL,  "90;47");
+    term_style(STYLE_MENU,      "37;44");
+    term_style(STYLE_MENU_SEL,  "30;47");
     term_style(STYLE_FOOTER,    "37;44");
     term_style(STYLE_ACCENT,    "1;33;44");
 }
@@ -866,17 +866,17 @@ static void tv_draw_help_dialog(void)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
-    scr_str(dr, dc, "+", STYLE_MENU_SEL);
-    scr_str(dr, dc + dw - 1, "+", STYLE_MENU_SEL);
-    scr_str(dr + dh - 1, dc, "+", STYLE_MENU_SEL);
-    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU_SEL);
+    scr_str(dr, dc, "+", STYLE_MENU);
+    scr_str(dr, dc + dw - 1, "+", STYLE_MENU);
+    scr_str(dr + dh - 1, dc, "+", STYLE_MENU);
+    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU);
     for (int i = 1; i < dw - 1; i++) {
-        scr_str(dr, dc + i, "-", STYLE_MENU_SEL);
-        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU_SEL);
+        scr_str(dr, dc + i, "-", STYLE_MENU);
+        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU);
     }
     for (int i = 1; i < dh - 1; i++) {
-        scr_str(dr + i, dc, "|", STYLE_MENU_SEL);
-        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU_SEL);
+        scr_str(dr + i, dc, "|", STYLE_MENU);
+        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU);
     }
     scr_str(dr + 1, dc + 14, "TV - Terminal Vision Help", STYLE_MENU_SEL);
     scr_str(dr + 3, dc + 3, "^S / Cmd+S : Save       ^Q / Cmd+Q : Quit", STYLE_MENU);
@@ -901,17 +901,17 @@ static void tv_draw_exit_dialog(int sel)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
-    scr_str(dr, dc, "+", STYLE_MENU_SEL);
-    scr_str(dr, dc + dw - 1, "+", STYLE_MENU_SEL);
-    scr_str(dr + dh - 1, dc, "+", STYLE_MENU_SEL);
-    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU_SEL);
+    scr_str(dr, dc, "+", STYLE_MENU);
+    scr_str(dr, dc + dw - 1, "+", STYLE_MENU);
+    scr_str(dr + dh - 1, dc, "+", STYLE_MENU);
+    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU);
     for (int i = 1; i < dw - 1; i++) {
-        scr_str(dr, dc + i, "-", STYLE_MENU_SEL);
-        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU_SEL);
+        scr_str(dr, dc + i, "-", STYLE_MENU);
+        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU);
     }
     for (int i = 1; i < dh - 1; i++) {
-        scr_str(dr + i, dc, "|", STYLE_MENU_SEL);
-        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU_SEL);
+        scr_str(dr + i, dc, "|", STYLE_MENU);
+        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU);
     }
     scr_str(dr + 2, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
 

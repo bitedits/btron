@@ -25,6 +25,7 @@ typedef struct {
     int bitness;
     int arch;
     int view_asm;
+    int view_only;
     int dirty;
     int menu_open;
     int menu_focus;

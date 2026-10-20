@@ -56,6 +56,8 @@ void term_draw_function_bar(int row, const char *const labels[10]);
 
 /* Drawing (back buffer). Coordinates are 0-based; all calls clip. */
 void scr_fill(int row, int col, int w, uint32_t cp, int style);
+/* Single-line frame (┌─┐│└┘) of w x h cells; interior untouched. */
+void scr_box(int row, int col, int w, int h, int style);
 void scr_clear(int style);
 /* Draw UTF-8 text; skips `skip` leading display columns (tab-aware, from the
  * start of s), stops after maxw cells; returns cells drawn. */

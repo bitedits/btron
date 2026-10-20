@@ -414,6 +414,24 @@ int scr_str(int row, int col, const char *s, int style)
     return scr_text(row, col, term_cols, s, s ? strlen(s) : 0, style, 0);
 }
 
+void scr_box(int row, int col, int w, int h, int style)
+{
+    int i;
+    if (w < 2 || h < 2) return;
+    scr_str(row, col, "┌", style);
+    scr_str(row, col + w - 1, "┐", style);
+    scr_str(row + h - 1, col, "└", style);
+    scr_str(row + h - 1, col + w - 1, "┘", style);
+    for (i = 1; i < w - 1; i++) {
+        scr_str(row, col + i, "─", style);
+        scr_str(row + h - 1, col + i, "─", style);
+    }
+    for (i = 1; i < h - 1; i++) {
+        scr_str(row + i, col, "│", style);
+        scr_str(row + i, col + w - 1, "│", style);
+    }
+}
+
 void scr_cursor(int row, int col, int visible)
 {
     g_want_r = row; g_want_c = col; g_want_vis = visible;

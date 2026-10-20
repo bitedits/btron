@@ -18,7 +18,10 @@ enum {
     STYLE_MENU,
     STYLE_MENU_SEL,
     STYLE_FOOTER,
-    STYLE_ACCENT
+    STYLE_ACCENT,
+    STYLE_FIND,
+    STYLE_FIND_TITLE,
+    STYLE_FIND_FIELD
 };
 
 static TvContext g_default_tv = {
@@ -84,6 +87,9 @@ static void tv_setup_styles(void)
     term_style(STYLE_MENU_SEL,  "30;47");
     term_style(STYLE_FOOTER,    "37;44");
     term_style(STYLE_ACCENT,    "1;33;44");
+    term_style(STYLE_FIND,       "30;43");    /* same yellow as the BE F2 menu */
+    term_style(STYLE_FIND_TITLE, "1;30;43");
+    term_style(STYLE_FIND_FIELD, "30;47");
 }
 
 static void tv_reset_buffer(void)
@@ -307,7 +313,7 @@ static void tv_get_selection_range(size_t *r1, size_t *b1, size_t *r2, size_t *b
 static void tv_draw_footer(void)
 {
     static const char *const labels[10] = {
-        "F1 Help", "F2 Empty", "F3 Select", "F4 Edit", "F5 Wrap",
+        "F1 Help", "F2 Find", "F3 Select", "F4 Edit", "F5 Wrap",
         "F6 Word-Wrap", "F7 Empty", "F8 Empty", "F9 Empty", "F10 Quit"
     };
     int r = term_rows - 2;
@@ -861,6 +867,76 @@ static void tv_kill_to_sol(void)
     g_modified = 1;
 }
 
+/* ── Find ──────────────────────────────────────────────────────────── */
+
+static int tv_fold(int c)
+{
+    return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+static int tv_match_at(const TvLine *l, size_t at)
+{
+    size_t i;
+    if (at + g_tv->find_len > l->len) return 0;
+    for (i = 0; i < g_tv->find_len; i++) {
+        if (tv_fold((unsigned char)l->data[at + i]) != tv_fold((unsigned char)g_tv->find_text[i])) return 0;
+    }
+    return 1;
+}
+
+/* Find the next case-insensitive match after the cursor, wrapping once. */
+static int tv_find_next(void)
+{
+    size_t n, line, at;
+    if (g_tv->find_len == 0 || g_line_count == 0) return 0;
+    for (n = 0; n <= g_line_count; n++) {
+        line = (g_cur_line + n) % g_line_count;
+        TvLine *l = &g_lines[line];
+        at = (n == 0) ? g_cur_byte + (g_sel_active ? 0 : 1) : 0;
+        if (n == 0 && g_sel_active) at = g_cur_byte;
+        for (; at + g_tv->find_len <= l->len; at++) {
+            if (!tv_match_at(l, at)) continue;
+            g_cur_line = line;
+            if (g_view_mode) {
+                g_scroll_y = (int)line;
+                g_scroll_sub = 0;
+                g_cur_byte = at;
+            } else {
+                g_sel_anchor_line = line;
+                g_sel_anchor_byte = at;
+                g_sel_active = 1;
+                g_cur_byte = at + g_tv->find_len;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void tv_draw_find_dialog(void)
+{
+    int dw = 46, dh = 7;
+    int dr = (term_rows - dh) / 2;
+    int dc = (term_cols - dw) / 2;
+    int shown;
+    if (dw > term_cols) dw = term_cols;
+    if (dr < 0) dr = 0;
+    if (dc < 0) dc = 0;
+    for (int i = 0; i < dh; i++) scr_fill(dr + i, dc, dw, ' ', STYLE_FIND);
+    scr_box(dr, dc, dw, dh, STYLE_FIND);
+    scr_str(dr, dc + 2, " Find ", STYLE_FIND_TITLE);
+    scr_str(dr + 2, dc + 3, "Text:", STYLE_FIND);
+    scr_fill(dr + 2, dc + 9, dw - 12, ' ', STYLE_FIND_FIELD);
+    shown = (int)g_tv->find_len;
+    if (shown > dw - 13) shown = dw - 13;
+    scr_text(dr + 2, dc + 10, dw - 13, g_tv->find_text + (g_tv->find_len - (size_t)shown),
+             (size_t)shown, STYLE_FIND_FIELD, 0);
+    scr_str(dr + 4, dc + 3, g_tv->find_status, STYLE_FIND_TITLE);
+    scr_str(dr + 5, dc + 3, "Enter: find next   Esc: close", STYLE_FIND);
+    scr_cursor(dr + 2, dc + 10 + shown, 1);
+    scr_flush();
+}
+
 static void tv_draw_help_dialog(void)
 {
     int dw = 52, dh = 11;
@@ -872,24 +948,13 @@ static void tv_draw_help_dialog(void)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
-    scr_str(dr, dc, "+", STYLE_MENU);
-    scr_str(dr, dc + dw - 1, "+", STYLE_MENU);
-    scr_str(dr + dh - 1, dc, "+", STYLE_MENU);
-    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU);
-    for (int i = 1; i < dw - 1; i++) {
-        scr_str(dr, dc + i, "-", STYLE_MENU);
-        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU);
-    }
-    for (int i = 1; i < dh - 1; i++) {
-        scr_str(dr + i, dc, "|", STYLE_MENU);
-        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU);
-    }
+    scr_box(dr, dc, dw, dh, STYLE_MENU);
     scr_str(dr + 1, dc + 14, "TV - Terminal Vision Help", STYLE_MENU_SEL);
     scr_str(dr + 3, dc + 3, "^S / Cmd+S : Save       ^Q / Cmd+Q : Quit", STYLE_MENU);
     scr_str(dr + 4, dc + 3, "^W / Cmd+W : Wrap Mode  ^N / Cmd+N : New File", STYLE_MENU);
     scr_str(dr + 5, dc + 3, "^O / Cmd+O : Reload     ^C/^X/^V   : Copy/Cut/Paste", STYLE_MENU);
     scr_str(dr + 6, dc + 3, "Opt+Left/Right: Word    Cmd+Up/Dn  : File Top/End", STYLE_MENU);
-    scr_str(dr + 7, dc + 3, "F1: Help   F3: Select   F4: Edit   F6: Word-Wrap", STYLE_MENU);
+    scr_str(dr + 7, dc + 3, "F1: Help   F2/^F: Find   F3: Select   F4: Edit", STYLE_MENU);
     scr_str(dr + 9, dc + 12, "[ Press ESC or ENTER to Close ]", STYLE_MENU_SEL);
 
     scr_cursor(dr + 9, dc + 13, 1);
@@ -907,18 +972,7 @@ static void tv_draw_exit_dialog(int sel)
     for (int i = 0; i < dh; i++) {
         scr_fill(dr + i, dc, dw, ' ', STYLE_MENU);
     }
-    scr_str(dr, dc, "+", STYLE_MENU);
-    scr_str(dr, dc + dw - 1, "+", STYLE_MENU);
-    scr_str(dr + dh - 1, dc, "+", STYLE_MENU);
-    scr_str(dr + dh - 1, dc + dw - 1, "+", STYLE_MENU);
-    for (int i = 1; i < dw - 1; i++) {
-        scr_str(dr, dc + i, "-", STYLE_MENU);
-        scr_str(dr + dh - 1, dc + i, "-", STYLE_MENU);
-    }
-    for (int i = 1; i < dh - 1; i++) {
-        scr_str(dr + i, dc, "|", STYLE_MENU);
-        scr_str(dr + i, dc + dw - 1, "|", STYLE_MENU);
-    }
+    scr_box(dr, dc, dw, dh, STYLE_MENU);
     scr_str(dr + 2, dc + 4, "File modified. Save before exiting?", STYLE_MENU);
 
     const char *b0 = "[ Save & Exit ]";
@@ -1037,6 +1091,44 @@ int tv_session_step(int k)
         return 1;
     }
 
+    if (g_modal_mode == TV_MODAL_FIND) {
+        if (k == K_RESIZE) {
+            scr_invalidate();
+        } else if (k == K_ESC || k == K_F2 || k == K_F10) {
+            g_modal_mode = TV_MODAL_NONE;
+            tv_draw_header();
+            tv_draw_text();
+            tv_draw_footer();
+            tv_update_cursor();
+            scr_flush();
+            return 1;
+        } else if (k == K_ENTER) {
+            g_tv->find_status[0] = '\0';
+            if (g_tv->find_len > 0 && !tv_find_next())
+                (void)snprintf(g_tv->find_status, sizeof(g_tv->find_status), "Not found");
+        } else if (k == K_BACKSPACE) {
+            if (g_tv->find_len > 0) g_tv->find_text[--g_tv->find_len] = '\0';
+            g_tv->find_status[0] = '\0';
+        } else if (k >= 0x20 && k < K_BASE && k != 0x7F) {
+            char enc[4];
+            size_t elen = lang_encode((uint32_t)k, enc);
+            if (g_tv->find_len + elen < sizeof(g_tv->find_text)) {
+                memcpy(g_tv->find_text + g_tv->find_len, enc, elen);
+                g_tv->find_len += elen;
+                g_tv->find_text[g_tv->find_len] = '\0';
+                g_tv->find_status[0] = '\0';
+            }
+        } else {
+            return 1;
+        }
+        tv_update_cursor();
+        tv_draw_header();
+        tv_draw_text();
+        tv_draw_footer();
+        tv_draw_find_dialog();
+        return 1;
+    }
+
     if (k == K_RESIZE) {
         scr_invalidate();
         tv_draw_header();
@@ -1049,6 +1141,13 @@ int tv_session_step(int k)
     if (k == K_EOF) return 0;
 
     switch (k) {
+    case K_F2:
+    case K_CTRL('F'):
+        g_modal_mode = TV_MODAL_FIND;
+        g_tv->find_status[0] = '\0';
+        tv_draw_find_dialog();
+        return 1;
+
     case K_F1:
         g_modal_mode = TV_MODAL_HELP;
         tv_draw_help_dialog();

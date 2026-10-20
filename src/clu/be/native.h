@@ -34,6 +34,11 @@ typedef struct {
     int embedded;
     int exit_confirm;
     int exit_sel;
+    int find_open;
+    int find_len;
+    char find_text[65];
+    char find_status[48];
+    size_t match_len;
     int rows;
     int cols;
     size_t asm_offsets[TERM_MAXR];

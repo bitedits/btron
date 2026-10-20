@@ -11,22 +11,7 @@ void draw_panel_border(int start_col, int start_row, int width, int height, int 
 {
     if (width < 2 || height < 2) return;
 
-    scr_str(start_row, start_col, "+", style);
-    for (int i = 1; i < width - 1; i++) {
-        scr_str(start_row, start_col + i, "-", style);
-    }
-    scr_str(start_row, start_col + width - 1, "+", style);
-
-    for (int r = start_row + 1; r < start_row + height - 1; r++) {
-        scr_str(r, start_col, "|", style);
-        scr_str(r, start_col + width - 1, "|", style);
-    }
-
-    scr_str(start_row + height - 1, start_col, "+", style);
-    for (int i = 1; i < width - 1; i++) {
-        scr_str(start_row + height - 1, start_col + i, "-", style);
-    }
-    scr_str(start_row + height - 1, start_col + width - 1, "+", style);
+    scr_box(start_row, start_col, width, height, style);
 }
 
 void draw_panel(Panel *panel, int start_col, int width, int is_active)
@@ -60,15 +45,15 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
     /* Column layout: Name (variable), Size (9), Date (14) */
     int name_width = width - 4 - 23;
     if (name_width < 6) name_width = 6;
-    int size_width = 9;
+    int size_width = 9;      /* header field width */
     int date_width = 14;
     int sep1 = start_col + 1 + name_width;
-    int sep2 = sep1 + size_width;
+    int sep2 = sep1 + size_width + 1;   /* body size column 1 wider; matches header */
 
     /* Column header bar at row 2 */
     char col_hdr[128];
-    snprintf(col_hdr, sizeof(col_hdr), "%-*s|%-*s|%-*s",
-             name_width, "Name", size_width, "Size/Type", date_width, "Date   |Time");
+    snprintf(col_hdr, sizeof(col_hdr), "%-*s│%-*s│%-*s",
+             name_width, "Name", size_width, "Size/Type", date_width, "Date    │Time");
     scr_text(2, start_col + 1, width - 2, col_hdr, strlen(col_hdr), SC_STYLE_TEXT, 0);
 
     /* File entries */
@@ -78,8 +63,8 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
 
         if (f_idx >= panel->file_count) {
             scr_fill(r, start_col + 1, width - 2, ' ', SC_STYLE_TEXT);
-            if (sep1 < start_col + width - 1) scr_str(r, sep1, "|", SC_STYLE_BORDER);
-            if (sep2 < start_col + width - 1) scr_str(r, sep2, "|", SC_STYLE_BORDER);
+            if (sep1 < start_col + width - 1) scr_str(r, sep1, "│", SC_STYLE_BORDER);
+            if (sep2 < start_col + width - 1) scr_str(r, sep2, "│", SC_STYLE_BORDER);
             continue;
         }
 
@@ -103,7 +88,7 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
 
         uint32_t t = panel->files[f_idx].mtime;
         char dt_str[20];
-        snprintf(dt_str, sizeof(dt_str), "%02u-%02u-%02u|%02u:%02u",
+        snprintf(dt_str, sizeof(dt_str), "%02u-%02u-%02u│%02u:%02u",
                  (unsigned)((t / 86400) % 12 + 1),
                  (unsigned)((t / 86400) % 28 + 1),
                  (unsigned)((t / 31536000 + 70) % 100),
@@ -115,11 +100,11 @@ void draw_panel(Panel *panel, int start_col, int width, int is_active)
                  strlen(panel->files[f_idx].name), style, 0);
 
         if (sep1 < start_col + width - 1) {
-            scr_str(r, sep1, "|", SC_STYLE_BORDER);
-            scr_text(r, sep1 + 1, size_width - 1, size_str, strlen(size_str), style, 0);
+            scr_str(r, sep1, "│", SC_STYLE_BORDER);
+            scr_text(r, sep1 + 1, size_width, size_str, strlen(size_str), style, 0);
         }
         if (sep2 < start_col + width - 1) {
-            scr_str(r, sep2, "|", SC_STYLE_BORDER);
+            scr_str(r, sep2, "│", SC_STYLE_BORDER);
             scr_text(r, sep2 + 1, date_width - 1, dt_str, strlen(dt_str), style, 0);
         }
     }
@@ -219,6 +204,7 @@ void append_to_history_display(const char *command, const char *output)
 
 void draw_interface(void)
 {
+    scr_clear(SC_STYLE_TEXT);   /* drop leftovers from tv/be frames */
     draw_menu();
 
     if (show_command_buffer) {
@@ -251,7 +237,7 @@ void draw_interface(void)
         draw_panel(&left_panel, 0, panel_width, active_panel == &left_panel);
 
         for (int r = 1; r < term_rows - 2; r++) {
-            scr_str(r, panel_width, "|", SC_STYLE_BORDER);
+            scr_str(r, panel_width, "│", SC_STYLE_BORDER);
         }
 
         draw_panel(&right_panel, panel_width + 1, term_cols - panel_width - 1, active_panel == &right_panel);

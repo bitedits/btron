@@ -11,7 +11,8 @@ enum { BE_STYLE_DEFAULT = 0, BE_STYLE_HEADER = 20, BE_STYLE_TEXT = 21,
        BE_STYLE_MENU_ITEM = 28, BE_STYLE_MENU_SELECT = 29,
        BE_STYLE_MENU_FOCUS = 30, BE_STYLE_LOGO = 31,
        BE_STYLE_LOGO_ICON = 26, BE_STYLE_ARCH_MENU = 32,
-       BE_STYLE_ARCH_TITLE = 33 };
+       BE_STYLE_ARCH_TITLE = 33, BE_STYLE_FIND = 34, BE_STYLE_FIND_TITLE = 35,
+       BE_STYLE_FIND_FIELD = 36, BE_STYLE_RULE = 37 };
 #if defined(BTRON_PS2_TARGET)
 #define BE_NATIVE_CONTEXTS 1
 #else
@@ -45,6 +46,10 @@ static void be_setup_styles(void)
     term_style(BE_STYLE_MENU_FOCUS, "1;37;44");
     term_style(BE_STYLE_ARCH_MENU, "30;43");
     term_style(BE_STYLE_ARCH_TITLE, "1;30;43");
+    term_style(BE_STYLE_FIND, "30;43");           /* yellow, like the F2 menu */
+    term_style(BE_STYLE_FIND_TITLE, "1;30;43");
+    term_style(BE_STYLE_FIND_FIELD, "30;47");
+    term_style(BE_STYLE_RULE, "97;104");
     term_style(BE_STYLE_LOGO, "48;2;255;105;180;1;37");
     term_style(BE_STYLE_LOGO_ICON, "1;33;44");
 }
@@ -283,21 +288,7 @@ static void be_draw_menu(BeNativeContext *ctx)
     }
     if (height >= 2)
         scr_str(top + height - 1, left + 2, "Arrows/Tab choose | Enter apply | Esc cancel", BE_STYLE_ARCH_MENU);
-    if (width >= 2 && height >= 2) {
-        int edge;
-        scr_str(top, left, "+", BE_STYLE_ARCH_TITLE);
-        scr_str(top, left + width - 1, "+", BE_STYLE_ARCH_TITLE);
-        scr_str(top + height - 1, left, "+", BE_STYLE_ARCH_TITLE);
-        scr_str(top + height - 1, left + width - 1, "+", BE_STYLE_ARCH_TITLE);
-        for (edge = 1; edge < width - 1; edge++) {
-            scr_str(top, left + edge, "-", BE_STYLE_ARCH_TITLE);
-            scr_str(top + height - 1, left + edge, "-", BE_STYLE_ARCH_TITLE);
-        }
-        for (edge = 1; edge < height - 1; edge++) {
-            scr_str(top + edge, left, "|", BE_STYLE_ARCH_TITLE);
-            scr_str(top + edge, left + width - 1, "|", BE_STYLE_ARCH_TITLE);
-        }
-    }
+    scr_box(top, left, width, height, BE_STYLE_ARCH_TITLE);
 }
 
 static void be_draw_asm(BeNativeContext *ctx)
@@ -346,17 +337,19 @@ static void be_draw_asm(BeNativeContext *ctx)
                 scr_str(row + 1, byte_col, byte_text, byte_style);
             }
         }
-        scr_str(row + 1, divider, "|", BE_STYLE_HEADER);
+        scr_str(row + 1, divider, "│", BE_STYLE_RULE);
         scr_str(row + 1, divider + 1, instruction, row_style);
         offset += ctx->asm_lengths[row];
     }
 }
 
+static void be_draw_find(BeNativeContext *ctx);
+
 static void be_draw(BeNativeContext *ctx)
 {
     static const char *const labels[10] = {
         "F1 Help", "F2 Arch", "F3 Quit", "F4 Ins/Rep", "F5 Save",
-        "F6 Edit/View", "F7 Empty", "F8 Empty", "F9 Empty", "F10 Quit"
+        "F6 Edit/View", "F7 Find", "F8 Empty", "F9 Empty", "F10 Quit"
     };
     char line[BE_NATIVE_PATH_MAX];
     int r, visible, per_line, start_col;
@@ -366,7 +359,7 @@ static void be_draw(BeNativeContext *ctx)
     if (ctx->rows < 3 || ctx->cols < 16) return;
     arch_name = ctx->arch >= 1 && ctx->arch <= 9 ? g_be_arch_names[ctx->arch] : "Unknown";
     if (ctx->arch == 2) arch_name = ctx->bitness > 32 ? "AArch64" : "AArch32";
-    scr_clear(BE_STYLE_DEFAULT);
+    scr_clear(BE_STYLE_TEXT);
     scr_fill(0, 0, ctx->cols, ' ', BE_STYLE_HEADER);
     (void)snprintf(line, sizeof(line), "%12s [%03i][%s][%s][%02x][%016lx] Size: %012luB",
                    arch_name,
@@ -396,7 +389,9 @@ static void be_draw(BeNativeContext *ctx)
             for (i = 0; i < (unsigned int)per_line; i++) {
                 size_t at = base + i;
                 int col = start_col + (int)i * 3 + (int)i / group;
-                int style = at == ctx->cursor ? BE_STYLE_BYTE_CURSOR : BE_STYLE_BYTE;
+                int style = at == ctx->cursor ? BE_STYLE_BYTE_CURSOR :
+                            (at >= ctx->cursor && at - ctx->cursor < ctx->match_len) ? BE_STYLE_SELECT :
+                            BE_STYLE_BYTE;
                 char ascii_char[2] = { ' ', '\0' };
                 if (at < ctx->length) {
                     (void)snprintf(line, sizeof(line), "%02X", ctx->bytes[at]);
@@ -430,6 +425,8 @@ static void be_draw(BeNativeContext *ctx)
     if (ctx->menu_open) {
         be_draw_menu(ctx);
         scr_cursor(0, 0, 0);
+    } else if (ctx->find_open) {
+        be_draw_find(ctx);
     } else if (ctx->exit_confirm) {
         int modal_width = ctx->cols < 46 ? ctx->cols : 46;
         int modal_height = 6;
@@ -438,15 +435,7 @@ static void be_draw(BeNativeContext *ctx)
         if (modal_top < 0) modal_top = 0;
         for (int r = 0; r < modal_height; r++)
             scr_fill(modal_top + r, modal_left, modal_width, ' ', BE_STYLE_MENU);
-        for (int c = 0; c < modal_width; c++) {
-            scr_str(modal_top, modal_left + c, (c == 0 || c == modal_width - 1) ? "+" : "-", BE_STYLE_MENU_FOCUS);
-            scr_str(modal_top + modal_height - 1, modal_left + c,
-                    (c == 0 || c == modal_width - 1) ? "+" : "-", BE_STYLE_MENU_FOCUS);
-        }
-        for (int r = 1; r < modal_height - 1; r++) {
-            scr_str(modal_top + r, modal_left, "|", BE_STYLE_MENU_FOCUS);
-            scr_str(modal_top + r, modal_left + modal_width - 1, "|", BE_STYLE_MENU_FOCUS);
-        }
+        scr_box(modal_top, modal_left, modal_width, modal_height, BE_STYLE_MENU_FOCUS);
         scr_str(modal_top + 2, modal_left + 4, "File modified. Save before exiting?", BE_STYLE_MENU_FOCUS);
         scr_str(modal_top + 4, modal_left + 3, "[ Save & Exit ]", ctx->exit_sel == 0 ? BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM);
         scr_str(modal_top + 4, modal_left + 20, "[ Discard ]", ctx->exit_sel == 1 ? BE_STYLE_MENU_SELECT : BE_STYLE_MENU_ITEM);
@@ -473,6 +462,130 @@ static void be_reveal_cursor(BeNativeContext *ctx)
     page = (size_t)per_line * (size_t)(ctx->rows > 3 ? ctx->rows - 3 : 1);
     if (ctx->cursor < ctx->top) ctx->top = (ctx->cursor / (size_t)per_line) * (size_t)per_line;
     if (ctx->cursor >= ctx->top + page) ctx->top = (ctx->cursor / (size_t)per_line) * (size_t)per_line;
+}
+
+/* ── Hex find ──────────────────────────────────────────────────────── */
+
+#define BE_FIND_MAX 32
+
+/*
+ * Pattern syntax: hex digits (spaces ignored), '?' = any nibble ("4? 5A ??"),
+ * or a leading '"' for literal ASCII text.  Returns pattern length or -1.
+ */
+static int be_find_parse(const BeNativeContext *ctx, uint8_t *pat, uint8_t *mask)
+{
+    int n = 0, nib = 0, i;
+    if (ctx->find_len > 0 && ctx->find_text[0] == '"') {
+        for (i = 1; i < ctx->find_len && n < BE_FIND_MAX; i++) {
+            if (ctx->find_text[i] == '"' && i == ctx->find_len - 1) break;
+            pat[n] = (uint8_t)ctx->find_text[i];
+            mask[n++] = 0xFFu;
+        }
+        return n;
+    }
+    for (i = 0; i < ctx->find_len; i++) {
+        char c = ctx->find_text[i];
+        int v;
+        uint8_t m;
+        if (c == ' ') continue;
+        if (c == '?') { v = 0; m = 0u; }
+        else if (c >= '0' && c <= '9') { v = c - '0'; m = 0xFu; }
+        else if (c >= 'a' && c <= 'f') { v = c - 'a' + 10; m = 0xFu; }
+        else if (c >= 'A' && c <= 'F') { v = c - 'A' + 10; m = 0xFu; }
+        else return -1;
+        if ((nib & 1) == 0) {
+            if (n >= BE_FIND_MAX) return -1;
+            pat[n] = (uint8_t)(v << 4);
+            mask[n] = (uint8_t)(m << 4);
+        } else {
+            pat[n] = (uint8_t)(pat[n] | v);
+            mask[n] = (uint8_t)(mask[n] | m);
+            n++;
+        }
+        nib++;
+    }
+    return (nib & 1) ? -1 : n;
+}
+
+/* Search forward (dir > 0) or backward from the cursor, wrapping once. */
+static int be_find_run(BeNativeContext *ctx, int dir)
+{
+    uint8_t pat[BE_FIND_MAX], mask[BE_FIND_MAX];
+    int n = be_find_parse(ctx, pat, mask);
+    size_t span, start, step, at;
+    if (n < 0) { (void)snprintf(ctx->find_status, sizeof(ctx->find_status), "Invalid pattern"); return 0; }
+    if (n == 0) { ctx->find_status[0] = '\0'; return 0; }
+    if (ctx->length < (size_t)n) { (void)snprintf(ctx->find_status, sizeof(ctx->find_status), "Not found"); return 0; }
+    span = ctx->length - (size_t)n + 1u;        /* number of candidate offsets */
+    start = ctx->cursor < span ? ctx->cursor : span - 1u;
+    for (step = 1; step <= span; step++) {
+        size_t k;
+        int ok = 1;
+        at = dir > 0 ? (start + step) % span : (start + span - (step % span)) % span;
+        for (k = 0; k < (size_t)n; k++) {
+            if (((ctx->bytes[at + k] ^ pat[k]) & mask[k]) != 0u) { ok = 0; break; }
+        }
+        if (!ok) continue;
+        ctx->cursor = at;
+        ctx->match_len = (size_t)n;
+        ctx->nibble = 0;
+        if (ctx->view_asm) ctx->top = at;
+        (void)snprintf(ctx->find_status, sizeof(ctx->find_status), "Found at %08lX%s",
+                       (unsigned long)at,
+                       ((dir > 0 && at <= start) || (dir < 0 && at >= start)) ? "  (wrapped)" : "");
+        return 1;
+    }
+    ctx->match_len = 0;
+    (void)snprintf(ctx->find_status, sizeof(ctx->find_status), "Not found");
+    return 0;
+}
+
+static void be_draw_find(BeNativeContext *ctx)
+{
+    int dw = ctx->cols < 56 ? ctx->cols : 56;
+    int dh = 7;
+    int left = (ctx->cols - dw) / 2;
+    int top = ctx->rows - 2 - dh;
+    int shown = ctx->find_len;
+    int r;
+    if (top < 1) top = 1;
+    if (dw < 20) return;
+    for (r = 0; r < dh; r++) scr_fill(top + r, left, dw, ' ', BE_STYLE_FIND);
+    scr_box(top, left, dw, dh, BE_STYLE_FIND);
+    scr_str(top, left + 2, " Find bytes ", BE_STYLE_FIND_TITLE);
+    scr_text(top + 1, left + 2, dw - 4, "Hex: 4D 5A ?? 90   ?=any nibble   \"text\"=ASCII", 44u,
+             BE_STYLE_FIND, 0);
+    scr_fill(top + 2, left + 2, dw - 4, ' ', BE_STYLE_FIND_FIELD);
+    if (shown > dw - 7) shown = dw - 7;
+    scr_text(top + 2, left + 3, dw - 6, ctx->find_text + (ctx->find_len - shown),
+             (size_t)shown, BE_STYLE_FIND_FIELD, 0);
+    scr_str(top + 4, left + 2, ctx->find_status, BE_STYLE_FIND_TITLE);
+    scr_text(top + 5, left + 2, dw - 4, "Enter/Down next   Up previous   Esc close", 39u,
+             BE_STYLE_FIND, 0);
+    scr_cursor(top + 2, left + 3 + shown, 1);
+}
+
+static int be_find_step(BeNativeContext *ctx, int key)
+{
+    if (key == K_ESC || key == K_F7 || key == K_F3 || key == K_F10) {
+        ctx->find_open = 0;
+    } else if (key == K_ENTER || key == K_DOWN) {
+        (void)be_find_run(ctx, 1);
+    } else if (key == K_UP) {
+        (void)be_find_run(ctx, -1);
+    } else if (key == K_BACKSPACE) {
+        if (ctx->find_len > 0) ctx->find_text[--ctx->find_len] = '\0';
+        ctx->find_status[0] = '\0';
+        ctx->match_len = 0;
+    } else if (key >= 0x20 && key < 0x7F && ctx->find_len < (int)sizeof(ctx->find_text) - 1) {
+        ctx->find_text[ctx->find_len++] = (char)key;
+        ctx->find_text[ctx->find_len] = '\0';
+        ctx->find_status[0] = '\0';
+        ctx->match_len = 0;
+    }
+    be_reveal_cursor(ctx);
+    be_draw(ctx);
+    return 1;
 }
 
 static int be_save(BeNativeContext *ctx)
@@ -706,6 +819,8 @@ int be_native_session_step(BeNativeContext *ctx, int key)
 {
     if (ctx == NULL) return 0;
     if (ctx->menu_open) return be_menu_step(ctx, key);
+    if (ctx->find_open) return be_find_step(ctx, key);
+    if (key != K_RESIZE) ctx->match_len = 0;
     if (ctx->exit_confirm) {
         if (key == K_LEFT || key == K_BTAB || key == K_UP) ctx->exit_sel = (ctx->exit_sel + 2) % 3;
         else if (key == K_RIGHT || key == K_TAB || key == K_DOWN) ctx->exit_sel = (ctx->exit_sel + 1) % 3;
@@ -740,6 +855,12 @@ int be_native_session_step(BeNativeContext *ctx, int key)
             return 1;
         }
         return 0;
+    }
+    if (key == K_F7 || key == K_CTRL('f')) {
+        ctx->find_open = 1;
+        ctx->find_status[0] = '\0';
+        be_draw(ctx);
+        return 1;
     }
     if (key == K_F2) {
         ctx->menu_open = 1;

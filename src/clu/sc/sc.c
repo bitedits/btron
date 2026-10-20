@@ -54,7 +54,7 @@ static void sc_init_styles(void)
     term_style(SC_STYLE_HEADER, "1;33;44");       /* bold yellow on blue */
     term_style(SC_STYLE_TEXT, "37;44");          /* white on blue */
     term_style(SC_STYLE_HIGHLIGHT, "30;46");     /* black on cyan */
-    term_style(SC_STYLE_DIR, "1;37;44");         /* bold white on blue */
+    term_style(SC_STYLE_DIR, "1;33;44");         /* bold yellow on blue */
     term_style(SC_STYLE_BORDER, "36;44");        /* cyan on blue */
     term_style(SC_STYLE_BOTTOM, "30;47");        /* black on white */
     term_style(SC_STYLE_MENU, "37;44");          /* white on blue */
@@ -261,6 +261,7 @@ int sc_session_step(int c)
             g_sc_be_active = 0;
             load_files(&left_panel);
             load_files(&right_panel);
+            sc_init_styles();   /* tv/be share global style ids; restore ours */
             scr_invalidate();
             draw_interface();
             scr_flush();
@@ -276,6 +277,7 @@ int sc_session_step(int c)
             g_sc_tv_active = 0;
             load_files(&left_panel);
             load_files(&right_panel);
+            sc_init_styles();   /* tv/be share global style ids; restore ours */
             scr_invalidate();
             draw_interface();
             scr_flush();

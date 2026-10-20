@@ -21,7 +21,8 @@ typedef struct {
 typedef enum {
     TV_MODAL_NONE = 0,
     TV_MODAL_EXIT,
-    TV_MODAL_HELP
+    TV_MODAL_HELP,
+    TV_MODAL_FIND
 } TvModalMode;
 
 typedef struct TvContext {
@@ -42,6 +43,9 @@ typedef struct TvContext {
     int    sel_active;
     size_t sel_anchor_line;
     size_t sel_anchor_byte;
+    char   find_text[64];
+    size_t find_len;
+    char   find_status[32];
 } TvContext;
 
 TvContext *tv_context_create(void);

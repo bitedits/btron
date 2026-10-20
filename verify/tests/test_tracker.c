@@ -54,6 +54,7 @@ TIP_DFA_STATE tip_get_state(void) { return TIP_STATE_IDLE; }
 H tip_get_caret_x(void) { return 0; }
 H tip_get_caret_y(void) { return 0; }
 void tip_render_candidate_window(GDEV *dev, H x, H y) { (void)dev; (void)x; (void)y; }
+void btron_system_quit(void) {}
 
 static int s_tests_passed = 0;
 static int s_tests_failed = 0;

@@ -782,8 +782,9 @@ void btron_system_quit(void) {
 /* ── Keyboard navigation ──────────────────────────────────────── */
 BOOL global_menu_handle_key(UW key, VW mod) {
     /* Global Accelerators: Alt+Q / Cmd+Q / Alt+F4 to quit system */
-    BOOL has_alt = (mod & (BTRON_KMOD_ALT | 0x0300 | 0x0100 | 0x0200)) != 0;
-    BOOL has_gui = (mod & (BTRON_KMOD_GUI | 0x0C00 | 0x0400 | 0x0800)) != 0;
+    uintptr_t m = (uintptr_t)mod;
+    BOOL has_alt = (m & (BTRON_KMOD_ALT | 0x0300 | 0x0100 | 0x0200)) != 0;
+    BOOL has_gui = (m & (BTRON_KMOD_GUI | 0x0C00 | 0x0400 | 0x0800)) != 0;
     if ((key == 'q' || key == 'Q' || key == 0x71) && (has_alt || has_gui)) {
         btron_system_quit();
         return TRUE;

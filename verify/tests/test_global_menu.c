@@ -53,6 +53,8 @@ WND* open_msx_window(void)                  { return NULL; }
 WND* open_lilcu64_demo_window(void)         { return NULL; }
 WND* open_glgears_window(void)              { return NULL; }
 WND* open_xmb_window(void)                  { return NULL; }
+ER snd_evt(const EVT *p_evt)                { (void)p_evt; return E_OK; }
+BTRON_DESKTOP* get_btron_desktop(void)      { return NULL; }
 
 /* ── Test Group 1: Geometry & Non-Overfull Margins ── */
 static void test_global_menu_geometry(void) {
@@ -320,6 +322,32 @@ static void test_rendering_benchmarks(void) {
     cls_dev(dev);
 }
 
+/* ── Test Group 9: Global Quit in Top Menu & Accelerators ── */
+static void test_global_quit_action(void) {
+    printf("\n[TEST GROUP 9] Global Quit in Top Menu & Accelerators\n");
+
+    global_menu_init();
+
+    /* 1. Verify Alt+Q / Cmd+Q / Alt+F4 accelerators */
+    BOOL quit_key = global_menu_handle_key('q', (VW)(uintptr_t)0x0300 /* Alt */);
+    TEST_ASSERT(quit_key, "Alt+Q triggers global quit");
+
+    quit_key = global_menu_handle_key('q', (VW)(uintptr_t)0x0C00 /* GUI/Cmd */);
+    TEST_ASSERT(quit_key, "Cmd+Q triggers global quit");
+
+    quit_key = global_menu_handle_key(0x4000003Du /* SDLK_F4 */, (VW)(uintptr_t)0x0300 /* Alt */);
+    TEST_ASSERT(quit_key, "Alt+F4 triggers global quit");
+
+    /* 2. Open システム(S) dropdown and trigger Quit command */
+    global_menu_handle_mouse_down(140, 10);
+    TEST_ASSERT(global_menu_is_open() && global_menu_get_active() == GMENU_HDR_SYSTEM,
+                "システム(S) menu opened");
+
+    /* Invoking btron_system_quit directly closes menu cleanly */
+    btron_system_quit();
+    TEST_ASSERT(!global_menu_is_open(), "btron_system_quit closes global menu");
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -336,6 +364,7 @@ int main(int argc, char **argv) {
     test_global_tip_badge();
     test_window_management_actions();
     test_rendering_benchmarks();
+    test_global_quit_action();
 
     printf("\n==========================================================\n");
     printf(" GLOBAL MENU TEST RESULTS: %d / %d tests passed (%.1f%%)\n",

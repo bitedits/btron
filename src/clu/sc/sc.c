@@ -5,12 +5,15 @@
  * Zero host OS dependencies; cell diffing via term.h, VFS via vfs.h.
  */
 #define SC_INTERNAL 1
+#include "../be/native.h"
 #include "sokhatsky.h"
 
 /* Global Context */
 static ScContext g_default_sc = {
     ._insert_mode = 1
 };
+static BeNativeContext g_sc_be_context;
+static int g_sc_be_active;
 ScContext *g_sc = &g_default_sc;
 
 ScContext *sc_context_create(void)
@@ -156,6 +159,17 @@ int sc_is_tv_active(void)
     return g_sc_tv_active;
 }
 
+int sc_get_active_file_path(char *path, size_t path_size)
+{
+    const File *file;
+    if (path == NULL || path_size == 0u || active_panel == NULL ||
+        active_panel->cursor < 0 || active_panel->cursor >= active_panel->file_count) return -1;
+    file = &active_panel->files[active_panel->cursor];
+    if (file->is_dir) return -1;
+    vfs_child_path(path, path_size, active_panel->path, file->name, file->fid);
+    return path[0] != '\0' ? 0 : -1;
+}
+
 int sc_launch_tv(const char *filepath, int view_only)
 {
     if (!g_sc->tv_ctx) {
@@ -167,6 +181,17 @@ int sc_launch_tv(const char *filepath, int view_only)
         return 0;
     }
     return -1;
+}
+
+static int sc_launch_be(const char *filepath)
+{
+    char args[VFS_MAX_PATH + 4];
+    int n = snprintf(args, sizeof(args), "\"%s\"", filepath);
+    if (n < 0 || (size_t)n >= sizeof(args)) return -1;
+    if (be_native_session_init(&g_sc_be_context, args, term_rows, term_cols) != 0) return -1;
+    g_sc_be_context.embedded = 1;
+    g_sc_be_active = 1;
+    return 0;
 }
 
 int sc_session_init(const char *start_path, int rows, int cols)
@@ -207,6 +232,10 @@ int sc_session_init(const char *start_path, int rows, int cols)
 
 void sc_session_close(void)
 {
+    if (g_sc_be_active) {
+        be_native_session_close(&g_sc_be_context);
+        g_sc_be_active = 0;
+    }
     if (g_sc_tv_active) {
         if (g_sc->tv_ctx) tv_set_context(g_sc->tv_ctx);
         tv_session_close();
@@ -219,6 +248,25 @@ int sc_session_step(int c)
 {
     if (c == K_NONE) return 1;
     if (c == K_EOF) return 0;
+
+    if (g_sc_be_active) {
+        if (c == K_RESIZE) {
+            (void)term_resize();
+            be_native_session_resize(&g_sc_be_context, term_rows, term_cols);
+            return 1;
+        }
+        int running = be_native_session_step(&g_sc_be_context, c);
+        if (!running) {
+            be_native_session_close(&g_sc_be_context);
+            g_sc_be_active = 0;
+            load_files(&left_panel);
+            load_files(&right_panel);
+            scr_invalidate();
+            draw_interface();
+            scr_flush();
+        }
+        return 1;
+    }
 
     if (g_sc_tv_active) {
         if (g_sc->tv_ctx) tv_set_context(g_sc->tv_ctx);
@@ -257,7 +305,12 @@ int sc_session_step(int c)
     }
 
 
-        if (c == KEY_CTRL_O) {
+        if (c == KEY_ESC) {
+            modal_mode = SC_MODAL_EXIT;
+            modal_sel = 1;
+            draw_exit_dialog(modal_sel);
+            return 1;
+        } else if (c == KEY_CTRL_O) {
             show_command_buffer = !show_command_buffer;
             draw_interface();
         } else if (c == KEY_TAB) {
@@ -433,7 +486,7 @@ int sc_session_step(int c)
                 char fpath[VFS_MAX_PATH];
                 const File *cf = &active_panel->files[active_panel->cursor];
                 vfs_child_path(fpath, sizeof(fpath), active_panel->path, cf->name, cf->fid);
-                if (sc_launch_tv(fpath, 0) == 0) return 1;
+                if (sc_launch_be(fpath) == 0) return 1;
                 load_files(active_panel);
                 draw_interface();
             }

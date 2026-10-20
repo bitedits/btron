@@ -197,6 +197,43 @@ CLU_APPS_HOST_OBJS = $(CLU_APPS_SRCS:.c=.host.o)
 CLU_APPS_POSIX_OBJS = $(CLU_APPS_SRCS:.c=.posix.o)
 
 # ── Common SDL2-hosted app sources ────────────────────────────────
+BE_DASM_SRCS = src/clu/be/native_dasm.c \
+               src/clu/be/arch/x86/insnsd.c src/clu/be/arch/x86/insnsa.c \
+               src/clu/be/arch/x86/insnsb.c src/clu/be/arch/x86/insnsn.c \
+               src/clu/be/arch/x86/disasm.c src/clu/be/arch/x86/regdis.c \
+               src/clu/be/arch/x86/regs.c src/clu/be/arch/x86/regflags.c \
+               src/clu/be/arch/x86/regvals.c src/clu/be/arch/x86/iflag.c \
+               src/clu/be/arch/x86/sync.c src/clu/be/arch/x86/disp8.c \
+               src/clu/be/arch/x86/nctype.c src/clu/be/arch/x86/readnum.c \
+               src/clu/be/arch/x86/common.c src/clu/be/arch/x86/alloc.c \
+               src/clu/be/arch/x86/string.c src/clu/be/arch/x86/warnings.c \
+               src/clu/be/arch/x86/error.c src/clu/be/arch/x86/ver.c \
+               src/clu/be/arch/arm64/BranchExcSys.c \
+               src/clu/be/arch/arm64/DataProcessingImmediate.c \
+               src/clu/be/arch/arm64/LoadsAndStores.c src/clu/be/arch/arm64/bits.c \
+               src/clu/be/arch/arm64/strext.c \
+               src/clu/be/arch/arm64/DataProcessingFloatingPoint.c \
+               src/clu/be/arch/arm64/DataProcessingRegister.c \
+               src/clu/be/arch/arm64/armadillo.c src/clu/be/arch/arm64/instruction.c \
+               src/clu/be/arch/arm64/utils.c src/clu/be/arch/arm32/armv7.c \
+               src/clu/be/arch/riscv/riscv-disas.c src/clu/be/arch/ppc/ppc_disasm.c \
+               src/clu/be/arch/m68k/dis68k.c src/clu/be/arch/sh4/sh4.c \
+               src/clu/be/arch/nv/core-as.c src/clu/be/arch/nv/ctx.c \
+               src/clu/be/arch/nv/falcon.c src/clu/be/arch/nv/gk110.c \
+               src/clu/be/arch/nv/macro.c src/clu/be/arch/nv/vp1.c \
+               src/clu/be/arch/nv/hash.c src/clu/be/arch/nv/g80.c \
+               src/clu/be/arch/nv/gm107.c src/clu/be/arch/nv/nv.c \
+               src/clu/be/arch/nv/vuc.c src/clu/be/arch/nv/xtensa.c \
+               src/clu/be/arch/nv/astr.c src/clu/be/arch/nv/colors.c \
+               src/clu/be/arch/nv/core-dis.c src/clu/be/arch/nv/core.c \
+               src/clu/be/arch/nv/gf100.c src/clu/be/arch/nv/hwsq.c \
+               src/clu/be/arch/nv/vcomp.c src/clu/be/arch/nv/mask.c \
+               src/clu/be/arch/nv/varinfo.c src/clu/be/arch/nv/vardata.c \
+               src/clu/be/arch/nv/symtab.c src/clu/be/arch/nv/easm.c \
+               src/clu/be/arch/nv/aprintf.c src/clu/be/arch/nv/easm_xfrm.c \
+               src/clu/be/arch/nv/easm_print.c src/clu/be/arch/mips/mips-rsp.c \
+               src/clu/be/arch/pdp11/pdp11.c
+
 COMMON_SRCS = src/graphics/dp_core.c   \
               src/graphics/image_decode.c \
               src/graphics/icons_bundle.c \
@@ -276,6 +313,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/clu/sc/menus.c       \
               src/clu/sc/sc.c          \
               src/clu/tv/tv.c          \
+              src/clu/be/native.c      \
+              $(BE_DASM_SRCS)          \
               $(CLU_APPS_SRCS)         \
               src/clu/clu.c
 
@@ -1113,7 +1152,9 @@ CLU_TERMIO_SRCS = src/clu/lang.c           \
                   src/clu/sc/input.c       \
                   src/clu/sc/menus.c       \
                   src/clu/sc/sc.c          \
-                  src/clu/tv/tv.c
+                  src/clu/tv/tv.c          \
+                  src/clu/be/native.c
+CLU_TERMIO_SRCS += $(BE_DASM_SRCS)
 # The GL layer this port links, minus the app bundle GL_SRCS also carries.  Quake's
 # hunk arena alone is a 64 MiB static array and the Lil Cu demo's node table 3 MiB
 # more, against an Emotion Engine with 32 MB of RDRAM: an image that big does not

@@ -314,7 +314,7 @@ static const char *s_file_items[] = {
     "Rename/Move        F6",
     "Mkdir              F7",
     "Delete             F8",
-    "Exit               F10"
+    "Exit              Esc"
 };
 static const char *s_command_items[] = {
     "Command history   C-o",

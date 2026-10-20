@@ -204,6 +204,7 @@ int  sc_session_step(int c);
 void sc_session_close(void);
 int  sc_launch_tv(const char *filepath, int view_only);
 int  sc_is_tv_active(void);
+int  sc_get_active_file_path(char *path, size_t path_size);
 
 #endif /* SC_H */
 

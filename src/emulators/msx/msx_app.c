@@ -624,6 +624,12 @@ static void msx_handle_event(WND *wnd, const EVT *evt)
         if (app_menu_handle_mouse_down(&st->menu_bar, rel_x, rel_y, &cmd, &sub)) {
             msx_apply_cmd(wnd, st, cmd, sub);
             inval_wnd(wnd);
+            return;
+        }
+        if (st->menu_bar.active_menu >= 0) {
+            app_menu_close(&st->menu_bar);
+            inval_wnd(wnd);
+            return;
         }
         return;
     }

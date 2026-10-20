@@ -840,6 +840,13 @@ static void orchestra_event_handler(WND *wnd, const EVT *evt) {
             return;
         }
 
+        /* If dropdown menu was open and user clicked elsewhere, close it */
+        if (g_orchestra.menu_bar.active_menu >= 0) {
+            app_menu_close(&g_orchestra.menu_bar);
+            inval_wnd(wnd);
+            return;
+        }
+
         /* Transport Controls */
         if (rel_y >= 30 && rel_y <= 68) {
             if (rel_x >= 10 && rel_x <= 56) {

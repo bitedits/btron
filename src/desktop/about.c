@@ -407,6 +407,7 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         H nyan_box_x = client_w - (NYAN_FRAME_W + 6) - 10;
         if (rel_x >= nyan_box_x && rel_x <= client_w - 10 && rel_y >= 6 && rel_y <= 76) {
             g_about_state.animation_enabled = !g_about_state.animation_enabled;
+            inval_wnd(wnd);
             return;
         }
 
@@ -414,12 +415,15 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         if (rel_y >= 86 && rel_y <= 110) {
             if (rel_x >= 12 && rel_x <= 172) {
                 g_about_state.current_tab = ABOUT_TAB_SPECS;
+                inval_wnd(wnd);
                 return;
             } else if (rel_x >= 178 && rel_x <= 373) {
                 g_about_state.current_tab = ABOUT_TAB_PEOPLE;
+                inval_wnd(wnd);
                 return;
             } else if (rel_x >= 379 && rel_x <= 529) {
                 g_about_state.current_tab = ABOUT_TAB_SUBSYSTEMS;
+                inval_wnd(wnd);
                 return;
             }
         }
@@ -428,11 +432,13 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
         if (g_about_state.current_tab == ABOUT_TAB_PEOPLE) {
             H nav_y = (client_h - 30) - 20;
             if (rel_y >= nav_y && rel_y <= nav_y + 18) {
-                if (rel_x >= client_w - 190 && rel_x <= client_w - 95) {
+                if (rel_x >= client_w - 190 && rel_x <= client_w - 100) {
                     g_about_state.people_page = 0;
+                    inval_wnd(wnd);
                     return;
-                } else if (rel_x >= client_w - 92 && rel_x <= client_w - 8) {
+                } else if (rel_x >= client_w - 95 && rel_x <= client_w - 10) {
                     g_about_state.people_page = 1;
+                    inval_wnd(wnd);
                     return;
                 }
             }
@@ -449,13 +455,50 @@ static void handle_about_event(WND *wnd, const EVT *evt) {
             /* Pause / Play button */
             if (rel_x >= client_w - 158 && rel_x <= client_w - 88) {
                 g_about_state.animation_enabled = !g_about_state.animation_enabled;
+                inval_wnd(wnd);
                 return;
             }
             /* Next Tab button */
             if (rel_x >= client_w - 240 && rel_x <= client_w - 166) {
                 g_about_state.current_tab = (g_about_state.current_tab + 1) % ABOUT_TAB_MAX;
+                inval_wnd(wnd);
                 return;
             }
+        }
+    } else if (evt->type == EV_KEY_DOWN) {
+        UW key = evt->key;
+        if (key == 0x09 /* Tab */ || key == 'n' || key == 'N') {
+            g_about_state.current_tab = (g_about_state.current_tab + 1) % ABOUT_TAB_MAX;
+            inval_wnd(wnd);
+            return;
+        } else if (key == '1' || key == '2' || key == '3') {
+            g_about_state.current_tab = (AboutTab)(key - '1');
+            inval_wnd(wnd);
+            return;
+        } else if (key == ' ' || key == 'p' || key == 'P') {
+            g_about_state.animation_enabled = !g_about_state.animation_enabled;
+            inval_wnd(wnd);
+            return;
+        } else if (key == 0x1B /* Escape */ || key == 0x0D /* Enter */ || key == 27) {
+            g_about_state.wnd = NULL;
+            cls_wnd(wnd);
+            return;
+        } else if (key == 0x1C || key == 0x25 /* Left arrow */) {
+            if (g_about_state.current_tab == ABOUT_TAB_PEOPLE && g_about_state.people_page > 0) {
+                g_about_state.people_page = 0;
+            } else {
+                g_about_state.current_tab = (g_about_state.current_tab + ABOUT_TAB_MAX - 1) % ABOUT_TAB_MAX;
+            }
+            inval_wnd(wnd);
+            return;
+        } else if (key == 0x1D || key == 0x27 /* Right arrow */) {
+            if (g_about_state.current_tab == ABOUT_TAB_PEOPLE && g_about_state.people_page == 0) {
+                g_about_state.people_page = 1;
+            } else {
+                g_about_state.current_tab = (g_about_state.current_tab + 1) % ABOUT_TAB_MAX;
+            }
+            inval_wnd(wnd);
+            return;
         }
     }
 }

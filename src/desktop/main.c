@@ -9,6 +9,7 @@
 #include <btron/tracker.h>
 #include <btron/global_menu.h>
 #include <btron/desktop.h>
+#include <btron/about.h>
 #include <btron/dnd.h>
 #include <SDL.h>
 #include <stdio.h>
@@ -254,6 +255,11 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+        }
+
+        if (about_is_animating()) {
+            WND *aw = about_get_wnd();
+            if (aw) inval_wnd(aw);
         }
 
         /* Render full BTRON desktop composition */

@@ -2098,6 +2098,7 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
     if (evt->type == EV_MOUSE_MOVE) {
         if (app_menu_handle_mouse_move(&tb->menu_bar, rel_x, rel_y)) {
             tad_sync_menu_state(tb);
+            inval_wnd(wnd);
             return;
         }
         tad_sync_menu_state(tb);
@@ -2134,53 +2135,60 @@ static void handle_tad_browser_event(WND *wnd, const EVT *evt) {
                 if (sub_idx < cnt) {
                     tad_browser_navigate(tb, files[sub_idx]);
                 }
-                return;
-            }
-            if (cmd != 0) {
+            } else if (cmd != 0) {
                 switch (cmd) {
                     case TCMD_FILE_CLOSE:
                         cls_wnd(wnd);
                         return;
                     case TCMD_VIEW_BACK:
                         tad_browser_go_back(tb);
-                        return;
+                        break;
                     case TCMD_VIEW_FORWARD:
                         tad_browser_go_forward(tb);
-                        return;
+                        break;
                     case TCMD_VIEW_HOME:
                         tad_browser_go_home(tb);
-                        return;
+                        break;
                     case TCMD_VIEW_RELOAD:
                         tad_browser_reload(tb);
-                        return;
+                        break;
                     case TCMD_VIEW_ZOOM_IN:
                         tb->zoom_percent += 10;
                         if (tb->zoom_percent > 200) tb->zoom_percent = 200;
-                        return;
+                        break;
                     case TCMD_VIEW_ZOOM_OUT:
                         tb->zoom_percent -= 10;
                         if (tb->zoom_percent < 50) tb->zoom_percent = 50;
-                        return;
+                        break;
                     case TCMD_VIEW_ZOOM_100:
                         tb->zoom_percent = 100;
-                        return;
+                        break;
                     case TCMD_VIEW_WRAP_TOGGLE:
                         tb->wrap_text = !tb->wrap_text;
                         tad_browser_layout(tb, tb->doc_width);
-                        return;
+                        break;
                     case TCMD_VOBJ_CABINET:
                         if (open_vobj_manager_window) open_vobj_manager_window();
-                        return;
+                        break;
                     case TCMD_HELP_ABOUT:
                         open_tad_browser_about_window();
-                        return;
+                        break;
                     default:
-                        return;
+                        break;
                 }
             }
+            inval_wnd(wnd);
             return;
         }
         tad_sync_menu_state(tb);
+
+        /* If dropdown menu was open and user clicked elsewhere, close it */
+        if (tb->menu_bar.active_menu >= 0) {
+            app_menu_close(&tb->menu_bar);
+            tad_sync_menu_state(tb);
+            inval_wnd(wnd);
+            return;
+        }
 
         /* C. Navigation Toolbar Clicks (y = 22..46) */
         if (rel_y >= 22 && rel_y <= 46) {

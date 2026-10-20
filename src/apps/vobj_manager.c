@@ -994,6 +994,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
     if (evt->type == EV_MOUSE_MOVE) {
         if (app_menu_handle_mouse_move(&g_cabinet.menu_bar, rel_x, rel_y)) {
             cab_sync_menu_state();
+            inval_wnd(wnd);
             return;
         }
         cab_sync_menu_state();
@@ -1064,6 +1065,7 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
         if (dev_w >= 560 && rel_y >= 0 && rel_y <= 21) {
             if (rel_x >= 440 && rel_x <= 542) {
                 g_cabinet.view_mode = (g_cabinet.view_mode == CAB_VIEW_LIST) ? CAB_VIEW_GRID : CAB_VIEW_LIST;
+                inval_wnd(wnd);
                 return;
             }
         }
@@ -1079,54 +1081,63 @@ static void handle_vobj_manager_event(WND *wnd, const EVT *evt) {
                             CABINET_ITEM *it = &g_cabinet.items[g_cabinet.selected_idx];
                             cab_open_path(it->path, it->name);
                         }
-                        return;
+                        break;
                     case CCMD_FILE_NEW:
                         if (open_t_editor_window) open_t_editor_window();
-                        return;
+                        break;
                     case CCMD_FILE_CLOSE:
                         cls_wnd(wnd);
                         return;
                     case CCMD_EDIT_SELECT_ALL:
                         g_cabinet.selected_idx = 0;
-                        return;
+                        break;
                     case CCMD_EDIT_DESELECT:
                         g_cabinet.selected_idx = -1;
-                        return;
+                        break;
                     case CCMD_VIEW_LIST:
                         g_cabinet.view_mode = CAB_VIEW_LIST;
-                        return;
+                        break;
                     case CCMD_VIEW_GRID:
                         g_cabinet.view_mode = CAB_VIEW_GRID;
-                        return;
+                        break;
                     case CCMD_VIEW_SORT_NAME:
                         g_cabinet.sort_mode = 0;
                         cabinet_sort_items(&g_cabinet);
-                        return;
+                        break;
                     case CCMD_VIEW_SORT_DATE:
                         g_cabinet.sort_mode = 1;
                         cabinet_sort_items(&g_cabinet);
-                        return;
+                        break;
                     case CCMD_VIEW_SORT_SIZE:
                         g_cabinet.sort_mode = 2;
                         cabinet_sort_items(&g_cabinet);
-                        return;
+                        break;
                     case CCMD_VIEW_SORT_TYPE:
                         g_cabinet.sort_mode = 3;
                         cabinet_sort_items(&g_cabinet);
-                        return;
+                        break;
                     case CCMD_VIEW_REFRESH:
                         cabinet_init_defaults(&g_cabinet);
-                        return;
+                        break;
                     case CCMD_HELP_ABOUT:
                         open_vobj_about_window();
-                        return;
+                        break;
                     default:
-                        return;
+                        break;
                 }
             }
+            inval_wnd(wnd);
             return;
         }
         cab_sync_menu_state();
+
+        /* If dropdown menu was open and user clicked elsewhere, close it */
+        if (g_cabinet.menu_bar.active_menu >= 0) {
+            app_menu_close(&g_cabinet.menu_bar);
+            cab_sync_menu_state();
+            inval_wnd(wnd);
+            return;
+        }
 
         /* C. Item Selection Click (starts at y = 26) */
         int start_y = 26;

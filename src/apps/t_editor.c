@@ -1370,6 +1370,7 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
         }
 
         if (teditor_handle_tree_mouse(ed, wnd, rel_x, rel_y, FALSE)) {
+            inval_wnd(wnd);
             return;
         }
 
@@ -1378,6 +1379,7 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
             if (ed->menu_bar.active_submenu != 1) {
                 for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
             }
+            inval_wnd(wnd);
             return;
         }
         teditor_sync_menu_state(ed);
@@ -1389,6 +1391,7 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
         H rel_y = evt->pos.y - wnd->client.top;
 
         if (teditor_handle_tree_mouse(ed, wnd, rel_x, rel_y, TRUE)) {
+            inval_wnd(wnd);
             return;
         }
 
@@ -1401,11 +1404,20 @@ static void handle_t_editor_event(WND *wnd, const EVT *evt) {
             if (cmd != 0) {
                 teditor_execute_menu_cmd(ed, wnd, cmd, sub_idx);
             }
+            inval_wnd(wnd);
             return;
         }
         teditor_sync_menu_state(ed);
         if (ed->menu_bar.active_submenu != 1) {
             for (int k = 0; k < TEDITOR_TREE_MAX_LEVELS; k++) ed->tree_hover[k] = -1;
+        }
+
+        /* If dropdown menu was open and user clicked elsewhere, close it */
+        if (ed->menu_bar.active_menu >= 0) {
+            app_menu_close(&ed->menu_bar);
+            teditor_sync_menu_state(ed);
+            inval_wnd(wnd);
+            return;
         }
 
         /* Windows 95 scrollbar hit-test: arrow steps, track pages, thumb drags. */

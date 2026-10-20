@@ -1097,7 +1097,10 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
             return;
         }
         if (st->menu_bar.header_count > 0) {
-            app_menu_handle_mouse_move(&st->menu_bar, rel_x, rel_y);
+            if (app_menu_handle_mouse_move(&st->menu_bar, rel_x, rel_y)) {
+                inval_wnd(wnd);
+                return;
+            }
         }
         return;
     }
@@ -1110,12 +1113,15 @@ static void handle_gterm_event(WND *wnd, const EVT *evt) {
                 if (cmd != 0) {
                     gterm_dispatch_cmd(wnd, st, cmd);
                 }
+                inval_wnd(wnd);
                 return;
             }
         }
         /* Click in terminal canvas — close any open menu */
         if (st->menu_bar.active_menu >= 0) {
             app_menu_close(&st->menu_bar);
+            inval_wnd(wnd);
+            return;
         }
 
         /* Check click in right-side vertical scroll bar */

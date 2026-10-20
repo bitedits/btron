@@ -205,7 +205,91 @@ int main(void) {
     };
     w_dsk->paint(w_dsk, &dev_test);
     TEST_ASSERT(dev_test.pixels[10 * 640 + 10] != 0, "Desktop settings painted surface with 32x32 header");
+    /* [TEST GROUP 8] Settings Windows Reactivity for Togglers, Radio and Checkboxes */
+    printf("\n[TEST GROUP 8] Settings Windows Reactivity for Togglers, Radio and Checkboxes\n");
+
+    /* 1. Desktop settings checkboxes & radios */
+    w_dsk = open_desktop_settings_window();
+    TEST_ASSERT(w_dsk != NULL, "Desktop settings window opened for reactivity test");
+    w_dsk->img_valid = TRUE;
+    memset(&click_evt, 0, sizeof(EVT));
+    click_evt.type = EV_BUT_DOWN;
+    click_evt.pos.x = w_dsk->client.left + 25;
+    click_evt.pos.y = w_dsk->client.top + 75; /* Checkbox 0 */
+    w_dsk->event_handler(w_dsk, &click_evt);
+    TEST_ASSERT(w_dsk->img_valid == FALSE, "Desktop checkbox click invalidated window");
+
+    w_dsk->img_valid = TRUE;
+    click_evt.pos.y = w_dsk->client.top + 205; /* Radio checks[4] */
+    w_dsk->event_handler(w_dsk, &click_evt);
+    TEST_ASSERT(w_dsk->img_valid == FALSE, "Desktop radio checks[4] click invalidated window");
+
+    w_dsk->img_valid = TRUE;
+    click_evt.pos.y = w_dsk->client.top + 185; /* Radio checks[3] */
+    w_dsk->event_handler(w_dsk, &click_evt);
+    TEST_ASSERT(w_dsk->img_valid == FALSE, "Desktop radio checks[3] click invalidated window");
     cls_wnd(w_dsk);
+
+    /* 2. Display settings radios & checkboxes */
+    WND *w_disp = open_display_settings_window();
+    TEST_ASSERT(w_disp != NULL, "Display settings window opened for reactivity test");
+    w_disp->img_valid = TRUE;
+    click_evt.pos.x = w_disp->client.left + 25;
+    click_evt.pos.y = w_disp->client.top + 95; /* Radio checks[1] */
+    w_disp->event_handler(w_disp, &click_evt);
+    TEST_ASSERT(w_disp->img_valid == FALSE, "Display radio button click invalidated window");
+
+    w_disp->img_valid = TRUE;
+    click_evt.pos.y = w_disp->client.top + 185; /* Checkbox checks[3] */
+    w_disp->event_handler(w_disp, &click_evt);
+    TEST_ASSERT(w_disp->img_valid == FALSE, "Display checkbox click invalidated window");
+    cls_wnd(w_disp);
+
+    /* 3. Sound settings radios & checkboxes */
+    WND *w_snd = open_sound_settings_window();
+    TEST_ASSERT(w_snd != NULL, "Sound settings window opened for reactivity test");
+    w_snd->img_valid = TRUE;
+    click_evt.pos.x = w_snd->client.left + 25;
+    click_evt.pos.y = w_snd->client.top + 140; /* Radio checks[3] */
+    w_snd->event_handler(w_snd, &click_evt);
+    TEST_ASSERT(w_snd->img_valid == FALSE, "Sound radio button click invalidated window");
+
+    w_snd->img_valid = TRUE;
+    click_evt.pos.y = w_snd->client.top + 75; /* Checkbox checks[0] */
+    w_snd->event_handler(w_snd, &click_evt);
+    TEST_ASSERT(w_snd->img_valid == FALSE, "Sound checkbox click invalidated window");
+    cls_wnd(w_snd);
+
+    /* 4. Terminal settings radios */
+    WND *w_trm = open_terminal_settings_window();
+    TEST_ASSERT(w_trm != NULL, "Terminal settings window opened for reactivity test");
+    w_trm->img_valid = TRUE;
+    click_evt.pos.x = w_trm->client.left + 280;
+    click_evt.pos.y = w_trm->client.top + 75; /* Theme Amber radio */
+    w_trm->event_handler(w_trm, &click_evt);
+    TEST_ASSERT(w_trm->img_valid == FALSE, "Terminal theme radio click invalidated window");
+    cls_wnd(w_trm);
+
+    /* 5. Input settings togglers, radios and checkboxes */
+    WND *w_inp = open_input_settings_window();
+    TEST_ASSERT(w_inp != NULL, "Input settings window opened for reactivity test");
+    w_inp->img_valid = TRUE;
+    click_evt.pos.x = w_inp->client.left + 25;
+    click_evt.pos.y = w_inp->client.top + 70; /* Auto-repeat checkbox */
+    w_inp->event_handler(w_inp, &click_evt);
+    TEST_ASSERT(w_inp->img_valid == FALSE, "Input auto-repeat checkbox click invalidated window");
+
+    w_inp->img_valid = TRUE;
+    click_evt.pos.y = w_inp->client.top + 110; /* Repeat delay radio */
+    w_inp->event_handler(w_inp, &click_evt);
+    TEST_ASSERT(w_inp->img_valid == FALSE, "Input repeat delay radio click invalidated window");
+
+    w_inp->img_valid = TRUE;
+    click_evt.pos.x = w_inp->client.left + 400;
+    click_evt.pos.y = w_inp->client.top + 320; /* Double-click test area toggler */
+    w_inp->event_handler(w_inp, &click_evt);
+    TEST_ASSERT(w_inp->img_valid == FALSE, "Input double-click test toggler click invalidated window");
+    cls_wnd(w_inp);
 
     printf("\n==========================================================\n");
     printf(" SETTINGS TEST RESULTS: %d / %d tests passed (%.1f%%)\n",

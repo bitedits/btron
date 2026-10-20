@@ -446,6 +446,7 @@ static void handle_control_panel_event(WND *wnd, const EVT *evt) {
                 g_ctrl_panel.selected_index = i;
                 /* Launch and center applet */
                 launch_and_center_applet(i);
+                inval_wnd(wnd);
                 redraw_all_windows();
                 return;
             }

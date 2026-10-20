@@ -12,6 +12,7 @@
 #include <btron/tip.h>
 #include <btron/language_settings.h>
 #include <btron/terminal_settings.h>
+#include <btron/settings_dlg.h>
 
 #ifdef __cplusplus
 extern "C" {

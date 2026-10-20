@@ -76,60 +76,82 @@ typedef struct {
 
 static AppletState_input g_state_input;
 
-/* 3D Crisp Graphical Checkbox */
-static void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
+static void on_test_click(WND *wnd, SETTINGS_CONTROL *ctl) {
+    (void)wnd; (void)ctl;
+    uint32_t now_us = 0;
+#if defined(_RPI_BCM283x_)
+    extern uintptr_t g_mmio_base;
+    now_us = *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
+#else
+    static uint32_t s_mock_clock = 0;
+    now_us = (s_mock_clock += 150000);
+#endif
+    uint32_t limit_us = (g_state_input.dbl_click_sel == 0) ? 400000U : 500000U;
+    uint32_t delta = now_us - g_state_input.last_test_click_us;
 
-    /* Sunken 3D shadow lines */
-    drw_lin(dev, x + 1, y + 2, x + 14, y + 2);
-    drw_lin(dev, x + 1, y + 2, x + 1, y + 15);
-
-    if (checked) {
-        /* Bold checkmark [✔] */
-        drw_lin(dev, x + 3, y + 8, x + 6, y + 12);
-        drw_lin(dev, x + 3, y + 9, x + 6, y + 13);
-        drw_lin(dev, x + 4, y + 8, x + 7, y + 12);
-
-        drw_lin(dev, x + 6, y + 12, x + 12, y + 4);
-        drw_lin(dev, x + 6, y + 13, x + 12, y + 5);
-        drw_lin(dev, x + 7, y + 12, x + 13, y + 4);
+    if (g_state_input.test_click_status == 1 && delta <= limit_us) {
+        g_state_input.test_click_status = 2;
+        g_state_input.test_click_delta_ms = delta / 1000U;
+    } else {
+        g_state_input.test_click_status = 1;
     }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+    g_state_input.last_test_click_us = now_us;
 }
 
-/* 3D Crisp Graphical Radio Button */
-static void paint_ui_radio(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
+static SETTINGS_CONTROL s_input_controls[] = {
+    /* Keyboard */
+    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 64, 300, 82 }, "Enable Auto-Repeat (*FX 11/12)", &g_state_input.kbd_repeat_enable, NULL, &g_state_input.is_dirty, NULL },
 
-    if (checked) {
-        RECT dot = { x + 4, y + 5, x + 11, y + 12 };
-        fill_rec(dev, &dot, COLOR_NAVY);
+    { 1, SETTINGS_CTL_RADIO, 1, 0, { 22, 106, 300, 122 }, "Short: 16cs (160ms) [RISC OS Fast]", NULL, &g_state_input.kbd_delay_sel, &g_state_input.is_dirty, NULL },
+    { 2, SETTINGS_CTL_RADIO, 1, 1, { 22, 124, 300, 140 }, "Default: 32cs (320ms) [Acorn Archimedes]", NULL, &g_state_input.kbd_delay_sel, &g_state_input.is_dirty, NULL },
+    { 3, SETTINGS_CTL_RADIO, 1, 2, { 22, 142, 300, 158 }, "Long: 50cs (500ms) [BBC Micro Standard]", NULL, &g_state_input.kbd_delay_sel, &g_state_input.is_dirty, NULL },
+
+    { 4, SETTINGS_CTL_RADIO, 2, 0, { 22, 186, 300, 202 }, "Fast: 40 cps (25ms interval)", NULL, &g_state_input.kbd_rate_sel, &g_state_input.is_dirty, NULL },
+    { 5, SETTINGS_CTL_RADIO, 2, 1, { 22, 204, 300, 220 }, "Standard: 25 cps (40ms interval)", NULL, &g_state_input.kbd_rate_sel, &g_state_input.is_dirty, NULL },
+    { 6, SETTINGS_CTL_RADIO, 2, 2, { 22, 222, 300, 238 }, "Slow: 12.5 cps (80ms interval)", NULL, &g_state_input.kbd_rate_sel, &g_state_input.is_dirty, NULL },
+
+    { 7, SETTINGS_CTL_RADIO, 3, 0, { 22, 266, 300, 282 }, "Standard US ANSI 101/104", NULL, &g_state_input.kbd_layout_sel, &g_state_input.is_dirty, NULL },
+    { 8, SETTINGS_CTL_RADIO, 3, 1, { 22, 284, 300, 300 }, "Acorn British English (UK)", NULL, &g_state_input.kbd_layout_sel, &g_state_input.is_dirty, NULL },
+    { 9, SETTINGS_CTL_RADIO, 3, 2, { 22, 302, 300, 318 }, "Japanese JIS 106 (OADG)", NULL, &g_state_input.kbd_layout_sel, &g_state_input.is_dirty, NULL },
+    { 10, SETTINGS_CTL_RADIO, 3, 3, { 22, 320, 300, 338 }, "TRON Ergonomic Multilingual", NULL, &g_state_input.kbd_layout_sel, &g_state_input.is_dirty, NULL },
+
+    /* Mouse */
+#if !defined(BTRON_PS2_TARGET)
+    { 11, SETTINGS_CTL_RADIO, 4, 0, { 336, 76, 620, 92 }, "Step 1: 1.0x Slow Precision", NULL, &g_state_input.mouse_step_sel, &g_state_input.is_dirty, NULL },
+    { 12, SETTINGS_CTL_RADIO, 4, 1, { 336, 94, 620, 108 }, "Step 2: 2.0x Standard (RISC OS CMOS)", NULL, &g_state_input.mouse_step_sel, &g_state_input.is_dirty, NULL },
+    { 13, SETTINGS_CTL_RADIO, 4, 2, { 336, 110, 620, 124 }, "Step 3: 3.0x Fast Sweep", NULL, &g_state_input.mouse_step_sel, &g_state_input.is_dirty, NULL },
+    { 14, SETTINGS_CTL_RADIO, 4, 3, { 336, 126, 620, 142 }, "Step 4: 4.0x Ultra Velocity", NULL, &g_state_input.mouse_step_sel, &g_state_input.is_dirty, NULL },
+
+    { 15, SETTINGS_CTL_RADIO, 5, 1, { 336, 160, 620, 176 }, "Haiku OS Continuous 2D (Smooth)", NULL, &g_state_input.mouse_profile_sel, &g_state_input.is_dirty, NULL },
+    { 16, SETTINGS_CTL_RADIO, 5, 0, { 336, 177, 620, 194 }, "RISC OS Stepped (Archimedes)", NULL, &g_state_input.mouse_profile_sel, &g_state_input.is_dirty, NULL },
+#endif
+
+    { 17, SETTINGS_CTL_RADIO, 6, 0, { 336, 212, 620, 228 }, "Right-Hand: [Select] [Menu] [Adjust]", NULL, &g_state_input.mouse_handedness, &g_state_input.is_dirty, NULL },
+    { 18, SETTINGS_CTL_RADIO, 6, 1, { 336, 229, 620, 246 }, "Left-Hand:  [Adjust] [Menu] [Select]", NULL, &g_state_input.mouse_handedness, &g_state_input.is_dirty, NULL },
+
+    { 19, SETTINGS_CTL_RADIO, 7, 0, { 336, 264, 620, 280 }, "40 cs (400ms interval)", NULL, &g_state_input.dbl_click_sel, &g_state_input.is_dirty, NULL },
+    { 20, SETTINGS_CTL_RADIO, 7, 1, { 336, 281, 620, 298 }, "50 cs (500ms [RISC OS default])", NULL, &g_state_input.dbl_click_sel, &g_state_input.is_dirty, NULL },
+
+    { 21, SETTINGS_CTL_CUSTOM, 0, 0, { 334, 304, 618, 366 }, NULL, NULL, NULL, &g_state_input.is_dirty, on_test_click },
+};
+
+#if defined(BTRON_PS2_TARGET)
+static SETTINGS_CONTROL s_input_ps2_controls[BTRON_PTR_GAIN_STEPS];
+static void init_ps2_input_controls(void) {
+    for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++) {
+        H top = (H)(76 + i * 16);
+        s_input_ps2_controls[i] = (SETTINGS_CONTROL){
+            .id = 100 + i,
+            .type = SETTINGS_CTL_RADIO,
+            .radio_group = 8,
+            .radio_val = i,
+            .rect = { 336, top, 620, (H)(top + 15) },
+            .bound_int = &g_state_input.mouse_gain_sel,
+            .dirty_flag = &g_state_input.is_dirty
+        };
     }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
 }
-
-/* 3D Push Button */
-static void paint_ui_button(GDEV *dev, H x, H y, H w, H h, const char *label, BOOL pressed) {
-    RECT btn = { x, y, x + w, y + h };
-    fill_rec(dev, &btn, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-    drw_rec(dev, &btn);
-
-    if (!pressed) {
-        drw_lin(dev, x + 1, y + 1, x + w - 2, y + 1);
-        drw_lin(dev, x + 1, y + 1, x + 1, y + h - 2);
-    }
-
-    H tx = x + (w - (H)strlen(label) * 8) / 2;
-    drw_tc_string(dev, tx > x ? tx : x + 4, y + 5, label, COLOR_BLACK, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-}
+#endif
 
 static void apply_input_settings_to_kernel(void) {
     g_kbd_repeat_enabled = g_state_input.kbd_repeat_enable;
@@ -221,23 +243,23 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     drw_rec(dev, &s1);
     drw_tc_string(dev, 16, 40, " [1. Keyboard Configuration (RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
 
-    paint_ui_checkbox(dev, 18, 64, "Enable Auto-Repeat (*FX 11/12)", g_state_input.kbd_repeat_enable, FALSE);
+    settings_draw_ui_checkbox(dev, 18, 64, "Enable Auto-Repeat (*FX 11/12)", g_state_input.kbd_repeat_enable, FALSE);
 
     drw_tc_string(dev, 18, 88, "Auto-Repeat Delay (*FX 11):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 22, 106, "Short: 16cs (160ms) [RISC OS Fast]", g_state_input.kbd_delay_sel == 0, FALSE);
-    paint_ui_radio(dev, 22, 124, "Default: 32cs (320ms) [Acorn Archimedes]", g_state_input.kbd_delay_sel == 1, FALSE);
-    paint_ui_radio(dev, 22, 142, "Long: 50cs (500ms) [BBC Micro Standard]", g_state_input.kbd_delay_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, 22, 106, "Short: 16cs (160ms) [RISC OS Fast]", g_state_input.kbd_delay_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 22, 124, "Default: 32cs (320ms) [Acorn Archimedes]", g_state_input.kbd_delay_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 22, 142, "Long: 50cs (500ms) [BBC Micro Standard]", g_state_input.kbd_delay_sel == 2, FALSE);
 
     drw_tc_string(dev, 18, 168, "Auto-Repeat Rate (*FX 12):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 22, 186, "Fast: 40 cps (25ms interval)", g_state_input.kbd_rate_sel == 0, FALSE);
-    paint_ui_radio(dev, 22, 204, "Standard: 25 cps (40ms interval)", g_state_input.kbd_rate_sel == 1, FALSE);
-    paint_ui_radio(dev, 22, 222, "Slow: 12.5 cps (80ms interval)", g_state_input.kbd_rate_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, 22, 186, "Fast: 40 cps (25ms interval)", g_state_input.kbd_rate_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 22, 204, "Standard: 25 cps (40ms interval)", g_state_input.kbd_rate_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 22, 222, "Slow: 12.5 cps (80ms interval)", g_state_input.kbd_rate_sel == 2, FALSE);
 
     drw_tc_string(dev, 18, 248, "Keyboard Layout (*Configure Country):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 22, 266, "Standard US ANSI 101/104", g_state_input.kbd_layout_sel == 0, FALSE);
-    paint_ui_radio(dev, 22, 284, "Acorn British English (UK)", g_state_input.kbd_layout_sel == 1, FALSE);
-    paint_ui_radio(dev, 22, 302, "Japanese JIS 106 (OADG)", g_state_input.kbd_layout_sel == 2, FALSE);
-    paint_ui_radio(dev, 22, 320, "TRON Ergonomic Multilingual", g_state_input.kbd_layout_sel == 3, FALSE);
+    settings_draw_ui_radio(dev, 22, 266, "Standard US ANSI 101/104", g_state_input.kbd_layout_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 22, 284, "Acorn British English (UK)", g_state_input.kbd_layout_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 22, 302, "Japanese JIS 106 (OADG)", g_state_input.kbd_layout_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, 22, 320, "TRON Ergonomic Multilingual", g_state_input.kbd_layout_sel == 3, FALSE);
 
     /* ═══════════════════════════════════════════════════════════════════
      * Section 2: Mouse Configuration (Right Panel)
@@ -252,38 +274,30 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
 #endif
 
 #if defined(BTRON_PS2_TARGET)
-    /* LAW 13e.  Where a target whose pointer runs the RISC OS step curve offers a
-     * "tracking speed" and an "acceleration engine", this one offers the only
-     * number its cursor honours: the multiplier between a count and a pixel.  The
-     * labels come from btron_ptr_gain_label(), which formats the table the
-     * pointer actually multiplies by -- a radio cannot say one number while the
-     * arithmetic means another, and the launcher's row says exactly this -- and
-     * the seven rows sit in the space the two dead blocks used to take, so the
-     * blocks under them keep their positions and their hit rects. */
     drw_tc_string(dev, 332, 62, "Pointer Gain (this port has no curve):",
                   COLOR_NAVY, COLOR_WHITE);
     for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++)
-        paint_ui_radio(dev, 336, (H)(78 + i * 16), btron_ptr_gain_label(i),
-                       g_state_input.mouse_gain_sel == i, FALSE);
+        settings_draw_ui_radio(dev, 336, (H)(78 + i * 16), btron_ptr_gain_label(i),
+                               g_state_input.mouse_gain_sel == i, FALSE);
 #else
     drw_tc_string(dev, 332, 62, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
-    paint_ui_radio(dev, 336, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
-    paint_ui_radio(dev, 336, 110, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
-    paint_ui_radio(dev, 336, 126, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
+    settings_draw_ui_radio(dev, 336, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 336, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 336, 110, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, 336, 126, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
 
     drw_tc_string(dev, 332, 146, "Acceleration Engine Profile:", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
-    paint_ui_radio(dev, 336, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 336, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 336, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
 #endif
 
     drw_tc_string(dev, 332, 198, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
-    paint_ui_radio(dev, 336, 230, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
+    settings_draw_ui_radio(dev, 336, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
+    settings_draw_ui_radio(dev, 336, 230, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
 
     drw_tc_string(dev, 332, 250, "Double-Click Threshold:", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 336, 266, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
-    paint_ui_radio(dev, 336, 282, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, 336, 266, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, 336, 282, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
 
     /* Interactive Double-Click Test Area */
     RECT test_box = { 334, 304, 618, 366 };
@@ -313,229 +327,47 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
      * ═══════════════════════════════════════════════════════════════════ */
     H btn_y = dev->height - 36;
 #if defined(BTRON_PS2_TARGET)
-    /* The same reason as the header: the defaults this button writes are the
-     * keyboard's, the button model's and the auto gain, not a step curve. */
-    paint_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Defaults", FALSE);
+    settings_draw_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Defaults", FALSE);
 #else
-    paint_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Default (RISC OS)", FALSE);
+    settings_draw_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Default (RISC OS)", FALSE);
 #endif
-    paint_ui_button(dev, dev->width - 185, btn_y, 85, 26, "Apply", g_state_input.is_dirty);
-    paint_ui_button(dev, dev->width - 85, btn_y, 75, 26, "Close", FALSE);
+    settings_draw_ui_button(dev, dev->width - 185, btn_y, 85, 26, "Apply", g_state_input.is_dirty);
+    settings_draw_ui_button(dev, dev->width - 85, btn_y, 75, 26, "Close", FALSE);
 }
 
 static void handle_input_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
 
     if (evt->type == EV_BUT_DOWN) {
+        if (settings_dispatch_control_event(wnd, s_input_controls, (int)(sizeof(s_input_controls)/sizeof(s_input_controls[0])), evt)) return;
+#if defined(BTRON_PS2_TARGET)
+        if (settings_dispatch_control_event(wnd, s_input_ps2_controls, BTRON_PTR_GAIN_STEPS, evt)) return;
+#endif
+
         H rel_x = evt->pos.x - wnd->client.left;
         H rel_y = evt->pos.y - wnd->client.top;
         H client_w = wnd->client.right - wnd->client.left;
         H client_h = wnd->client.bottom - wnd->client.top;
-
-        /* 1. Left Panel (Keyboard) */
-        /* Enable Auto-Repeat */
-        if (rel_x >= 18 && rel_x <= 300 && rel_y >= 64 && rel_y <= 82) {
-            g_state_input.kbd_repeat_enable = !g_state_input.kbd_repeat_enable;
-            g_state_input.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-
-        /* Repeat Delay */
-        if (rel_x >= 22 && rel_x <= 300) {
-            if (rel_y >= 106 && rel_y <= 122) {
-                g_state_input.kbd_delay_sel = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 124 && rel_y <= 140) {
-                g_state_input.kbd_delay_sel = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 142 && rel_y <= 158) {
-                g_state_input.kbd_delay_sel = 2;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-
-            /* Repeat Rate */
-            if (rel_y >= 186 && rel_y <= 202) {
-                g_state_input.kbd_rate_sel = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 204 && rel_y <= 220) {
-                g_state_input.kbd_rate_sel = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 222 && rel_y <= 238) {
-                g_state_input.kbd_rate_sel = 2;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-
-            /* Layout */
-            if (rel_y >= 266 && rel_y <= 282) {
-                g_state_input.kbd_layout_sel = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 284 && rel_y <= 300) {
-                g_state_input.kbd_layout_sel = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 302 && rel_y <= 318) {
-                g_state_input.kbd_layout_sel = 2;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 320 && rel_y <= 338) {
-                g_state_input.kbd_layout_sel = 3;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-        }
-
-        /* 2. Right Panel (Mouse) */
-        if (rel_x >= 332 && rel_x <= 620) {
-#if defined(BTRON_PS2_TARGET)
-            /* Pointer Gain (LAW 13e): one rect per stop, on the same 16 px pitch
-             * the radios are painted at.  Nothing here reaches 190, so the
-             * Three-Button block under it keeps the rects it always had. */
-            for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++) {
-                const H top = (H)(76 + i * 16);
-                if (rel_y >= top && rel_y <= top + 15) {
-                    g_state_input.mouse_gain_sel = i;
-                    g_state_input.is_dirty = TRUE;
-                    redraw_all_windows();
-                    return;
-                }
-            }
-#else
-            /* Tracking Speed (MouseStep) */
-            if (rel_y >= 76 && rel_y <= 92) {
-                g_state_input.mouse_step_sel = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 94 && rel_y <= 108) {
-                g_state_input.mouse_step_sel = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 110 && rel_y <= 124) {
-                g_state_input.mouse_step_sel = 2;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 126 && rel_y <= 142) {
-                g_state_input.mouse_step_sel = 3;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-
-            /* Acceleration Engine Profile */
-            if (rel_y >= 160 && rel_y <= 176) {
-                g_state_input.mouse_profile_sel = 1; /* Haiku */
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 177 && rel_y <= 194) {
-                g_state_input.mouse_profile_sel = 0; /* RISC OS */
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-#endif
-
-            /* Handedness */
-            if (rel_y >= 212 && rel_y <= 228) {
-                g_state_input.mouse_handedness = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 229 && rel_y <= 246) {
-                g_state_input.mouse_handedness = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-
-            /* Double-Click threshold */
-            if (rel_y >= 264 && rel_y <= 280) {
-                g_state_input.dbl_click_sel = 0;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_y >= 281 && rel_y <= 298) {
-                g_state_input.dbl_click_sel = 1;
-                g_state_input.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-
-            /* Interactive Double-Click Test Area */
-            if (rel_y >= 304 && rel_y <= 366) {
-                uint32_t now_us = 0;
-#if defined(_RPI_BCM283x_)
-                extern uintptr_t g_mmio_base;
-                now_us = *(volatile uint32_t *)(g_mmio_base + 0x00003004UL);
-#else
-                static uint32_t s_mock_clock = 0;
-                now_us = (s_mock_clock += 150000);
-#endif
-                uint32_t limit_us = (g_state_input.dbl_click_sel == 0) ? 400000U : 500000U;
-                uint32_t delta = now_us - g_state_input.last_test_click_us;
-
-                if (g_state_input.test_click_status == 1 && delta <= limit_us) {
-                    g_state_input.test_click_status = 2;
-                    g_state_input.test_click_delta_ms = delta / 1000U;
-                } else {
-                    g_state_input.test_click_status = 1;
-                }
-                g_state_input.last_test_click_us = now_us;
-                redraw_all_windows();
-                return;
-            }
-        }
-
-        /* 3. Action Buttons */
         H btn_y = client_h - 36;
+
         if (rel_y >= btn_y && rel_y <= btn_y + 26) {
             /* Default (RISC OS / Haiku) */
             if (rel_x >= client_w - 340 && rel_x <= client_w - 200) {
                 set_risc_os_defaults();
+                inval_wnd(wnd);
                 redraw_all_windows();
                 return;
             }
             /* Apply */
             if (rel_x >= client_w - 185 && rel_x <= client_w - 100) {
                 apply_input_settings_to_kernel();
+                inval_wnd(wnd);
                 redraw_all_windows();
                 return;
             }
             /* Close */
             if (rel_x >= client_w - 85 && rel_x <= client_w - 10) {
+                g_state_input.wnd = NULL;
                 cls_wnd(wnd);
                 return;
             }
@@ -545,7 +377,12 @@ static void handle_input_event(WND *wnd, const EVT *evt) {
 
 WND* open_input_settings_window(void) {
     if (g_state_input.wnd) {
-        return g_state_input.wnd;
+        for (WND *c = get_wnd_list(); c; c = c->next) {
+            if (c == g_state_input.wnd) {
+                return g_state_input.wnd;
+            }
+        }
+        g_state_input.wnd = NULL;
     }
 
     /* Sync initial state from live kernel globals */
@@ -557,6 +394,7 @@ WND* open_input_settings_window(void) {
     g_state_input.kbd_layout_sel     = 0;
 
 #if defined(BTRON_PS2_TARGET)
+    init_ps2_input_controls();
     g_state_input.mouse_gain_sel     = btron_ptr_gain_index(g_ptr_gain_fp);
 #else
     g_state_input.mouse_step_sel     = (g_mouse_step_mult >= 1 && g_mouse_step_mult <= 4) ?

@@ -19,60 +19,23 @@ typedef struct {
 
 static AppletState_system g_state_system;
 
-/* 3D Crisp Graphical Checkbox */
-static void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    /* Sunken 3D shadow lines */
-    drw_lin(dev, x + 1, y + 2, x + 14, y + 2);
-    drw_lin(dev, x + 1, y + 2, x + 1, y + 15);
-
-    if (checked) {
-        /* Bold checkmark [✔] */
-        drw_lin(dev, x + 3, y + 8, x + 6, y + 12);
-        drw_lin(dev, x + 3, y + 9, x + 6, y + 13);
-        drw_lin(dev, x + 4, y + 8, x + 7, y + 12);
-
-        drw_lin(dev, x + 6, y + 12, x + 12, y + 4);
-        drw_lin(dev, x + 6, y + 13, x + 12, y + 5);
-        drw_lin(dev, x + 7, y + 12, x + 13, y + 4);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+static void on_system_default(WND *wnd) {
+    (void)wnd;
+    for (int i = 0; i < 4; i++) g_state_system.checks[i] = TRUE;
+    g_state_system.is_dirty = TRUE;
 }
 
-/* 3D Crisp Graphical Radio Button */
-static inline void __attribute__((unused)) paint_ui_radio(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    if (checked) {
-        RECT dot = { x + 4, y + 5, x + 11, y + 12 };
-        fill_rec(dev, &dot, COLOR_NAVY);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+static void on_system_apply(WND *wnd) {
+    (void)wnd;
+    g_state_system.is_dirty = FALSE;
 }
 
-/* 3D Push Button */
-static void paint_ui_button(GDEV *dev, H x, H y, H w, H h, const char *label, BOOL pressed) {
-    RECT btn = { x, y, x + w, y + h };
-    fill_rec(dev, &btn, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-    drw_rec(dev, &btn);
-
-    if (!pressed) {
-        drw_lin(dev, x + 1, y + 1, x + w - 2, y + 1);
-        drw_lin(dev, x + 1, y + 1, x + 1, y + h - 2);
-    }
-
-    H tx = x + (w - (H)strlen(label) * 8) / 2;
-    drw_tc_string(dev, tx > x ? tx : x + 4, y + 4, label, COLOR_BLACK, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-}
+static SETTINGS_CONTROL s_system_controls[] = {
+    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 70, 480, 88 }, "B-System 3.20 (BTRON3 Cleanroom Implementation)", &g_state_system.checks[0], NULL, &g_state_system.is_dirty, NULL },
+    { 1, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 92, 480, 110 }, "Multi-Arch CPU Support (ARMv7, x86_64, PC-98)", &g_state_system.checks[1], NULL, &g_state_system.is_dirty, NULL },
+    { 2, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 114, 480, 132 }, "SMP Multiprocessing: 4 Active Preemptive Cores", &g_state_system.checks[2], NULL, &g_state_system.is_dirty, NULL },
+    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 136, 480, 154 }, "Memory Status: 1024 MB Physical RAM (874 MB Free)", &g_state_system.checks[3], NULL, &g_state_system.is_dirty, NULL }
+};
 
 static void paint_system_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
@@ -82,87 +45,22 @@ static void paint_system_settings(WND *wnd, GDEV *dev) {
     fill_rec(dev, &r, COLOR_WHITE);
     drw_rec(dev, &r);
 
-    /* Header Bar: Settings window icon is ALWAYS 32x32 */
-    RECT hdr = { 0, 0, dev->width, 40 };
-    fill_rec(dev, &hdr, COLOR_LTGRAY);
-    drw_lin(dev, 0, 40, dev->width, 40);
-    draw_setting_gif_icon_scaled(dev, "system", 6, 4, 32, 32);
-    char hdr_str[128];
-    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) - %s", "System", "基本情報", "System Plane, memory & SMP cores");
-    drw_tc_string(dev, 46, 12, hdr_str, COLOR_BLACK, COLOR_LTGRAY);
+    /* Header Bar */
+    settings_draw_header(dev, "system", "System", "基本情報", "System Plane, memory & SMP cores");
 
     /* Section 1: System Plane & Kernel Information */
     RECT s1 = { 10, 56, dev->width - 10, 172 };
-    fill_rec(dev, &s1, COLOR_WHITE);
-    drw_rec(dev, &s1);
-    drw_tc_string(dev, 16, 48, " [1. System Plane & Kernel Information] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_checkbox(dev, 18, 70, "B-System 3.20 (BTRON3 Cleanroom Implementation)", g_state_system.checks[0], FALSE);
-    paint_ui_checkbox(dev, 18, 92, "Multi-Arch CPU Support (ARMv7, x86_64, PC-98)", g_state_system.checks[1], FALSE);
-    paint_ui_checkbox(dev, 18, 114, "SMP Multiprocessing: 4 Active Preemptive Cores", g_state_system.checks[2], FALSE);
-    paint_ui_checkbox(dev, 18, 136, "Memory Status: 1024 MB Physical RAM (874 MB Free)", g_state_system.checks[3], FALSE);
+    settings_draw_section(dev, &s1, " [1. System Plane & Kernel Information] ");
+    settings_draw_controls(dev, s_system_controls, 4);
 
     /* Action Buttons */
-    H btn_y = dev->height - 35;
-    paint_ui_button(dev, dev->width - 240, btn_y, 70, 24, "Default", FALSE);
-    paint_ui_button(dev, dev->width - 160, btn_y, 70, 24, "Apply", g_state_system.is_dirty);
-    paint_ui_button(dev, dev->width - 80, btn_y, 70, 24, "Close", FALSE);
+    settings_draw_action_buttons(dev, g_state_system.is_dirty);
 }
 
 static void handle_system_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
-    if (evt->type == EV_BUT_DOWN) {
-        H rel_x = evt->pos.x - wnd->client.left;
-        H rel_y = evt->pos.y - wnd->client.top;
-        H client_w = wnd->client.right - wnd->client.left;
-        H client_h = wnd->client.bottom - wnd->client.top;
-
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 70 && rel_y <= 88) {
-            g_state_system.checks[0] = !g_state_system.checks[0];
-            g_state_system.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 92 && rel_y <= 110) {
-            g_state_system.checks[1] = !g_state_system.checks[1];
-            g_state_system.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 114 && rel_y <= 132) {
-            g_state_system.checks[2] = !g_state_system.checks[2];
-            g_state_system.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 136 && rel_y <= 154) {
-            g_state_system.checks[3] = !g_state_system.checks[3];
-            g_state_system.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        /* Action Buttons */
-        H btn_y = client_h - 35;
-        if (rel_y >= btn_y && rel_y <= btn_y + 24) {
-            if (rel_x >= client_w - 240 && rel_x <= client_w - 170) {
-                /* Default */
-                for (int i = 0; i < 4; i++) g_state_system.checks[i] = TRUE;
-                g_state_system.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_x >= client_w - 160 && rel_x <= client_w - 90) {
-                /* Apply */
-                g_state_system.is_dirty = FALSE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_x >= client_w - 80 && rel_x <= client_w - 10) {
-                /* Close */
-                cls_wnd(wnd);
-                return;
-            }
-        }
-    }
+    if (settings_dispatch_control_event(wnd, s_system_controls, 4, evt)) return;
+    settings_dispatch_action_buttons(wnd, evt, on_system_default, on_system_apply);
 }
 
 WND* open_system_settings_window(void) {

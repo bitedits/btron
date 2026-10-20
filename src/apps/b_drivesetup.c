@@ -24,6 +24,7 @@
 #include <btron/fs/block.h>
 #include <btron/fs/vol_api.h>
 #include <btron/fs/volume.h>
+#include <btron/settings_dlg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -244,55 +245,13 @@ static void paint_ui_textbox(GDEV *dev, const RECT *r, const char *text, bool fo
 }
 
 /* 3D Crisp Graphical Checkbox */
-static void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, bool checked, bool focused) {
-    if (!dev) return;
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    /* Sunken shadow lines */
-    drw_lin(dev, x + 1, y + 2, x + 14, y + 2);
-    drw_lin(dev, x + 1, y + 2, x + 1, y + 15);
-
-    if (checked) {
-        /* Bold checkmark */
-        drw_lin(dev, x + 3, y + 8, x + 6, y + 12);
-        drw_lin(dev, x + 3, y + 9, x + 6, y + 13);
-        drw_lin(dev, x + 4, y + 8, x + 7, y + 12);
-
-        drw_lin(dev, x + 6, y + 12, x + 12, y + 4);
-        drw_lin(dev, x + 6, y + 13, x + 12, y + 5);
-        drw_lin(dev, x + 7, y + 12, x + 13, y + 4);
-    }
-
-    if (focused) {
-        RECT f_r = { x - 2, y - 1, x + 24 + (H)strlen(label) * 8, y + 18 };
-        drw_rec(dev, &f_r);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+static inline void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, bool checked, bool focused) {
+    settings_draw_ui_checkbox(dev, x, y, label, (BOOL)checked, (BOOL)focused);
 }
 
 /* 3D Crisp Graphical Radio Button */
-static void paint_ui_radio(GDEV *dev, H x, H y, const char *label, bool checked, bool focused) {
-    if (!dev) return;
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    if (checked) {
-        RECT dot = { x + 4, y + 5, x + 11, y + 12 };
-        fill_rec(dev, &dot, COLOR_NAVY);
-    }
-
-    if (focused) {
-        RECT f_r = { x - 2, y - 1, x + 24 + (H)strlen(label) * 8, y + 18 };
-        drw_rec(dev, &f_r);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+static inline void paint_ui_radio(GDEV *dev, H x, H y, const char *label, bool checked, bool focused) {
+    settings_draw_ui_radio(dev, x, y, label, (BOOL)checked, (BOOL)focused);
 }
 
 /* 3D Vertical Scrollbar */

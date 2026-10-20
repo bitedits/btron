@@ -61,60 +61,50 @@ static void display_select_gl_backend(GL_BACKEND backend)
 }
 #endif
 
-/* 3D Crisp Graphical Checkbox */
-static void paint_ui_checkbox(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    /* Sunken 3D shadow lines */
-    drw_lin(dev, x + 1, y + 2, x + 14, y + 2);
-    drw_lin(dev, x + 1, y + 2, x + 1, y + 15);
-
-    if (checked) {
-        /* Bold checkmark [✔] */
-        drw_lin(dev, x + 3, y + 8, x + 6, y + 12);
-        drw_lin(dev, x + 3, y + 9, x + 6, y + 13);
-        drw_lin(dev, x + 4, y + 8, x + 7, y + 12);
-
-        drw_lin(dev, x + 6, y + 12, x + 12, y + 4);
-        drw_lin(dev, x + 6, y + 13, x + 12, y + 5);
-        drw_lin(dev, x + 7, y + 12, x + 13, y + 4);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+#if defined(BTRON_PS2_TARGET)
+static void on_gl_tinygl(WND *wnd, SETTINGS_CONTROL *ctl) {
+    (void)wnd; (void)ctl;
+    display_select_gl_backend(GL_BACKEND_TINYGL);
 }
 
-/* 3D Crisp Graphical Radio Button */
-static void paint_ui_radio(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
-
-    if (checked) {
-        RECT dot = { x + 4, y + 5, x + 11, y + 12 };
-        fill_rec(dev, &dot, COLOR_NAVY);
-    }
-
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
+static void on_gl_eegs(WND *wnd, SETTINGS_CONTROL *ctl) {
+    (void)wnd; (void)ctl;
+    display_select_gl_backend(GL_BACKEND_EEGS);
 }
 
-/* 3D Push Button */
-static void paint_ui_button(GDEV *dev, H x, H y, H w, H h, const char *label, BOOL pressed) {
-    RECT btn = { x, y, x + w, y + h };
-    fill_rec(dev, &btn, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-    drw_rec(dev, &btn);
+static SETTINGS_CONTROL s_display_ps2_controls[] = {
+    { 6, SETTINGS_CTL_CUSTOM, 0, 0, { 18, 276, 480, 294 }, NULL, NULL, NULL, NULL, on_gl_tinygl },
+    { 7, SETTINGS_CTL_CUSTOM, 0, 0, { 18, 298, 480, 316 }, NULL, NULL, NULL, NULL, on_gl_eegs }
+};
+#endif
 
-    if (!pressed) {
-        drw_lin(dev, x + 1, y + 1, x + w - 2, y + 1);
-        drw_lin(dev, x + 1, y + 1, x + 1, y + h - 2);
-    }
-
-    H tx = x + (w - (H)strlen(label) * 8) / 2;
-    drw_tc_string(dev, tx > x ? tx : x + 4, y + 4, label, COLOR_BLACK, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
+static void on_display_default(WND *wnd) {
+    (void)wnd;
+    g_state_display.checks[0] = TRUE;
+    g_state_display.checks[1] = FALSE;
+    g_state_display.checks[2] = FALSE;
+    g_state_display.checks[3] = TRUE;
+    g_state_display.checks[4] = TRUE;
+    g_state_display.checks[5] = TRUE;
+#if defined(BTRON_PS2_TARGET)
+    display_select_gl_backend(gl_backend_default());
+#endif
+    g_state_display.is_dirty = TRUE;
 }
+
+static void on_display_apply(WND *wnd) {
+    (void)wnd;
+    g_state_display.is_dirty = FALSE;
+}
+
+static SETTINGS_CONTROL s_display_controls[] = {
+    { 0, SETTINGS_CTL_RADIO, 1, 0, { 18, 70, 480, 88 }, "1024 x 768 @ 60Hz (24-bit TrueColor) - Recommended", &g_state_display.checks[0], NULL, &g_state_display.is_dirty, NULL },
+    { 1, SETTINGS_CTL_RADIO, 1, 0, { 18, 92, 480, 110 }, "800 x 600 @ 60Hz (Legacy PC-98 / VESA Mode)", &g_state_display.checks[1], NULL, &g_state_display.is_dirty, NULL },
+    { 2, SETTINGS_CTL_RADIO, 1, 0, { 18, 114, 480, 132 }, "1920 x 1080 Full HD (VirtIO-GPU / Modern DRM)", &g_state_display.checks[2], NULL, &g_state_display.is_dirty, NULL },
+    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 178, 480, 196 }, "Enable 1:1 Pixel Mapping (100% Standard Scale)", &g_state_display.checks[3], NULL, &g_state_display.is_dirty, NULL },
+    { 4, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 200, 480, 218 }, "Apply sRGB TRON Standard Color Profile (Gamma 2.2)", &g_state_display.checks[4], NULL, &g_state_display.is_dirty, NULL },
+    { 5, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 222, 480, 240 }, "Enable VESA Double Buffering Surface Compositor", &g_state_display.checks[5], NULL, &g_state_display.is_dirty, NULL }
+};
 
 static void paint_display_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
@@ -124,143 +114,50 @@ static void paint_display_settings(WND *wnd, GDEV *dev) {
     fill_rec(dev, &r, COLOR_WHITE);
     drw_rec(dev, &r);
 
-    /* Header Bar: Settings window icon is ALWAYS 32x32 */
-    RECT hdr = { 0, 0, dev->width, 40 };
-    fill_rec(dev, &hdr, COLOR_LTGRAY);
-    drw_lin(dev, 0, 40, dev->width, 40);
-    draw_setting_gif_icon_scaled(dev, "display", 6, 4, 32, 32);
-    char hdr_str[128];
-    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) - %s", "Display", "画面表示", "Resolution & DPI scaling");
-    drw_tc_string(dev, 46, 12, hdr_str, COLOR_BLACK, COLOR_LTGRAY);
+    /* Header Bar */
+    settings_draw_header(dev, "display", "Display", "画面表示", "Resolution & DPI scaling");
 
     /* Section 1: Resolution & Video Mode */
     RECT s1 = { 10, 56, dev->width - 10, 150 };
-    fill_rec(dev, &s1, COLOR_WHITE);
-    drw_rec(dev, &s1);
-    drw_tc_string(dev, 16, 48, " [1. Resolution & Video Mode] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 18, 70, "1024 x 768 @ 60Hz (24-bit TrueColor) - Recommended", g_state_display.checks[0], FALSE);
-    paint_ui_radio(dev, 18, 92, "800 x 600 @ 60Hz (Legacy PC-98 / VESA Mode)", g_state_display.checks[1], FALSE);
-    paint_ui_radio(dev, 18, 114, "1920 x 1080 Full HD (VirtIO-GPU / Modern DRM)", g_state_display.checks[2], FALSE);
+    settings_draw_section(dev, &s1, " [1. Resolution & Video Mode] ");
 
     /* Section 2: DPI Scaling & Color Profiles */
     RECT s2 = { 10, 164, dev->width - 10, 258 };
-    fill_rec(dev, &s2, COLOR_WHITE);
-    drw_rec(dev, &s2);
-    drw_tc_string(dev, 16, 156, " [2. DPI Scaling & Color Profiles] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_checkbox(dev, 18, 178, "Enable 1:1 Pixel Mapping (100% Standard Scale)", g_state_display.checks[3], FALSE);
-    paint_ui_checkbox(dev, 18, 200, "Apply sRGB TRON Standard Color Profile (Gamma 2.2)", g_state_display.checks[4], FALSE);
-    paint_ui_checkbox(dev, 18, 222, "Enable VESA Double Buffering Surface Compositor", g_state_display.checks[5], FALSE);
+    settings_draw_section(dev, &s2, " [2. DPI Scaling & Color Profiles] ");
 
-    /* Section 3: the rasteriser a GL window's frame is drawn by.  PS2-only, because the
-     * choice is between two pipelines this machine has hardware for -- an Emotion Engine
-     * software fill and the Graphics Synthesizer's own -- and no other target has the
-     * second one.  The row is a choice, not a status light: what is actually installed is
-     * printed at every surface's creation by the backend itself. */
+    settings_draw_controls(dev, s_display_controls, 6);
+
+    /* Section 3: OpenGL PS2 Rasterizer */
 #if defined(BTRON_PS2_TARGET)
     RECT s3 = { 10, 262, dev->width - 10, 340 };
-    fill_rec(dev, &s3, COLOR_WHITE);
-    drw_rec(dev, &s3);
-    drw_tc_string(dev, 16, 254, " [3. OpenGL PS2 Rasterizer] ", COLOR_NAVY, COLOR_WHITE);
-    paint_ui_radio(dev, 18, 276, "OpenGL PS2: TinyGL software rasterizer (EE CPU)",
-                   gl_backend_selected() == GL_BACKEND_TINYGL, FALSE);
-    paint_ui_radio(dev, 18, 298, "OpenGL PS2: EE/GS hardware rasterizer (GS, in progress)",
-                   gl_backend_selected() == GL_BACKEND_EEGS, FALSE);
+    settings_draw_section(dev, &s3, " [3. OpenGL PS2 Rasterizer] ");
+    settings_draw_ui_radio(dev, 18, 276, "OpenGL PS2: TinyGL software rasterizer (EE CPU)",
+                           gl_backend_selected() == GL_BACKEND_TINYGL, FALSE);
+    settings_draw_ui_radio(dev, 18, 298, "OpenGL PS2: EE/GS hardware rasterizer (GS, in progress)",
+                           gl_backend_selected() == GL_BACKEND_EEGS, FALSE);
 #endif
 
     /* Action Buttons */
-    H btn_y = dev->height - 35;
-    paint_ui_button(dev, dev->width - 240, btn_y, 70, 24, "Default", FALSE);
-    paint_ui_button(dev, dev->width - 160, btn_y, 70, 24, "Apply", g_state_display.is_dirty);
-    paint_ui_button(dev, dev->width - 80, btn_y, 70, 24, "Close", FALSE);
+    settings_draw_action_buttons(dev, g_state_display.is_dirty);
 }
 
 static void handle_display_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
-    if (evt->type == EV_BUT_DOWN) {
-        H rel_x = evt->pos.x - wnd->client.left;
-        H rel_y = evt->pos.y - wnd->client.top;
-        H client_w = wnd->client.right - wnd->client.left;
-        H client_h = wnd->client.bottom - wnd->client.top;
-
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 70 && rel_y <= 88) {
-            g_state_display.checks[0] = !g_state_display.checks[0];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 92 && rel_y <= 110) {
-            g_state_display.checks[1] = !g_state_display.checks[1];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 114 && rel_y <= 132) {
-            g_state_display.checks[2] = !g_state_display.checks[2];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 178 && rel_y <= 196) {
-            g_state_display.checks[3] = !g_state_display.checks[3];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 200 && rel_y <= 218) {
-            g_state_display.checks[4] = !g_state_display.checks[4];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 222 && rel_y <= 240) {
-            g_state_display.checks[5] = !g_state_display.checks[5];
-            g_state_display.is_dirty = TRUE;
-            redraw_all_windows();
-            return;
-        }
-        /* Section 3: which pipeline draws the next GL window's frame */
+    if (settings_dispatch_control_event(wnd, s_display_controls, 6, evt)) return;
 #if defined(BTRON_PS2_TARGET)
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 276 && rel_y <= 294) {
-            display_select_gl_backend(GL_BACKEND_TINYGL);
-            return;
-        }
-        if (rel_x >= 18 && rel_x <= 480 && rel_y >= 298 && rel_y <= 316) {
-            display_select_gl_backend(GL_BACKEND_EEGS);
-            return;
-        }
+    if (settings_dispatch_control_event(wnd, s_display_ps2_controls, 2, evt)) return;
 #endif
-
-        /* Action Buttons */
-        H btn_y = client_h - 35;
-        if (rel_y >= btn_y && rel_y <= btn_y + 24) {
-            if (rel_x >= client_w - 240 && rel_x <= client_w - 170) {
-                /* Default */
-                for (int i = 0; i < 6; i++) g_state_display.checks[i] = TRUE;
-#if defined(BTRON_PS2_TARGET)
-                display_select_gl_backend(gl_backend_default());
-#endif
-                g_state_display.is_dirty = TRUE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_x >= client_w - 160 && rel_x <= client_w - 90) {
-                /* Apply */
-                g_state_display.is_dirty = FALSE;
-                redraw_all_windows();
-                return;
-            }
-            if (rel_x >= client_w - 80 && rel_x <= client_w - 10) {
-                /* Close */
-                cls_wnd(wnd);
-                return;
-            }
-        }
-    }
+    settings_dispatch_action_buttons(wnd, evt, on_display_default, on_display_apply);
 }
 
 WND* open_display_settings_window(void) {
     memset(&g_state_display, 0, sizeof(AppletState_display));
-    for (int i = 0; i < 6; i++) g_state_display.checks[i] = TRUE;
+    g_state_display.checks[0] = TRUE;
+    g_state_display.checks[1] = FALSE;
+    g_state_display.checks[2] = FALSE;
+    g_state_display.checks[3] = TRUE;
+    g_state_display.checks[4] = TRUE;
+    g_state_display.checks[5] = TRUE;
 
     WND *wnd = opn_wnd("画面表示設定 (Screen Display/Monitor Settings)",
                        80, 45, 640, 430,

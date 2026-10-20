@@ -64,35 +64,59 @@ typedef struct {
 
 static AppletState_terminal g_state_terminal;
 
-/* 3D Crisp Graphical Radio Button */
-static void paint_ui_radio(GDEV *dev, H x, H y, const char *label, BOOL checked, BOOL focused) {
-    RECT box = { x, y + 1, x + 15, y + 16 };
-    fill_rec(dev, &box, COLOR_WHITE);
-    drw_rec(dev, &box);
+static void on_term_theme_green(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.theme = TERM_THEME_GREEN; g_state_terminal.local_cfg.fg_color = 0xFF22C55E; }
+static void on_term_theme_amber(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.theme = TERM_THEME_AMBER; g_state_terminal.local_cfg.fg_color = 0xFFF59E0B; }
+static void on_term_theme_white(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.theme = TERM_THEME_WHITE; g_state_terminal.local_cfg.fg_color = 0xFFFFFFFF; }
+static void on_term_theme_cyan(WND *wnd, SETTINGS_CONTROL *ctl)  { (void)wnd; (void)ctl; g_state_terminal.local_cfg.theme = TERM_THEME_CYAN;  g_state_terminal.local_cfg.fg_color = 0xFF38BDF8; }
+static void on_term_theme_light(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.theme = TERM_THEME_LIGHT; g_state_terminal.local_cfg.fg_color = 0xFF0F172A; }
 
-    if (checked) {
-        RECT dot = { x + 4, y + 5, x + 11, y + 12 };
-        fill_rec(dev, &dot, COLOR_NAVY);
-    }
+static void on_term_font_12(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.font_size = TERM_FONT_12; }
+static void on_term_font_16(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.font_size = TERM_FONT_16; }
+static void on_term_font_20(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.font_size = TERM_FONT_20; }
 
-    COLOR text_col = focused ? COLOR_NAVY : COLOR_BLACK;
-    drw_tc_string(dev, x + 22, y, label, text_col, COLOR_WHITE);
-}
+static void on_term_scroll_100k(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.scrollback_lines = 100000; }
+static void on_term_scroll_300(WND *wnd, SETTINGS_CONTROL *ctl)  { (void)wnd; (void)ctl; g_state_terminal.local_cfg.scrollback_lines = 300; }
+static void on_term_scroll_1000(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.scrollback_lines = 1000; }
+static void on_term_scroll_4096(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.scrollback_lines = 4096; }
+static void on_term_scroll_10k(WND *wnd, SETTINGS_CONTROL *ctl)  { (void)wnd; (void)ctl; g_state_terminal.local_cfg.scrollback_lines = 10000; }
 
-/* 3D Push Button */
-static void paint_ui_button(GDEV *dev, H x, H y, H w, H h, const char *label, BOOL pressed) {
-    RECT btn = { x, y, x + w, y + h };
-    fill_rec(dev, &btn, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-    drw_rec(dev, &btn);
+static void on_term_cur_underline(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.cursor_style = TERM_CURSOR_UNDERLINE; }
+static void on_term_cur_block(WND *wnd, SETTINGS_CONTROL *ctl)     { (void)wnd; (void)ctl; g_state_terminal.local_cfg.cursor_style = TERM_CURSOR_BLOCK; }
+static void on_term_cur_bar(WND *wnd, SETTINGS_CONTROL *ctl)       { (void)wnd; (void)ctl; g_state_terminal.local_cfg.cursor_style = TERM_CURSOR_BAR; }
 
-    if (!pressed) {
-        drw_lin(dev, x + 1, y + 1, x + w - 2, y + 1);
-        drw_lin(dev, x + 1, y + 1, x + 1, y + h - 2);
-    }
+static void on_term_trans_opaque(WND *wnd, SETTINGS_CONTROL *ctl) { (void)wnd; (void)ctl; g_state_terminal.local_cfg.transparency = TERM_TRANSPARENCY_OPAQUE; }
+static void on_term_trans_80(WND *wnd, SETTINGS_CONTROL *ctl)     { (void)wnd; (void)ctl; g_state_terminal.local_cfg.transparency = TERM_TRANSPARENCY_80; }
+static void on_term_trans_60(WND *wnd, SETTINGS_CONTROL *ctl)     { (void)wnd; (void)ctl; g_state_terminal.local_cfg.transparency = TERM_TRANSPARENCY_60; }
 
-    H tx = x + (w - (H)strlen(label) * 8) / 2;
-    drw_tc_string(dev, tx > x ? tx : x + 4, y + 4, label, COLOR_BLACK, pressed ? COLOR_DKGRAY : COLOR_LTGRAY);
-}
+static SETTINGS_CONTROL s_term_controls[] = {
+    /* Section 1: Themes */
+    { 0, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 74, 270, 94 }, "グリーン (Matrix Green)", NULL, NULL, &g_state_terminal.is_dirty, on_term_theme_green },
+    { 1, SETTINGS_CTL_CUSTOM, 0, 0, { 270, 74, 528, 94 }, "アンバー (Amber CRT)", NULL, NULL, &g_state_terminal.is_dirty, on_term_theme_amber },
+    { 2, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 94, 270, 114 }, "白黒 (White on Black)", NULL, NULL, &g_state_terminal.is_dirty, on_term_theme_white },
+    { 3, SETTINGS_CTL_CUSTOM, 0, 0, { 270, 94, 528, 114 }, "BTRON青 (Cyan on Navy)", NULL, NULL, &g_state_terminal.is_dirty, on_term_theme_cyan },
+    { 4, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 114, 270, 134 }, "ライト (Paper Light)", NULL, NULL, &g_state_terminal.is_dirty, on_term_theme_light },
+
+    /* Section 2: Font Size */
+    { 5, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 176, 187, 196 }, "小 12px (32行×100桁)", NULL, NULL, &g_state_terminal.is_dirty, on_term_font_12 },
+    { 6, SETTINGS_CTL_CUSTOM, 0, 0, { 187, 176, 352, 196 }, "標準 16px (24行×80桁)", NULL, NULL, &g_state_terminal.is_dirty, on_term_font_16 },
+    { 7, SETTINGS_CTL_CUSTOM, 0, 0, { 352, 176, 528, 196 }, "大 20px (18行×64桁)", NULL, NULL, &g_state_terminal.is_dirty, on_term_font_20 },
+
+    /* Section 3: Scrollback & Cursor */
+    { 8, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 238, 121, 258 }, "履歴 100K行", NULL, NULL, &g_state_terminal.is_dirty, on_term_scroll_100k },
+    { 9, SETTINGS_CTL_CUSTOM, 0, 0, { 121, 238, 220, 258 }, "履歴 300行 (標準)", NULL, NULL, &g_state_terminal.is_dirty, on_term_scroll_300 },
+    { 10, SETTINGS_CTL_CUSTOM, 0, 0, { 220, 238, 319, 258 }, "履歴 1000行 (大)", NULL, NULL, &g_state_terminal.is_dirty, on_term_scroll_1000 },
+    { 11, SETTINGS_CTL_CUSTOM, 0, 0, { 319, 238, 418, 258 }, "履歴 4096行", NULL, NULL, &g_state_terminal.is_dirty, on_term_scroll_4096 },
+    { 12, SETTINGS_CTL_CUSTOM, 0, 0, { 418, 238, 528, 258 }, "履歴 10K行 (最大)", NULL, NULL, &g_state_terminal.is_dirty, on_term_scroll_10k },
+
+    { 13, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 258, 187, 278 }, "カーソル下線 (_)", NULL, NULL, &g_state_terminal.is_dirty, on_term_cur_underline },
+    { 14, SETTINGS_CTL_CUSTOM, 0, 0, { 187, 258, 352, 278 }, "ブロックカーソル (█)", NULL, NULL, &g_state_terminal.is_dirty, on_term_cur_block },
+    { 15, SETTINGS_CTL_CUSTOM, 0, 0, { 352, 258, 528, 278 }, "バーカーソル (|)", NULL, NULL, &g_state_terminal.is_dirty, on_term_cur_bar },
+
+    /* Section 4: Transparency */
+    { 16, SETTINGS_CTL_CUSTOM, 0, 0, { 22, 320, 187, 340 }, "不透明 (100% Opaque)", NULL, NULL, &g_state_terminal.is_dirty, on_term_trans_opaque },
+    { 17, SETTINGS_CTL_CUSTOM, 0, 0, { 187, 320, 352, 340 }, "20%減光 (80% Dimmed)", NULL, NULL, &g_state_terminal.is_dirty, on_term_trans_80 },
+    { 18, SETTINGS_CTL_CUSTOM, 0, 0, { 352, 320, 528, 340 }, "40%減光 (60% Dimmed)", NULL, NULL, &g_state_terminal.is_dirty, on_term_trans_60 },
+};
 
 static void paint_terminal_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
@@ -102,7 +126,7 @@ static void paint_terminal_settings(WND *wnd, GDEV *dev) {
     fill_rec(dev, &r, COLOR_WHITE);
     drw_rec(dev, &r);
 
-    /* ── Header Bar: icon is ALWAYS 32x32 ────────────────────────── */
+    /* Header Bar */
     RECT hdr = { 0, 0, dev->width, 40 };
     fill_rec(dev, &hdr, COLOR_LTGRAY);
     drw_lin(dev, 0, 40, dev->width, 40);
@@ -113,175 +137,94 @@ static void paint_terminal_settings(WND *wnd, GDEV *dev) {
     TERMINAL_SETTINGS *cfg = &g_state_terminal.local_cfg;
 
     /* Layout constants */
-    H M    = 12;          /* outer horizontal margin */
-    H P    = 10;          /* inner padding inside group box */
-    H LH   = 20;          /* radio row height */
-    H GAP  = 14;          /* vertical gap between sections */
-    H HDR_H = 40;         /* header bar height */
-    H LBL_OVERLAP = 8;    /* how many px the label sits above the box top */
+    H M    = 12;
+    H P    = 10;
+    H LH   = 20;
+    H GAP  = 14;
+    H HDR_H = 40;
+    H LBL_OVERLAP = 8;
 
     /* ── Section 1: 配色テーマ (Colour Theme) ─────────────────── */
     H s1_top = HDR_H + GAP + LBL_OVERLAP;   /* 64 */
-    H s1_bot = s1_top + P + LH * 3 + P;     /* 64 + 10 + 60 + 10 = 144 */
+    H s1_bot = s1_top + P + LH * 3 + P;     /* 144 */
     RECT sec1 = { M, s1_top, dev->width - M, s1_bot };
-    fill_rec(dev, &sec1, COLOR_WHITE);
-    drw_rec(dev, &sec1);
-    drw_tc_string(dev, M + P - 2, s1_top - LBL_OVERLAP, " [1] 配色テーマ (Colour Theme) ", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_section(dev, &sec1, " [1] 配色テーマ (Colour Theme) ");
 
-    paint_ui_radio(dev, M + P, s1_top + P,            "グリーン (Matrix Green)",  cfg->theme == TERM_THEME_GREEN, FALSE);
-    paint_ui_radio(dev, dev->width / 2, s1_top + P,   "アンバー (Amber CRT)",     cfg->theme == TERM_THEME_AMBER, FALSE);
-    paint_ui_radio(dev, M + P, s1_top + P + LH,       "白黒 (White on Black)",    cfg->theme == TERM_THEME_WHITE, FALSE);
-    paint_ui_radio(dev, dev->width / 2, s1_top + P + LH, "BTRON青 (Cyan on Navy)",cfg->theme == TERM_THEME_CYAN,  FALSE);
-    paint_ui_radio(dev, M + P, s1_top + P + LH * 2,   "ライト (Paper Light)",     cfg->theme == TERM_THEME_LIGHT, FALSE);
+    settings_draw_ui_radio(dev, M + P, s1_top + P,            "グリーン (Matrix Green)",  cfg->theme == TERM_THEME_GREEN, FALSE);
+    settings_draw_ui_radio(dev, dev->width / 2, s1_top + P,   "アンバー (Amber CRT)",     cfg->theme == TERM_THEME_AMBER, FALSE);
+    settings_draw_ui_radio(dev, M + P, s1_top + P + LH,       "白黒 (White on Black)",    cfg->theme == TERM_THEME_WHITE, FALSE);
+    settings_draw_ui_radio(dev, dev->width / 2, s1_top + P + LH, "BTRON青 (Cyan on Navy)",cfg->theme == TERM_THEME_CYAN,  FALSE);
+    settings_draw_ui_radio(dev, M + P, s1_top + P + LH * 2,   "ライト (Paper Light)",     cfg->theme == TERM_THEME_LIGHT, FALSE);
 
     /* ── Section 2: 文字サイズ (Font Size) ────────────────────── */
-    H s2_top = s1_bot + GAP + LBL_OVERLAP;  /* 144 + 14 + 8 = 166 */
-    H s2_bot = s2_top + P + LH + P;         /* 166 + 10 + 20 + 10 = 206 */
+    H s2_top = s1_bot + GAP + LBL_OVERLAP;  /* 166 */
+    H s2_bot = s2_top + P + LH + P;         /* 206 */
     RECT sec2 = { M, s2_top, dev->width - M, s2_bot };
-    fill_rec(dev, &sec2, COLOR_WHITE);
-    drw_rec(dev, &sec2);
-    drw_tc_string(dev, M + P - 2, s2_top - LBL_OVERLAP, " [2] 文字・行間 (Font Size) ", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_section(dev, &sec2, " [2] 文字・行間 (Font Size) ");
 
-    H col3 = (dev->width - 2 * M - 2 * P) / 3;  /* third-column step */
-    paint_ui_radio(dev, M + P,             s2_top + P, "小 12px (32行×100桁)",  cfg->font_size == TERM_FONT_12, FALSE);
-    paint_ui_radio(dev, M + P + col3,      s2_top + P, "標準 16px (24行×80桁)", cfg->font_size == TERM_FONT_16, FALSE);
-    paint_ui_radio(dev, M + P + col3 * 2,  s2_top + P, "大 20px (18行×64桁)",  cfg->font_size == TERM_FONT_20, FALSE);
+    H col3 = (dev->width - 2 * M - 2 * P) / 3;
+    settings_draw_ui_radio(dev, M + P,             s2_top + P, "小 12px (32行×100桁)",  cfg->font_size == TERM_FONT_12, FALSE);
+    settings_draw_ui_radio(dev, M + P + col3,      s2_top + P, "標準 16px (24行×80桁)", cfg->font_size == TERM_FONT_16, FALSE);
+    settings_draw_ui_radio(dev, M + P + col3 * 2,  s2_top + P, "大 20px (18行×64桁)",  cfg->font_size == TERM_FONT_20, FALSE);
 
     /* ── Section 3: スクロール履歴・カーソル (Scrollback & Cursor) ─────── */
-    H s3_top = s2_bot + GAP + LBL_OVERLAP;  /* 206 + 14 + 8 = 228 */
-    H s3_bot = s3_top + P + LH * 2 + P;     /* 228 + 10 + 40 + 10 = 288 */
+    H s3_top = s2_bot + GAP + LBL_OVERLAP;  /* 228 */
+    H s3_bot = s3_top + P + LH * 2 + P;     /* 288 */
     RECT sec3 = { M, s3_top, dev->width - M, s3_bot };
-    fill_rec(dev, &sec3, COLOR_WHITE);
-    drw_rec(dev, &sec3);
-    drw_tc_string(dev, M + P - 2, s3_top - LBL_OVERLAP, " [3] 履歴・カーソル (Scrollback & Cursor) ", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_section(dev, &sec3, " [3] 履歴・カーソル (Scrollback & Cursor) ");
 
-    H col5 = (dev->width - 2 * M - 2 * P) / 5;  /* fifth-column step */
-    paint_ui_radio(dev, M + P,             s3_top + P,       "履歴 100K行",           cfg->scrollback_lines == 100000,   FALSE);
-    paint_ui_radio(dev, M + P + col5,      s3_top + P,       "履歴 300行 (標準)",    cfg->scrollback_lines == 300,   FALSE);
-    paint_ui_radio(dev, M + P + col5 * 2,  s3_top + P,       "履歴 1000行 (大)",    cfg->scrollback_lines == 1000,  FALSE);
-    paint_ui_radio(dev, M + P + col5 * 3,  s3_top + P,       "履歴 4096行",          cfg->scrollback_lines == 4096,  FALSE);
-    paint_ui_radio(dev, M + P + col5 * 4,  s3_top + P,       "履歴 10K行 (最大)",    cfg->scrollback_lines == 10000, FALSE);
-    paint_ui_radio(dev, M + P,             s3_top + P + LH,  "カーソル下線 (_)",    cfg->cursor_style == TERM_CURSOR_UNDERLINE, FALSE);
-    paint_ui_radio(dev, M + P + col3,      s3_top + P + LH,  "ブロックカーソル (█)",cfg->cursor_style == TERM_CURSOR_BLOCK,     FALSE);
-    paint_ui_radio(dev, M + P + col3 * 2,  s3_top + P + LH,  "バーカーソル (|)",    cfg->cursor_style == TERM_CURSOR_BAR,       FALSE);
+    H col5 = (dev->width - 2 * M - 2 * P) / 5;
+    settings_draw_ui_radio(dev, M + P,             s3_top + P,       "履歴 100K行",           cfg->scrollback_lines == 100000,   FALSE);
+    settings_draw_ui_radio(dev, M + P + col5,      s3_top + P,       "履歴 300行 (標準)",    cfg->scrollback_lines == 300,   FALSE);
+    settings_draw_ui_radio(dev, M + P + col5 * 2,  s3_top + P,       "履歴 1000行 (大)",    cfg->scrollback_lines == 1000,  FALSE);
+    settings_draw_ui_radio(dev, M + P + col5 * 3,  s3_top + P,       "履歴 4096行",          cfg->scrollback_lines == 4096,  FALSE);
+    settings_draw_ui_radio(dev, M + P + col5 * 4,  s3_top + P,       "履歴 10K行 (最大)",    cfg->scrollback_lines == 10000, FALSE);
+    settings_draw_ui_radio(dev, M + P,             s3_top + P + LH,  "カーソル下線 (_)",    cfg->cursor_style == TERM_CURSOR_UNDERLINE, FALSE);
+    settings_draw_ui_radio(dev, M + P + col3,      s3_top + P + LH,  "ブロックカーソル (█)",cfg->cursor_style == TERM_CURSOR_BLOCK,     FALSE);
+    settings_draw_ui_radio(dev, M + P + col3 * 2,  s3_top + P + LH,  "バーカーソル (|)",    cfg->cursor_style == TERM_CURSOR_BAR,       FALSE);
 
     /* ── Section 4: 画面透過度 (Transparency) ──────────────────── */
-    H s4_top = s3_bot + GAP + LBL_OVERLAP;  /* 288 + 14 + 8 = 310 */
-    H s4_bot = s4_top + P + LH + P;         /* 310 + 10 + 20 + 10 = 350 */
+    H s4_top = s3_bot + GAP + LBL_OVERLAP;  /* 310 */
+    H s4_bot = s4_top + P + LH + P;         /* 350 */
     RECT sec4 = { M, s4_top, dev->width - M, s4_bot };
-    fill_rec(dev, &sec4, COLOR_WHITE);
-    drw_rec(dev, &sec4);
-    drw_tc_string(dev, M + P - 2, s4_top - LBL_OVERLAP, " [4] 背景透過・減光 (Background Transparency) ", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_section(dev, &sec4, " [4] 背景透過・減光 (Background Transparency) ");
 
-    paint_ui_radio(dev, M + P,             s4_top + P, "不透明 (100% Opaque)",  cfg->transparency == TERM_TRANSPARENCY_OPAQUE, FALSE);
-    paint_ui_radio(dev, M + P + col3,      s4_top + P, "20%減光 (80% Dimmed)",  cfg->transparency == TERM_TRANSPARENCY_80,     FALSE);
-    paint_ui_radio(dev, M + P + col3 * 2,  s4_top + P, "40%減光 (60% Dimmed)",  cfg->transparency == TERM_TRANSPARENCY_60,     FALSE);
+    settings_draw_ui_radio(dev, M + P,             s4_top + P, "不透明 (100% Opaque)",  cfg->transparency == TERM_TRANSPARENCY_OPAQUE, FALSE);
+    settings_draw_ui_radio(dev, M + P + col3,      s4_top + P, "20%減光 (80% Dimmed)",  cfg->transparency == TERM_TRANSPARENCY_80,     FALSE);
+    settings_draw_ui_radio(dev, M + P + col3 * 2,  s4_top + P, "40%減光 (60% Dimmed)",  cfg->transparency == TERM_TRANSPARENCY_60,     FALSE);
 
     /* ── Action Buttons ─────────────────────────────────────── */
-    paint_ui_button(dev, dev->width - 240, dev->height - 36, 110, 26, "標準に戻す",    FALSE);
-    paint_ui_button(dev, dev->width - 122, dev->height - 36, 110, 26, "適用 (Apply)",  FALSE);
+    settings_draw_ui_button(dev, dev->width - 240, dev->height - 36, 110, 26, "標準に戻す",    FALSE);
+    settings_draw_ui_button(dev, dev->width - 122, dev->height - 36, 110, 26, "適用 (Apply)",  FALSE);
 }
 
 static void handle_terminal_settings_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
 
     if (evt->type == EV_BUT_DOWN) {
+        if (settings_dispatch_control_event(wnd, s_term_controls, 19, evt)) return;
+
         H rel_x = evt->pos.x - wnd->client.left;
         H rel_y = evt->pos.y - wnd->client.top;
-        TERMINAL_SETTINGS *cfg = &g_state_terminal.local_cfg;
-
-        /* Layout mirrors paint function (same constants) */
-        H M = 12, P = 10, LH = 20, GAP = 14, HDR_H = 40, LBL_OVERLAP = 8;
         H client_w = wnd->client.right - wnd->client.left;
-        H col3 = (client_w - 2 * M - 2 * P) / 3;
-
-        /* Section 1 row y-ranges */
-        H s1_top = HDR_H + GAP + LBL_OVERLAP;             /* 64 */
-        H s1r0   = s1_top + P;                             /* 74  — row 0 (Green/Amber) */
-        H s1r1   = s1_top + P + LH;                        /* 94  — row 1 (White/Cyan) */
-        H s1r2   = s1_top + P + LH * 2;                    /* 114 — row 2 (Light) */
-        H s1_bot = s1_top + P + LH * 3 + P;               /* 144 */
-
-        /* Section 2 row y-ranges */
-        H s2_top = s1_bot + GAP + LBL_OVERLAP;             /* 166 */
-        H s2r0   = s2_top + P;                             /* 176 */
-        H s2_bot = s2_top + P + LH + P;                   /* 206 */
-
-        /* Section 3 row y-ranges */
-        H s3_top = s2_bot + GAP + LBL_OVERLAP;             /* 228 */
-        H s3r0   = s3_top + P;                             /* 238 — scrollback */
-        H s3r1   = s3_top + P + LH;                        /* 258 — cursor */
-        H s3_bot = s3_top + P + LH * 2 + P;               /* 288 */
-
-        /* Section 4 row y-ranges */
-        H s4_top = s3_bot + GAP + LBL_OVERLAP;             /* 310 */
-        H s4r0   = s4_top + P;                             /* 320 */
-
-        /* Column x-ranges (3 equal columns) */
-        H c0x = M + P;
-        H c1x = M + P + col3;
-        H c2x = M + P + col3 * 2;
-        H half = client_w / 2;  /* Section 1 uses half-width split */
-
-#define HIT_ROW(rel_y, row_y)    ((rel_y) >= (row_y) && (rel_y) < (row_y) + LH)
-#define REPAINT() do { g_state_terminal.is_dirty = TRUE; wnd->paint(wnd, wnd->dev); } while(0)
-
-        /* ── Section 1: Colour Theme ──────────────────────────────── */
-        if (HIT_ROW(rel_y, s1r0)) {
-            if      (rel_x >= c0x && rel_x < half) { cfg->theme = TERM_THEME_GREEN; cfg->fg_color = 0xFF22C55E; REPAINT(); }
-            else if (rel_x >= half)                 { cfg->theme = TERM_THEME_AMBER; cfg->fg_color = 0xFFF59E0B; REPAINT(); }
-        } else if (HIT_ROW(rel_y, s1r1)) {
-            if      (rel_x >= c0x && rel_x < half) { cfg->theme = TERM_THEME_WHITE; cfg->fg_color = 0xFFFFFFFF; REPAINT(); }
-            else if (rel_x >= half)                 { cfg->theme = TERM_THEME_CYAN;  cfg->fg_color = 0xFF38BDF8; REPAINT(); }
-        } else if (HIT_ROW(rel_y, s1r2)) {
-            if      (rel_x >= c0x && rel_x < half) { cfg->theme = TERM_THEME_LIGHT; cfg->fg_color = 0xFF0F172A; REPAINT(); }
-        }
-
-        /* ── Section 2: Font Size ──────────────────────────────────── */
-        if (HIT_ROW(rel_y, s2r0)) {
-            if      (rel_x >= c0x && rel_x < c1x) { cfg->font_size = TERM_FONT_12; REPAINT(); }
-            else if (rel_x >= c1x && rel_x < c2x) { cfg->font_size = TERM_FONT_16; REPAINT(); }
-            else if (rel_x >= c2x)                 { cfg->font_size = TERM_FONT_20; REPAINT(); }
-        }
-
-        /* ── Section 3: Scrollback & Cursor ───────────────────────── */
-        if (HIT_ROW(rel_y, s3r0)) {
-            H col5 = (client_w - 2 * M - 2 * P) / 5;
-            if      (rel_x >= c0x && rel_x < c0x + col5)            { cfg->scrollback_lines = 100;   REPAINT(); }
-            else if (rel_x >= c0x + col5 && rel_x < c0x + col5 * 2)     { cfg->scrollback_lines = 300;   REPAINT(); }
-            else if (rel_x >= c0x + col5 * 2 && rel_x < c0x + col5 * 3) { cfg->scrollback_lines = 1000;  REPAINT(); }
-            else if (rel_x >= c0x + col5 * 3 && rel_x < c0x + col5 * 4) { cfg->scrollback_lines = 4096;  REPAINT(); }
-            else if (rel_x >= c0x + col5 * 4)                        { cfg->scrollback_lines = 10000; REPAINT(); }
-        } else if (HIT_ROW(rel_y, s3r1)) {
-            if      (rel_x >= c0x && rel_x < c1x) { cfg->cursor_style = TERM_CURSOR_UNDERLINE; REPAINT(); }
-            else if (rel_x >= c1x && rel_x < c2x) { cfg->cursor_style = TERM_CURSOR_BLOCK;     REPAINT(); }
-            else if (rel_x >= c2x)                 { cfg->cursor_style = TERM_CURSOR_BAR;       REPAINT(); }
-        }
-
-        /* ── Section 4: Transparency ───────────────────────────────── */
-        if (HIT_ROW(rel_y, s4r0)) {
-            if      (rel_x >= c0x && rel_x < c1x) { cfg->transparency = TERM_TRANSPARENCY_OPAQUE; REPAINT(); }
-            else if (rel_x >= c1x && rel_x < c2x) { cfg->transparency = TERM_TRANSPARENCY_80;     REPAINT(); }
-            else if (rel_x >= c2x)                 { cfg->transparency = TERM_TRANSPARENCY_60;     REPAINT(); }
-        }
-
-        /* ── Buttons ────────────────────────────────────────────────── */
         H btn_y = (wnd->client.bottom - wnd->client.top) - 36;
+
+        /* Buttons */
         if (rel_y >= btn_y && rel_y <= btn_y + 26) {
             if (rel_x >= client_w - 240 && rel_x < client_w - 130) {
                 terminal_reset_settings();
                 terminal_get_settings(&g_state_terminal.local_cfg);
                 g_state_terminal.is_dirty = FALSE;
-                wnd->paint(wnd, wnd->dev);
+                inval_wnd(wnd);
+                redraw_all_windows();
+                return;
             } else if (rel_x >= client_w - 122 && rel_x < client_w - 12) {
                 terminal_set_settings(&g_state_terminal.local_cfg);
                 g_state_terminal.is_dirty = FALSE;
                 cls_wnd(wnd);
+                return;
             }
         }
-
-#undef HIT_ROW
-#undef REPAINT
     }
 }
 

@@ -65,17 +65,16 @@ static void display_select_gl_backend(GL_BACKEND backend)
 static void on_gl_tinygl(WND *wnd, SETTINGS_CONTROL *ctl) {
     (void)wnd; (void)ctl;
     display_select_gl_backend(GL_BACKEND_TINYGL);
+    g_state_display.checks[6] = TRUE;
+    g_state_display.checks[7] = FALSE;
 }
 
 static void on_gl_eegs(WND *wnd, SETTINGS_CONTROL *ctl) {
     (void)wnd; (void)ctl;
     display_select_gl_backend(GL_BACKEND_EEGS);
+    g_state_display.checks[6] = FALSE;
+    g_state_display.checks[7] = TRUE;
 }
-
-static SETTINGS_CONTROL s_display_ps2_controls[] = {
-    { 6, SETTINGS_CTL_CUSTOM, 0, 0, { 18, 276, 480, 294 }, NULL, NULL, NULL, NULL, on_gl_tinygl },
-    { 7, SETTINGS_CTL_CUSTOM, 0, 0, { 18, 298, 480, 316 }, NULL, NULL, NULL, NULL, on_gl_eegs }
-};
 #endif
 
 static void on_display_default(WND *wnd) {
@@ -87,7 +86,10 @@ static void on_display_default(WND *wnd) {
     g_state_display.checks[4] = TRUE;
     g_state_display.checks[5] = TRUE;
 #if defined(BTRON_PS2_TARGET)
-    display_select_gl_backend(gl_backend_default());
+    GL_BACKEND def = gl_backend_default();
+    display_select_gl_backend(def);
+    g_state_display.checks[6] = (def == GL_BACKEND_TINYGL);
+    g_state_display.checks[7] = (def == GL_BACKEND_EEGS);
 #endif
     g_state_display.is_dirty = TRUE;
 }
@@ -98,56 +100,40 @@ static void on_display_apply(WND *wnd) {
 }
 
 static SETTINGS_CONTROL s_display_controls[] = {
-    { 0, SETTINGS_CTL_RADIO, 1, 0, { 18, 70, 480, 88 }, "1024 x 768 @ 60Hz (24-bit TrueColor) - Recommended", &g_state_display.checks[0], NULL, &g_state_display.is_dirty, NULL },
-    { 1, SETTINGS_CTL_RADIO, 1, 0, { 18, 92, 480, 110 }, "800 x 600 @ 60Hz (Legacy PC-98 / VESA Mode)", &g_state_display.checks[1], NULL, &g_state_display.is_dirty, NULL },
-    { 2, SETTINGS_CTL_RADIO, 1, 0, { 18, 114, 480, 132 }, "1920 x 1080 Full HD (VirtIO-GPU / Modern DRM)", &g_state_display.checks[2], NULL, &g_state_display.is_dirty, NULL },
-    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 178, 480, 196 }, "Enable 1:1 Pixel Mapping (100% Standard Scale)", &g_state_display.checks[3], NULL, &g_state_display.is_dirty, NULL },
-    { 4, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 200, 480, 218 }, "Apply sRGB TRON Standard Color Profile (Gamma 2.2)", &g_state_display.checks[4], NULL, &g_state_display.is_dirty, NULL },
-    { 5, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 222, 480, 240 }, "Enable VESA Double Buffering Surface Compositor", &g_state_display.checks[5], NULL, &g_state_display.is_dirty, NULL }
+    { 0, SETTINGS_CTL_RADIO, 1, 0, {0}, "1024 x 768 @ 60Hz (24-bit TrueColor) - Recommended", &g_state_display.checks[0], NULL, &g_state_display.is_dirty, NULL },
+    { 1, SETTINGS_CTL_RADIO, 1, 0, {0}, "800 x 600 @ 60Hz (Legacy PC-98 / VESA Mode)", &g_state_display.checks[1], NULL, &g_state_display.is_dirty, NULL },
+    { 2, SETTINGS_CTL_RADIO, 1, 0, {0}, "1920 x 1080 Full HD (VirtIO-GPU / Modern DRM)", &g_state_display.checks[2], NULL, &g_state_display.is_dirty, NULL },
+    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Enable 1:1 Pixel Mapping (100% Standard Scale)", &g_state_display.checks[3], NULL, &g_state_display.is_dirty, NULL },
+    { 4, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Apply sRGB TRON Standard Color Profile (Gamma 2.2)", &g_state_display.checks[4], NULL, &g_state_display.is_dirty, NULL },
+    { 5, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Enable VESA Double Buffering Surface Compositor", &g_state_display.checks[5], NULL, &g_state_display.is_dirty, NULL },
+#if defined(BTRON_PS2_TARGET)
+    { 6, SETTINGS_CTL_RADIO, 2, 0, {0}, "OpenGL PS2: TinyGL software rasterizer (EE CPU)", &g_state_display.checks[6], NULL, &g_state_display.is_dirty, on_gl_tinygl },
+    { 7, SETTINGS_CTL_RADIO, 2, 0, {0}, "OpenGL PS2: EE/GS hardware rasterizer (GS, in progress)", &g_state_display.checks[7], NULL, &g_state_display.is_dirty, on_gl_eegs }
+#endif
+};
+
+static SETTINGS_SECTION s_display_sections[] = {
+    { " [1. Resolution & Video Mode] ", 1, 0, 3, 56, 94, {0} },
+    { " [2. DPI Scaling & Color Profiles] ", 1, 3, 3, 164, 94, {0} },
+#if defined(BTRON_PS2_TARGET)
+    { " [3. OpenGL PS2 Rasterizer] ", 1, 6, 2, 262, 78, {0} },
+#endif
 };
 
 static void paint_display_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
-
-    /* Background */
-    RECT r = { 0, 0, dev->width, dev->height };
-    fill_rec(dev, &r, COLOR_WHITE);
-    drw_rec(dev, &r);
-
-    /* Header Bar */
-    settings_draw_header(dev, "display", "Display", "画面表示", "Resolution & DPI scaling");
-
-    /* Section 1: Resolution & Video Mode */
-    RECT s1 = { 10, 56, dev->width - 10, 150 };
-    settings_draw_section(dev, &s1, " [1. Resolution & Video Mode] ");
-
-    /* Section 2: DPI Scaling & Color Profiles */
-    RECT s2 = { 10, 164, dev->width - 10, 258 };
-    settings_draw_section(dev, &s2, " [2. DPI Scaling & Color Profiles] ");
-
-    settings_draw_controls(dev, s_display_controls, 6);
-
-    /* Section 3: OpenGL PS2 Rasterizer */
-#if defined(BTRON_PS2_TARGET)
-    RECT s3 = { 10, 262, dev->width - 10, 340 };
-    settings_draw_section(dev, &s3, " [3. OpenGL PS2 Rasterizer] ");
-    settings_draw_ui_radio(dev, 18, 276, "OpenGL PS2: TinyGL software rasterizer (EE CPU)",
-                           gl_backend_selected() == GL_BACKEND_TINYGL, FALSE);
-    settings_draw_ui_radio(dev, 18, 298, "OpenGL PS2: EE/GS hardware rasterizer (GS, in progress)",
-                           gl_backend_selected() == GL_BACKEND_EEGS, FALSE);
-#endif
-
-    /* Action Buttons */
-    settings_draw_action_buttons(dev, g_state_display.is_dirty);
+    settings_draw_dialog(dev, "display", "Display", "画面表示", "Resolution & DPI scaling",
+                         s_display_sections, (int)(sizeof(s_display_sections) / sizeof(s_display_sections[0])),
+                         s_display_controls, (int)(sizeof(s_display_controls) / sizeof(s_display_controls[0])),
+                         g_state_display.is_dirty);
 }
 
 static void handle_display_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
-    if (settings_dispatch_control_event(wnd, s_display_controls, 6, evt)) return;
-#if defined(BTRON_PS2_TARGET)
-    if (settings_dispatch_control_event(wnd, s_display_ps2_controls, 2, evt)) return;
-#endif
-    settings_dispatch_action_buttons(wnd, evt, on_display_default, on_display_apply);
+    settings_dispatch_dialog_event(wnd,
+                                   s_display_sections, (int)(sizeof(s_display_sections) / sizeof(s_display_sections[0])),
+                                   s_display_controls, (int)(sizeof(s_display_controls) / sizeof(s_display_controls[0])),
+                                   evt, on_display_default, on_display_apply);
 }
 
 WND* open_display_settings_window(void) {
@@ -158,6 +144,10 @@ WND* open_display_settings_window(void) {
     g_state_display.checks[3] = TRUE;
     g_state_display.checks[4] = TRUE;
     g_state_display.checks[5] = TRUE;
+#if defined(BTRON_PS2_TARGET)
+    g_state_display.checks[6] = (gl_backend_selected() == GL_BACKEND_TINYGL);
+    g_state_display.checks[7] = (gl_backend_selected() == GL_BACKEND_EEGS);
+#endif
 
     WND *wnd = opn_wnd("画面表示設定 (Screen Display/Monitor Settings)",
                        80, 45, 640, 430,

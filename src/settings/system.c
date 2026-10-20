@@ -31,36 +31,26 @@ static void on_system_apply(WND *wnd) {
 }
 
 static SETTINGS_CONTROL s_system_controls[] = {
-    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 70, 480, 88 }, "B-System 3.20 (BTRON3 Cleanroom Implementation)", &g_state_system.checks[0], NULL, &g_state_system.is_dirty, NULL },
-    { 1, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 92, 480, 110 }, "Multi-Arch CPU Support (ARMv7, x86_64, PC-98)", &g_state_system.checks[1], NULL, &g_state_system.is_dirty, NULL },
-    { 2, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 114, 480, 132 }, "SMP Multiprocessing: 4 Active Preemptive Cores", &g_state_system.checks[2], NULL, &g_state_system.is_dirty, NULL },
-    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 136, 480, 154 }, "Memory Status: 1024 MB Physical RAM (874 MB Free)", &g_state_system.checks[3], NULL, &g_state_system.is_dirty, NULL }
+    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "B-System 3.20 (BTRON3 Cleanroom Implementation)", &g_state_system.checks[0], NULL, &g_state_system.is_dirty, NULL },
+    { 1, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Multi-Arch CPU Support (ARMv7, x86_64, PC-98)", &g_state_system.checks[1], NULL, &g_state_system.is_dirty, NULL },
+    { 2, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "SMP Multiprocessing: 4 Active Preemptive Cores", &g_state_system.checks[2], NULL, &g_state_system.is_dirty, NULL },
+    { 3, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Memory Status: 1024 MB Physical RAM (874 MB Free)", &g_state_system.checks[3], NULL, &g_state_system.is_dirty, NULL }
+};
+
+static SETTINGS_SECTION s_system_sections[] = {
+    { " [1. System Plane & Kernel Information] ", 1, 0, 4, 56, 116, {0} }
 };
 
 static void paint_system_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
-
-    /* Background */
-    RECT r = { 0, 0, dev->width, dev->height };
-    fill_rec(dev, &r, COLOR_WHITE);
-    drw_rec(dev, &r);
-
-    /* Header Bar */
-    settings_draw_header(dev, "system", "System", "基本情報", "System Plane, memory & SMP cores");
-
-    /* Section 1: System Plane & Kernel Information */
-    RECT s1 = { 10, 56, dev->width - 10, 172 };
-    settings_draw_section(dev, &s1, " [1. System Plane & Kernel Information] ");
-    settings_draw_controls(dev, s_system_controls, 4);
-
-    /* Action Buttons */
-    settings_draw_action_buttons(dev, g_state_system.is_dirty);
+    settings_draw_dialog(dev, "system", "System", "基本情報", "System Plane, memory & SMP cores",
+                         s_system_sections, 1, s_system_controls, 4, g_state_system.is_dirty);
 }
 
 static void handle_system_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
-    if (settings_dispatch_control_event(wnd, s_system_controls, 4, evt)) return;
-    settings_dispatch_action_buttons(wnd, evt, on_system_default, on_system_apply);
+    settings_dispatch_dialog_event(wnd, s_system_sections, 1, s_system_controls, 4, evt,
+                                   on_system_default, on_system_apply);
 }
 
 WND* open_system_settings_window(void) {

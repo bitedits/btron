@@ -268,6 +268,304 @@ static inline BOOL settings_dispatch_action_buttons(WND *wnd, const EVT *evt,
     return FALSE;
 }
 
+/* ── Responsive Auto-Layouter ─────────────────────────────────── */
+
+typedef struct {
+    H margin_x;         /* Left/right window edge margin (default: 10) */
+    H margin_top;       /* Space between 40px header and first section (default: 16 -> top = 56) */
+    H section_gap;      /* Vertical spacing between sections (default: 14) */
+    H padding_x;        /* Left/right padding inside section (default: 8) */
+    H padding_top;      /* Padding from section top to first control (default: 14) */
+    H padding_bottom;   /* Padding below last control to section bottom (default: 14) */
+    H row_height;       /* Height of each control row (default: 18) */
+    H row_gap;          /* Spacing between rows (default: 4) */
+    H footer_h;         /* Reserved footer height for action buttons (default: 35) */
+} SETTINGS_LAYOUT_METRICS;
+
+static inline SETTINGS_LAYOUT_METRICS settings_default_metrics(void) {
+    SETTINGS_LAYOUT_METRICS m = {
+        .margin_x = 10,
+        .margin_top = 16,
+        .section_gap = 14,
+        .padding_x = 8,
+        .padding_top = 14,
+        .padding_bottom = 14,
+        .row_height = 18,
+        .row_gap = 4,
+        .footer_h = 35
+    };
+    return m;
+}
+
+typedef struct SETTINGS_SECTION {
+    const char        *title;        /* Section title, e.g. " [1. Access Control Lists (ACL)] " */
+    int                columns;      /* 1 for vertical list, 2..5 for multi-column grid */
+    int                first_index;  /* Index in controls[] where this section starts */
+    int                count;        /* Number of controls in this section */
+    H                  start_y;      /* If > 0, explicit section top; if 0, auto-computed after previous section */
+    H                  height;       /* If > 0, explicit section height; if 0, auto-computed from rows */
+    RECT               rect;         /* Output: section bounding box calculated responsively */
+    H                  padding_top;  /* If > 0, override top padding inside this section */
+    H                  row_height;   /* If > 0, override row height inside this section */
+    H                  row_gap;      /* If > 0, override row gap inside this section */
+} SETTINGS_SECTION;
+
+/* Auto-layout a standard single-column dialog (with multi-column sections) */
+static inline void settings_layout_dialog(H width, H height,
+                                          SETTINGS_SECTION *sections, int section_count,
+                                          SETTINGS_CONTROL *controls, int total_controls,
+                                          const SETTINGS_LAYOUT_METRICS *opt_metrics) {
+    (void)height;
+    if (!sections || section_count <= 0) return;
+    SETTINGS_LAYOUT_METRICS m = opt_metrics ? *opt_metrics : settings_default_metrics();
+
+    H cur_y = 40 + m.margin_top;
+
+    for (int s = 0; s < section_count; s++) {
+        SETTINGS_SECTION *sec = &sections[s];
+        int cols = sec->columns > 0 ? sec->columns : 1;
+        int rows = (sec->count + cols - 1) / cols;
+
+        H p_top = sec->padding_top > 0 ? sec->padding_top : m.padding_top;
+        H r_h   = sec->row_height > 0  ? sec->row_height  : m.row_height;
+        H r_gap = sec->row_gap > 0     ? sec->row_gap     : m.row_gap;
+
+        H content_h = (rows > 0) ? (rows * r_h + (rows - 1) * r_gap) : 0;
+        H sec_h = sec->height > 0 ? sec->height : (p_top + content_h + m.padding_bottom);
+        H top = sec->start_y > 0 ? sec->start_y : cur_y;
+
+        sec->rect.left   = m.margin_x;
+        sec->rect.top    = top;
+        sec->rect.right  = width - m.margin_x;
+        sec->rect.bottom = top + sec_h;
+
+        if (controls && sec->count > 0 && sec->first_index >= 0) {
+            H avail_w = (sec->rect.right - sec->rect.left) - 2 * m.padding_x;
+            H col_w = (cols > 0 && avail_w > 0) ? (avail_w / cols) : avail_w;
+
+            for (int k = 0; k < sec->count; k++) {
+                int c_idx = sec->first_index + k;
+                if (c_idx >= total_controls) break;
+                SETTINGS_CONTROL *c = &controls[c_idx];
+
+                int col = k % cols;
+                int row = k / cols;
+
+                c->rect.left   = sec->rect.left + m.padding_x + col * col_w;
+                c->rect.right  = (col == cols - 1) ? (sec->rect.right - m.padding_x) : (c->rect.left + col_w - 4);
+                c->rect.top    = sec->rect.top + p_top + row * (r_h + r_gap);
+                c->rect.bottom = c->rect.top + r_h;
+            }
+        }
+
+        cur_y = sec->rect.bottom + m.section_gap;
+    }
+}
+
+/* Auto-layout a two-column dialog (e.g. Input Settings: Keyboard on left, Mouse on right) */
+static inline void settings_layout_columns(H width, H height,
+                                           SETTINGS_SECTION *left_secs, int left_count,
+                                           SETTINGS_SECTION *right_secs, int right_count,
+                                           SETTINGS_CONTROL *controls, int total_controls,
+                                           const SETTINGS_LAYOUT_METRICS *opt_metrics) {
+    (void)height;
+    SETTINGS_LAYOUT_METRICS m = opt_metrics ? *opt_metrics : settings_default_metrics();
+    H col_w = (width - 3 * m.margin_x) / 2;
+
+    /* Left Column */
+    H cur_y = 40 + m.margin_top;
+    for (int s = 0; s < left_count; s++) {
+        SETTINGS_SECTION *sec = &left_secs[s];
+        int cols = sec->columns > 0 ? sec->columns : 1;
+        int rows = (sec->count + cols - 1) / cols;
+
+        H p_top = sec->padding_top > 0 ? sec->padding_top : m.padding_top;
+        H r_h   = sec->row_height > 0  ? sec->row_height  : m.row_height;
+        H r_gap = sec->row_gap > 0     ? sec->row_gap     : m.row_gap;
+
+        H content_h = (rows > 0) ? (rows * r_h + (rows - 1) * r_gap) : 0;
+        H sec_h = sec->height > 0 ? sec->height : (p_top + content_h + m.padding_bottom);
+        H top = sec->start_y > 0 ? sec->start_y : cur_y;
+
+        sec->rect.left   = m.margin_x;
+        sec->rect.top    = top;
+        sec->rect.right  = m.margin_x + col_w;
+        sec->rect.bottom = top + sec_h;
+
+        if (controls && sec->count > 0 && sec->first_index >= 0) {
+            H avail_w = (sec->rect.right - sec->rect.left) - 2 * m.padding_x;
+            H cell_w = (cols > 0 && avail_w > 0) ? (avail_w / cols) : avail_w;
+            for (int k = 0; k < sec->count; k++) {
+                int c_idx = sec->first_index + k;
+                if (c_idx >= total_controls) break;
+                SETTINGS_CONTROL *c = &controls[c_idx];
+                int col = k % cols;
+                int row = k / cols;
+                c->rect.left   = sec->rect.left + m.padding_x + col * cell_w;
+                c->rect.right  = (col == cols - 1) ? (sec->rect.right - m.padding_x) : (c->rect.left + cell_w - 4);
+                c->rect.top    = sec->rect.top + p_top + row * (r_h + r_gap);
+                c->rect.bottom = c->rect.top + r_h;
+            }
+        }
+        cur_y = sec->rect.bottom + m.section_gap;
+    }
+
+    /* Right Column */
+    cur_y = 40 + m.margin_top;
+    H right_left = m.margin_x * 2 + col_w;
+    for (int s = 0; s < right_count; s++) {
+        SETTINGS_SECTION *sec = &right_secs[s];
+        int cols = sec->columns > 0 ? sec->columns : 1;
+        int rows = (sec->count + cols - 1) / cols;
+
+        H p_top = sec->padding_top > 0 ? sec->padding_top : m.padding_top;
+        H r_h   = sec->row_height > 0  ? sec->row_height  : m.row_height;
+        H r_gap = sec->row_gap > 0     ? sec->row_gap     : m.row_gap;
+
+        H content_h = (rows > 0) ? (rows * r_h + (rows - 1) * r_gap) : 0;
+        H sec_h = sec->height > 0 ? sec->height : (p_top + content_h + m.padding_bottom);
+        H top = sec->start_y > 0 ? sec->start_y : cur_y;
+
+        sec->rect.left   = right_left;
+        sec->rect.top    = top;
+        sec->rect.right  = width - m.margin_x;
+        sec->rect.bottom = top + sec_h;
+
+        if (controls && sec->count > 0 && sec->first_index >= 0) {
+            H avail_w = (sec->rect.right - sec->rect.left) - 2 * m.padding_x;
+            H cell_w = (cols > 0 && avail_w > 0) ? (avail_w / cols) : avail_w;
+            for (int k = 0; k < sec->count; k++) {
+                int c_idx = sec->first_index + k;
+                if (c_idx >= total_controls) break;
+                SETTINGS_CONTROL *c = &controls[c_idx];
+                int col = k % cols;
+                int row = k / cols;
+                c->rect.left   = sec->rect.left + m.padding_x + col * cell_w;
+                c->rect.right  = (col == cols - 1) ? (sec->rect.right - m.padding_x) : (c->rect.left + cell_w - 4);
+                c->rect.top    = sec->rect.top + p_top + row * (r_h + r_gap);
+                c->rect.bottom = c->rect.top + r_h;
+            }
+        }
+        cur_y = sec->rect.bottom + m.section_gap;
+    }
+}
+
+/* Canonical Dialog Rendering (Single Column of Sections) */
+static inline void settings_draw_dialog(GDEV *dev, const char *icon_name,
+                                        const char *title, const char *title_ja,
+                                        const char *subtitle,
+                                        SETTINGS_SECTION *sections, int section_count,
+                                        SETTINGS_CONTROL *controls, int total_controls,
+                                        BOOL is_dirty) {
+    if (!dev) return;
+
+    /* Background fill & frame */
+    RECT r = { 0, 0, dev->width, dev->height };
+    fill_rec(dev, &r, COLOR_WHITE);
+    drw_rec(dev, &r);
+
+    /* Header Bar */
+    settings_draw_header(dev, icon_name, title, title_ja, subtitle);
+
+    /* Responsive Auto-Layout */
+    settings_layout_dialog(dev->width, dev->height, sections, section_count,
+                           controls, total_controls, NULL);
+
+    /* Draw Sections */
+    for (int s = 0; s < section_count; s++) {
+        settings_draw_section(dev, &sections[s].rect, sections[s].title);
+    }
+
+    /* Draw Controls */
+    settings_draw_controls(dev, controls, total_controls);
+
+    /* Action Buttons (Default, Apply, Close) */
+    settings_draw_action_buttons(dev, is_dirty);
+}
+
+/* Canonical Dialog Rendering (Two Column Split) */
+static inline void settings_draw_dialog_columns(GDEV *dev, const char *icon_name,
+                                                const char *title, const char *title_ja,
+                                                const char *subtitle,
+                                                SETTINGS_SECTION *left_secs, int left_count,
+                                                SETTINGS_SECTION *right_secs, int right_count,
+                                                SETTINGS_CONTROL *controls, int total_controls,
+                                                BOOL is_dirty) {
+    if (!dev) return;
+
+    /* Background fill & frame */
+    RECT r = { 0, 0, dev->width, dev->height };
+    fill_rec(dev, &r, COLOR_WHITE);
+    drw_rec(dev, &r);
+
+    /* Header Bar */
+    settings_draw_header(dev, icon_name, title, title_ja, subtitle);
+
+    /* Responsive Auto-Layout */
+    settings_layout_columns(dev->width, dev->height, left_secs, left_count,
+                            right_secs, right_count, controls, total_controls, NULL);
+
+    /* Draw Sections */
+    for (int s = 0; s < left_count; s++) {
+        settings_draw_section(dev, &left_secs[s].rect, left_secs[s].title);
+    }
+    for (int s = 0; s < right_count; s++) {
+        settings_draw_section(dev, &right_secs[s].rect, right_secs[s].title);
+    }
+
+    /* Draw Controls */
+    settings_draw_controls(dev, controls, total_controls);
+
+    /* Action Buttons (Default, Apply, Close) */
+    settings_draw_action_buttons(dev, is_dirty);
+}
+
+/* Responsive Dialog Event Dispatcher (Single Column) */
+static inline BOOL settings_dispatch_dialog_event(WND *wnd,
+                                                  SETTINGS_SECTION *sections, int section_count,
+                                                  SETTINGS_CONTROL *controls, int total_controls,
+                                                  const EVT *evt,
+                                                  void (*on_default)(WND *wnd),
+                                                  void (*on_apply)(WND *wnd)) {
+    if (!wnd || !evt) return FALSE;
+    if (evt->type != EV_BUT_DOWN) return FALSE;
+
+    H client_w = wnd->client.right - wnd->client.left;
+    H client_h = wnd->client.bottom - wnd->client.top;
+
+    /* Recalculate layout for current window geometry */
+    settings_layout_dialog(client_w, client_h, sections, section_count,
+                           controls, total_controls, NULL);
+
+    if (settings_dispatch_control_event(wnd, controls, total_controls, evt)) {
+        return TRUE;
+    }
+    return settings_dispatch_action_buttons(wnd, evt, on_default, on_apply);
+}
+
+/* Responsive Dialog Event Dispatcher (Two Column) */
+static inline BOOL settings_dispatch_dialog_columns_event(WND *wnd,
+                                                          SETTINGS_SECTION *left_secs, int left_count,
+                                                          SETTINGS_SECTION *right_secs, int right_count,
+                                                          SETTINGS_CONTROL *controls, int total_controls,
+                                                          const EVT *evt,
+                                                          void (*on_default)(WND *wnd),
+                                                          void (*on_apply)(WND *wnd)) {
+    if (!wnd || !evt) return FALSE;
+    if (evt->type != EV_BUT_DOWN) return FALSE;
+
+    H client_w = wnd->client.right - wnd->client.left;
+    H client_h = wnd->client.bottom - wnd->client.top;
+
+    settings_layout_columns(client_w, client_h, left_secs, left_count,
+                            right_secs, right_count, controls, total_controls, NULL);
+
+    if (settings_dispatch_control_event(wnd, controls, total_controls, evt)) {
+        return TRUE;
+    }
+    return settings_dispatch_action_buttons(wnd, evt, on_default, on_apply);
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -153,7 +153,8 @@ static void init_ps2_input_controls(void) {
 }
 #endif
 
-static void apply_input_settings_to_kernel(void) {
+static void apply_input_settings_to_kernel(WND *wnd) {
+    (void)wnd;
     g_kbd_repeat_enabled = g_state_input.kbd_repeat_enable;
 
     /* Repeat Delay (*FX 11) */
@@ -195,7 +196,8 @@ static void apply_input_settings_to_kernel(void) {
     g_state_input.is_dirty = FALSE;
 }
 
-static void set_risc_os_defaults(void) {
+static void set_risc_os_defaults(WND *wnd) {
+    (void)wnd;
     g_state_input.kbd_repeat_enable  = TRUE;
     g_state_input.kbd_delay_sel      = 0;     /* 16cs (160ms) RISC OS Fast */
     g_state_input.kbd_rate_sel       = 0;     /* 40 cps Fast */
@@ -211,11 +213,57 @@ static void set_risc_os_defaults(void) {
     g_state_input.mouse_handedness   = 0;     /* Right-handed (Select/Menu/Adjust) */
     g_state_input.dbl_click_sel      = 1;     /* 50cs (500ms) RISC OS Default */
 
-    apply_input_settings_to_kernel();
+    apply_input_settings_to_kernel(wnd);
+}
+
+static SETTINGS_SECTION s_input_left_sec = {
+    .title = " [1. Keyboard Configuration (RISC OS)] ",
+    .columns = 1,
+    .first_index = 0,
+    .count = 11,
+    .start_y = 48,
+    .height = 332
+};
+
+static SETTINGS_SECTION s_input_right_sec = {
+#if defined(BTRON_PS2_TARGET)
+    .title = " [2. Pointer Configuration (proportional)] ",
+#else
+    .title = " [2. Mouse Configuration (Haiku & RISC OS)] ",
+#endif
+    .columns = 1,
+    .first_index = 11,
+    .count = 11,
+    .start_y = 48,
+    .height = 332
+};
+
+static void layout_input_dialog(H width, H height) {
+    (void)height;
+    H col_w = (width - 30) / 2;
+    s_input_left_sec.rect  = (RECT){ 10, 48, 10 + col_w, 380 };
+    s_input_right_sec.rect = (RECT){ 20 + col_w, 48, width - 10, 380 };
+
+    for (int i = 0; i < 11; i++) {
+        s_input_controls[i].rect.left  = s_input_left_sec.rect.left + 8;
+        s_input_controls[i].rect.right = s_input_left_sec.rect.right - 8;
+    }
+    for (int i = 11; i < (int)(sizeof(s_input_controls)/sizeof(s_input_controls[0])); i++) {
+        s_input_controls[i].rect.left  = s_input_right_sec.rect.left + 8;
+        s_input_controls[i].rect.right = s_input_right_sec.rect.right - 8;
+    }
+#if defined(BTRON_PS2_TARGET)
+    for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++) {
+        s_input_ps2_controls[i].rect.left  = s_input_right_sec.rect.left + 8;
+        s_input_ps2_controls[i].rect.right = s_input_right_sec.rect.right - 8;
+    }
+#endif
 }
 
 static void paint_input_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
+
+    layout_input_dialog(dev->width, dev->height);
 
     /* Window Background */
     RECT r = { 0, 0, dev->width, dev->height };
@@ -223,84 +271,68 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     drw_rec(dev, &r);
 
     /* Header Bar: Settings window icon 32x32 */
-    RECT hdr = { 0, 0, dev->width, 40 };
-    fill_rec(dev, &hdr, COLOR_LTGRAY);
-    drw_lin(dev, 0, 40, dev->width, 40);
-    draw_setting_gif_icon_scaled(dev, "input", 6, 4, 32, 32);
-    char hdr_str[128];
+    settings_draw_header(dev, "input", "Input", "入力環境",
 #if defined(BTRON_PS2_TARGET)
-    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — Pointer Gain & Keys", "Input", "入力環境");
+                         "Pointer Gain & Keys"
 #else
-    snprintf(hdr_str, sizeof(hdr_str), "[Settings Cabinet] %s (%s) — RISC OS & Haiku Input", "Input", "入力環境");
+                         "RISC OS & Haiku Input"
 #endif
-    drw_tc_string(dev, 46, 12, hdr_str, COLOR_BLACK, COLOR_LTGRAY);
+    );
 
-    /* ═══════════════════════════════════════════════════════════════════
-     * Section 1: Keyboard Configuration (Left Panel)
-     * ═══════════════════════════════════════════════════════════════════ */
-    RECT s1 = { 10, 48, 314, 380 };
-    fill_rec(dev, &s1, COLOR_WHITE);
-    drw_rec(dev, &s1);
-    drw_tc_string(dev, 16, 40, " [1. Keyboard Configuration (RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
+    /* Section 1: Keyboard Configuration (Left Panel) */
+    settings_draw_section(dev, &s_input_left_sec.rect, s_input_left_sec.title);
+    H lx = s_input_left_sec.rect.left;
 
-    settings_draw_ui_checkbox(dev, 18, 64, "Enable Auto-Repeat (*FX 11/12)", g_state_input.kbd_repeat_enable, FALSE);
+    settings_draw_ui_checkbox(dev, lx + 8, 64, "Enable Auto-Repeat (*FX 11/12)", g_state_input.kbd_repeat_enable, FALSE);
 
-    drw_tc_string(dev, 18, 88, "Auto-Repeat Delay (*FX 11):", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 22, 106, "Short: 16cs (160ms) [RISC OS Fast]", g_state_input.kbd_delay_sel == 0, FALSE);
-    settings_draw_ui_radio(dev, 22, 124, "Default: 32cs (320ms) [Acorn Archimedes]", g_state_input.kbd_delay_sel == 1, FALSE);
-    settings_draw_ui_radio(dev, 22, 142, "Long: 50cs (500ms) [BBC Micro Standard]", g_state_input.kbd_delay_sel == 2, FALSE);
+    drw_tc_string(dev, lx + 8, 88, "Auto-Repeat Delay (*FX 11):", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, lx + 12, 106, "Short: 16cs (160ms) [RISC OS Fast]", g_state_input.kbd_delay_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 124, "Default: 32cs (320ms) [Acorn Archimedes]", g_state_input.kbd_delay_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 142, "Long: 50cs (500ms) [BBC Micro Standard]", g_state_input.kbd_delay_sel == 2, FALSE);
 
-    drw_tc_string(dev, 18, 168, "Auto-Repeat Rate (*FX 12):", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 22, 186, "Fast: 40 cps (25ms interval)", g_state_input.kbd_rate_sel == 0, FALSE);
-    settings_draw_ui_radio(dev, 22, 204, "Standard: 25 cps (40ms interval)", g_state_input.kbd_rate_sel == 1, FALSE);
-    settings_draw_ui_radio(dev, 22, 222, "Slow: 12.5 cps (80ms interval)", g_state_input.kbd_rate_sel == 2, FALSE);
+    drw_tc_string(dev, lx + 8, 168, "Auto-Repeat Rate (*FX 12):", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, lx + 12, 186, "Fast: 40 cps (25ms interval)", g_state_input.kbd_rate_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 204, "Standard: 25 cps (40ms interval)", g_state_input.kbd_rate_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 222, "Slow: 12.5 cps (80ms interval)", g_state_input.kbd_rate_sel == 2, FALSE);
 
-    drw_tc_string(dev, 18, 248, "Keyboard Layout (*Configure Country):", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 22, 266, "Standard US ANSI 101/104", g_state_input.kbd_layout_sel == 0, FALSE);
-    settings_draw_ui_radio(dev, 22, 284, "Acorn British English (UK)", g_state_input.kbd_layout_sel == 1, FALSE);
-    settings_draw_ui_radio(dev, 22, 302, "Japanese JIS 106 (OADG)", g_state_input.kbd_layout_sel == 2, FALSE);
-    settings_draw_ui_radio(dev, 22, 320, "TRON Ergonomic Multilingual", g_state_input.kbd_layout_sel == 3, FALSE);
+    drw_tc_string(dev, lx + 8, 248, "Keyboard Layout (*Configure Country):", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, lx + 12, 266, "Standard US ANSI 101/104", g_state_input.kbd_layout_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 284, "Acorn British English (UK)", g_state_input.kbd_layout_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 302, "Japanese JIS 106 (OADG)", g_state_input.kbd_layout_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, lx + 12, 320, "TRON Ergonomic Multilingual", g_state_input.kbd_layout_sel == 3, FALSE);
 
-    /* ═══════════════════════════════════════════════════════════════════
-     * Section 2: Mouse Configuration (Right Panel)
-     * ═══════════════════════════════════════════════════════════════════ */
-    RECT s2 = { 324, 48, 628, 380 };
-    fill_rec(dev, &s2, COLOR_WHITE);
-    drw_rec(dev, &s2);
-#if defined(BTRON_PS2_TARGET)
-    drw_tc_string(dev, 330, 40, " [2. Pointer Configuration (proportional)] ", COLOR_NAVY, COLOR_WHITE);
-#else
-    drw_tc_string(dev, 330, 40, " [2. Mouse Configuration (Haiku & RISC OS)] ", COLOR_NAVY, COLOR_WHITE);
-#endif
+    /* Section 2: Mouse Configuration (Right Panel) */
+    settings_draw_section(dev, &s_input_right_sec.rect, s_input_right_sec.title);
+    H rx = s_input_right_sec.rect.left;
 
 #if defined(BTRON_PS2_TARGET)
-    drw_tc_string(dev, 332, 62, "Pointer Gain (this port has no curve):",
+    drw_tc_string(dev, rx + 8, 62, "Pointer Gain (this port has no curve):",
                   COLOR_NAVY, COLOR_WHITE);
     for (int i = 0; i < BTRON_PTR_GAIN_STEPS; i++)
-        settings_draw_ui_radio(dev, 336, (H)(78 + i * 16), btron_ptr_gain_label(i),
+        settings_draw_ui_radio(dev, rx + 12, (H)(78 + i * 16), btron_ptr_gain_label(i),
                                g_state_input.mouse_gain_sel == i, FALSE);
 #else
-    drw_tc_string(dev, 332, 62, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 336, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
-    settings_draw_ui_radio(dev, 336, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
-    settings_draw_ui_radio(dev, 336, 110, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
-    settings_draw_ui_radio(dev, 336, 126, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
+    drw_tc_string(dev, rx + 8, 62, "Tracking Speed (*Configure MouseStep):", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, rx + 12, 78, "Step 1: 1.0x Slow Precision", g_state_input.mouse_step_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 94, "Step 2: 2.0x Standard (RISC OS CMOS)", g_state_input.mouse_step_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 110, "Step 3: 3.0x Fast Sweep", g_state_input.mouse_step_sel == 2, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 126, "Step 4: 4.0x Ultra Velocity", g_state_input.mouse_step_sel == 3, FALSE);
 
-    drw_tc_string(dev, 332, 146, "Acceleration Engine Profile:", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 336, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
-    settings_draw_ui_radio(dev, 336, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
+    drw_tc_string(dev, rx + 8, 146, "Acceleration Engine Profile:", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, rx + 12, 162, "Haiku OS Continuous 2D (Smooth)", g_state_input.mouse_profile_sel == 1, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 178, "RISC OS Stepped (Archimedes)", g_state_input.mouse_profile_sel == 0, FALSE);
 #endif
 
-    drw_tc_string(dev, 332, 198, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 336, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
-    settings_draw_ui_radio(dev, 336, 230, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
+    drw_tc_string(dev, rx + 8, 198, "Three-Button Model (Select, Menu, Adjust):", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, rx + 12, 214, "Right-Hand: [Select] [Menu] [Adjust]", g_state_input.mouse_handedness == 0, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 230, "Left-Hand:  [Adjust] [Menu] [Select]", g_state_input.mouse_handedness == 1, FALSE);
 
-    drw_tc_string(dev, 332, 250, "Double-Click Threshold:", COLOR_NAVY, COLOR_WHITE);
-    settings_draw_ui_radio(dev, 336, 266, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
-    settings_draw_ui_radio(dev, 336, 282, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
+    drw_tc_string(dev, rx + 8, 250, "Double-Click Threshold:", COLOR_NAVY, COLOR_WHITE);
+    settings_draw_ui_radio(dev, rx + 12, 266, "40 cs (400ms interval)", g_state_input.dbl_click_sel == 0, FALSE);
+    settings_draw_ui_radio(dev, rx + 12, 282, "50 cs (500ms [RISC OS default])", g_state_input.dbl_click_sel == 1, FALSE);
 
     /* Interactive Double-Click Test Area */
-    RECT test_box = { 334, 304, 618, 366 };
+    RECT test_box = { rx + 10, 304, s_input_right_sec.rect.right - 10, 366 };
     COLOR test_bg = COLOR_LTGRAY;
     if (g_state_input.test_click_status == 2) {
         test_bg = COLOR_GREEN;
@@ -315,63 +347,30 @@ static void paint_input_settings(WND *wnd, GDEV *dev) {
     if (g_state_input.test_click_status == 2) {
         char msg[64];
         snprintf(msg, sizeof(msg), "[✔] Double-Click OK! (%u ms)", (unsigned int)g_state_input.test_click_delta_ms);
-        drw_tc_string(dev, 350, 328, msg, COLOR_WHITE, COLOR_GREEN);
+        drw_tc_string(dev, rx + 26, 328, msg, COLOR_WHITE, COLOR_GREEN);
     } else if (g_state_input.test_click_status == 1) {
-        drw_tc_string(dev, 350, 328, "[..] Click again to verify double-click", COLOR_BLACK, COLOR_YELLOW);
+        drw_tc_string(dev, rx + 26, 328, "[..] Click again to verify double-click", COLOR_BLACK, COLOR_YELLOW);
     } else {
-        drw_tc_string(dev, 350, 328, "[ Test Area: Double-Click Here ]", COLOR_DKGRAY, COLOR_LTGRAY);
+        drw_tc_string(dev, rx + 26, 328, "[ Test Area: Double-Click Here ]", COLOR_DKGRAY, COLOR_LTGRAY);
     }
 
-    /* ═══════════════════════════════════════════════════════════════════
-     * Bottom Action Buttons
-     * ═══════════════════════════════════════════════════════════════════ */
-    H btn_y = dev->height - 36;
-#if defined(BTRON_PS2_TARGET)
-    settings_draw_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Defaults", FALSE);
-#else
-    settings_draw_ui_button(dev, dev->width - 340, btn_y, 140, 26, "Default (RISC OS)", FALSE);
-#endif
-    settings_draw_ui_button(dev, dev->width - 185, btn_y, 85, 26, "Apply", g_state_input.is_dirty);
-    settings_draw_ui_button(dev, dev->width - 85, btn_y, 75, 26, "Close", FALSE);
+    /* Bottom Action Buttons */
+    settings_draw_action_buttons(dev, g_state_input.is_dirty);
 }
 
 static void handle_input_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
 
     if (evt->type == EV_BUT_DOWN) {
+        H client_w = wnd->client.right - wnd->client.left;
+        H client_h = wnd->client.bottom - wnd->client.top;
+        layout_input_dialog(client_w, client_h);
+
         if (settings_dispatch_control_event(wnd, s_input_controls, (int)(sizeof(s_input_controls)/sizeof(s_input_controls[0])), evt)) return;
 #if defined(BTRON_PS2_TARGET)
         if (settings_dispatch_control_event(wnd, s_input_ps2_controls, BTRON_PTR_GAIN_STEPS, evt)) return;
 #endif
-
-        H rel_x = evt->pos.x - wnd->client.left;
-        H rel_y = evt->pos.y - wnd->client.top;
-        H client_w = wnd->client.right - wnd->client.left;
-        H client_h = wnd->client.bottom - wnd->client.top;
-        H btn_y = client_h - 36;
-
-        if (rel_y >= btn_y && rel_y <= btn_y + 26) {
-            /* Default (RISC OS / Haiku) */
-            if (rel_x >= client_w - 340 && rel_x <= client_w - 200) {
-                set_risc_os_defaults();
-                inval_wnd(wnd);
-                redraw_all_windows();
-                return;
-            }
-            /* Apply */
-            if (rel_x >= client_w - 185 && rel_x <= client_w - 100) {
-                apply_input_settings_to_kernel();
-                inval_wnd(wnd);
-                redraw_all_windows();
-                return;
-            }
-            /* Close */
-            if (rel_x >= client_w - 85 && rel_x <= client_w - 10) {
-                g_state_input.wnd = NULL;
-                cls_wnd(wnd);
-                return;
-            }
-        }
+        settings_dispatch_action_buttons(wnd, evt, set_risc_os_defaults, apply_input_settings_to_kernel);
     }
 }
 

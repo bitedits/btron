@@ -36,43 +36,29 @@ static void on_desktop_apply(WND *wnd) {
 }
 
 static SETTINGS_CONTROL s_desktop_controls[] = {
-    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 70, 480, 88 }, "Enable Real Body / Virtual Body (実身・仮身) Dual Storage", &g_state_desktop.checks[0], NULL, &g_state_desktop.is_dirty, NULL },
-    { 1, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 92, 480, 110 }, "Magnetic Snap-to-Grid for Desktop Icons (48x48px)", &g_state_desktop.checks[1], NULL, &g_state_desktop.is_dirty, NULL },
-    { 2, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 114, 480, 132 }, "Double-Click executes associated Application Viewer", &g_state_desktop.checks[2], NULL, &g_state_desktop.is_dirty, NULL },
-    { 3, SETTINGS_CTL_RADIO, 1, 0, { 18, 178, 480, 196 }, "Classic Solid Teal (RGB 0x008080) Retro Surface", &g_state_desktop.checks[3], NULL, &g_state_desktop.is_dirty, NULL },
-    { 4, SETTINGS_CTL_RADIO, 1, 0, { 18, 200, 480, 218 }, "TAD Fusen Geometric Tile Background Pattern", &g_state_desktop.checks[4], NULL, &g_state_desktop.is_dirty, NULL },
-    { 5, SETTINGS_CTL_CHECKBOX, 0, 0, { 18, 222, 480, 240 }, "Dock Deskbar to Top Edge with Task Tracker", &g_state_desktop.checks[5], NULL, &g_state_desktop.is_dirty, NULL }
+    { 0, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Enable Real Body / Virtual Body (実身・仮身) Dual Storage", &g_state_desktop.checks[0], NULL, &g_state_desktop.is_dirty, NULL },
+    { 1, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Magnetic Snap-to-Grid for Desktop Icons (48x48px)", &g_state_desktop.checks[1], NULL, &g_state_desktop.is_dirty, NULL },
+    { 2, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Double-Click executes associated Application Viewer", &g_state_desktop.checks[2], NULL, &g_state_desktop.is_dirty, NULL },
+    { 3, SETTINGS_CTL_RADIO, 1, 0, {0}, "Classic Solid Teal (RGB 0x008080) Retro Surface", &g_state_desktop.checks[3], NULL, &g_state_desktop.is_dirty, NULL },
+    { 4, SETTINGS_CTL_RADIO, 1, 0, {0}, "TAD Fusen Geometric Tile Background Pattern", &g_state_desktop.checks[4], NULL, &g_state_desktop.is_dirty, NULL },
+    { 5, SETTINGS_CTL_CHECKBOX, 0, 0, {0}, "Dock Deskbar to Top Edge with Task Tracker", &g_state_desktop.checks[5], NULL, &g_state_desktop.is_dirty, NULL }
+};
+
+static SETTINGS_SECTION s_desktop_sections[] = {
+    { " [1. Workbench Virtual Object Modes] ", 1, 0, 3, 56, 94, {0} },
+    { " [2. Background Surface & Patterns] ",   1, 3, 3, 164, 94, {0} }
 };
 
 static void paint_desktop_settings(WND *wnd, GDEV *dev) {
     if (!wnd || !dev) return;
-
-    /* Background */
-    RECT r = { 0, 0, dev->width, dev->height };
-    fill_rec(dev, &r, COLOR_WHITE);
-    drw_rec(dev, &r);
-
-    /* Header Bar */
-    settings_draw_header(dev, "desktop", "Desktop", "デスクトップ", "Workbench behaviour & icon grid");
-
-    /* Section 1: Workbench Virtual Object Modes */
-    RECT s1 = { 10, 56, dev->width - 10, 150 };
-    settings_draw_section(dev, &s1, " [1. Workbench Virtual Object Modes] ");
-
-    /* Section 2: Background Surface & Patterns */
-    RECT s2 = { 10, 164, dev->width - 10, 258 };
-    settings_draw_section(dev, &s2, " [2. Background Surface & Patterns] ");
-
-    settings_draw_controls(dev, s_desktop_controls, 6);
-
-    /* Action Buttons */
-    settings_draw_action_buttons(dev, g_state_desktop.is_dirty);
+    settings_draw_dialog(dev, "desktop", "Desktop", "デスクトップ", "Workbench behaviour & icon grid",
+                         s_desktop_sections, 2, s_desktop_controls, 6, g_state_desktop.is_dirty);
 }
 
 static void handle_desktop_event(WND *wnd, const EVT *evt) {
     if (!wnd || !evt) return;
-    if (settings_dispatch_control_event(wnd, s_desktop_controls, 6, evt)) return;
-    settings_dispatch_action_buttons(wnd, evt, on_desktop_default, on_desktop_apply);
+    settings_dispatch_dialog_event(wnd, s_desktop_sections, 2, s_desktop_controls, 6, evt,
+                                   on_desktop_default, on_desktop_apply);
 }
 
 WND* open_desktop_settings_window(void) {

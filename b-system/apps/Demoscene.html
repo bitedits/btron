@@ -8,6 +8,65 @@
   <link rel="stylesheet" href="../../index.css">
   <link rel="stylesheet" href="../settings/settings.css">
   <link rel="stylesheet" href="./apps.css">
+  <style>
+    /* Links styled to match page rosy/plum theme */
+    .setting-features a, .section a {
+      color: #be185d;
+      font-weight: 600;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(190, 24, 93, 0.45);
+      transition: color 0.2s ease, border-color 0.2s ease;
+    }
+    .setting-features a:hover, .section a:hover {
+      color: DarkMagenta;
+      border-bottom: 1px solid DarkMagenta;
+    }
+    .code-block pre {
+      background: rgba(255, 255, 255, 0.7);
+      border: 1.5px solid rgba(255, 93, 162, 0.35);
+      border-radius: 10px;
+      padding: 0.9rem 1.1rem;
+      color: DarkMagenta;
+      font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      overflow-x: auto;
+      margin: 0.8rem 0;
+    }
+    .stage-card {
+      background: rgba(255, 255, 255, 0.65);
+      border: 1.5px solid rgba(255, 93, 162, 0.35);
+      border-radius: 14px;
+      padding: 1.2rem 1.5rem;
+      margin: 1.2rem 0;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 16px rgba(255, 93, 162, 0.1);
+    }
+    .stage-card h3 {
+      margin: 0 0 0.5rem;
+      color: DarkMagenta;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    .stage-card p {
+      margin: 0.4rem 0;
+      font-size: 0.9rem;
+      color: #4a3560;
+      line-height: 1.65;
+    }
+    .stage-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.18rem 0.6rem;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 93, 162, 0.4);
+      color: DarkMagenta;
+      margin-right: 0.4rem;
+      margin-bottom: 0.4rem;
+    }
+  </style>
 </head>
 <body>
   <nav class="sticky" aria-label="Site navigation">
@@ -44,13 +103,13 @@
     <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>リル・キューブ 64（Lil Cu 64 Demoscene）</strong> — B-System公式マスコット「Lil Cube」が4次元ホップ束（Hopf Fibration）の数理幾何宇宙を浮遊・舞踏するC99/OpenGL ES 1.1ネイティブデモシーン。48音ポリフォニック・プロシージャルDSPシンセサイザーとキネマティクス同期。<br>
+      <strong>リル・キューブ 64（Lil Cu 64 Demoscene）</strong> — B-System公式マスコット「Lil Cube」が4次元ホップ束（Hopf Fibration）の数理幾何宇宙を浮遊・舞踏するC99/OpenGL ES 1.1ネイティブデモシーン。外部PCM不要の確定論的プロシージャルDSP音響シム（Sound Shim）エンジンと3Dキネマティクスが完全同期。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
         "Official technical specification for the Lil Cu 64 native OpenGL demoscene application within the B-System operating environment."
       </span>
     </div>
 
-                                                                                                                <!-- 画面プレビュー -->
+    <!-- 画面プレビュー -->
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
       <div class="screen-preview">
@@ -59,79 +118,486 @@
       </div>
     </div>
 
-<div class="section">
-      <h2>概要 (Overview)</h2>
+    <div class="section">
+      <h2>概要と音響視覚シム原理 (Overview &amp; Audio-Visual Shim Principle)</h2>
       <p>
-        リル・キューブ 64（Lil Cu 64）は、B-Systemの仕様に準拠したC99/OpenGL ES 1.1ネイティブ実装のリアルタイム3Dデモシーンです。
-        Webフロントエンド（index.html）のThree.js/WebAudio版実装と1:1の数式モデルを共有し、4次元超球面 \(S^3 \subset \mathbb{R}^4\) から2次元リーマン球面 \(S^2\) へのファイバー束写像 \(p: S^3 \to S^2\) をリアルタイムパラメトリック演算して描画します。
-        公式マスコット「Lil Cube」は、等積呼吸・歩行・浮遊跳躍・歌唱・回転の各キネマティクス状態を持ち、マウス視線追従および48音ポリフォニック確定論的DSPシンセサイザー（44.1kHzステレオ）と完全同期して動作します。
+        リル・キューブ 64（Lil Cu 64）は、B-System仕様に準拠したC99/OpenGL ES 1.1ネイティブ実装のリアルタイム3Dデモシーンです。
+        Webフロントエンド（<code>index.html</code>）のThree.js/WebAudio版実装と1:1の数理モデルを共有し、4次元超球面 <i>S</i>³ ⊂ ℝ⁴ から2次元リーマン球面 <i>S</i>² へのファイバー束写像 <i>p</i>: <i>S</i>³ → <i>S</i>² をリアルタイムパラメトリック演算して描画します。
+      </p>
+      <p style="margin-top:0.8rem;">
+        本システムの中核思想は「<b>音響視覚シム原理（Audio-Visual Shim Principle）</b>」にあります。従来のゲーム開発における「別個に録音されたWAVファイルをアニメーションイベントにアタッチする」手法を完全に廃し、キャラクターのすべての3D運動学的動作（キネマティクス）を確定論的DSP合成関数「<b>音響シム（Sound Shim）</b>」に1対1で直結しています。外部PCMサンプルファイルは一切不要（<b>0バイト資産</b>）であり、100KB以下の埋め込みコードで48音ポリフォニックの壮大なオーケストラ・ジャズ・インダストリアル音響を即時生成します。
       </p>
     </div>
 
     <div class="section">
-      <h2>1. マスコット・キネマティクスと操作体系 (Mascot Kinematics &amp; Controls)</h2>
+      <h2>1. 3D幾何モデルとシーングラフ階層 (Low-Poly 3D Geometry &amp; Scene Graph)</h2>
       <p>
-        Lil Cu 64 の状態機械、視線追従、4D幾何学、およびキーバインディング仕様。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Kinematic state machine, 4D Hopf geometry parameters, and interactive key bindings."</span>
+        Lil Cube 64 は、B-Systemの象徴である神聖氷晶キューブのマスコットです。N64 / PS1 レトロ3Dゲームの美学と4次元幾何学の純粋性を体現し、厳格なポリゴン予算内で設計されています。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Low-poly polygon budget, flat shading, and non-linear hierarchical scene graph."</span>
       </p>
       <table class="market-table">
         <thead>
           <tr>
-            <th>キネマティクス／機能</th>
-            <th>動作概要と数理モデル (Mathematical &amp; Behavioral Model)</th>
-            <th>キー操作・トリガー (Key Bindings)</th>
+            <th>項目 (Attribute)</th>
+            <th>設計仕様 (Specification)</th>
+            <th>技術詳細 (Technical Details)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><b>等積呼吸 (Idle Breath)</b></td>
-            <td>体積不変（Isovolumetric）を保ちながらY軸スケールとXZ軸スケールが逆位相で呼吸振動。</td>
-            <td>通常待機状態</td>
+            <td><b>ポリゴン予算 (Poly Budget)</b></td>
+            <td>頂点数 64〜128、総三角形数 180未満</td>
+            <td>テクスチャ非依存、頂点カラー環境遮蔽（AO）ベイク</td>
           </tr>
           <tr>
-            <td><b>歩行振動 (Waddle Walk)</b></td>
-            <td>左右の足部ゼロ交差に同期したリズミカルな左右揺動とキック音トリガー。</td>
-            <td><code>[W]</code> キー</td>
+            <td><b>シェーディング (Shading)</b></td>
+            <td>フラットシェーディング (Facet Shading)</td>
+            <td>90年代コンソール風の明瞭な多面体エッジ表現</td>
           </tr>
           <tr>
-            <td><b>浮遊跳躍 (Float Jump)</b></td>
-            <td>頂点アペックスでの微小浮遊滞空と着地時のボヨン弾性変形（Squash &amp; Stretch）。</td>
-            <td><code>[F]</code> キー</td>
+            <td><b>カラーパレット (Palette)</b></td>
+            <td>シアン / 氷白 (<code>#80e5ff</code>〜<code>#ffffff</code>)</td>
+            <td>サファイアブルー手足 (<code>#0284c7</code>)、黄金の光輪 (<code>#facc15</code>)</td>
           </tr>
           <tr>
-            <td><b>ピルエット (Pirouette Dance)</b></td>
-            <td>90度ごとの高速スピン旋回と16分音符アルペジオ同期。</td>
-            <td><code>[D]</code> キー</td>
+            <td><b>体躯構成 (Anatomy)</b></td>
+            <td>面取り直方体コア、六角柱眼球、浮遊ミトン手、楕円足</td>
+            <td>頭頂部には18本のホップ束トーラスリング（神聖光輪）を配置</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">シーングラフ・ピボット階層構造 (Hierarchical Pivot Structure)</h3>
+      <p>ボーンスキニングを用いずに非線形な潰れ・伸び（Squash &amp; Stretch）と歩行揺動を実現するため、原点ピボット（足底 <i>y</i> = −1.25）を基準とした親子階層を採用しています：</p>
+      <div class="code-block">
+<pre><code>rootGroup (グローバル座標変換, XZ平面移動, Y軸跳躍)
+  ├── nimbusRings (4次元ホップ束リングの回転姿勢)
+  └── bodyGroup (潰れ・伸びローカル変形アンカー: 底面 y = -1.25)
+        ├── torsoMesh (面取りコアキューブ本体)
+        ├── leftEyeMesh &amp; rightEyeMesh (眼球サッカード運動・まばたき)
+        ├── leftHandPivot &amp; rightHandPivot (浮遊ミトン手の羽ばたき)
+        └── feetGroup
+              ├── leftFootPivot (左足首ピッチ/ロール回転)
+              └── rightFootPivot (右足首ピッチ/ロール回転)</code></pre>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>2. アニメーション状態機械とキネマティクス (Kinematics &amp; Shim Mapping)</h2>
+      <p>
+        60 FPS（16.66ms）のメインレンダーループ内で動作する7つの基本マスコット状態と、音響シムとの位相ロック（Phase-Locking）仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"7 canonical mascot states, kinematic equations, and deterministic sound shim couplings."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>マスコット状態</th>
+            <th>運動力学数理モデル (Kinematic Equations)</th>
+            <th>連動音響シム (Coupled Sound Shim)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>1. 待機呼吸 (IDLE)</b></td>
+            <td><i>y</i> = <i>y</i>₀ + 0.05·sin(2.2<i>t</i>)<br><i>s<sub>y</sub></i> = 1.0 + 0.03·sin(2.2<i>t</i>), <i>s<sub>xz</sub></i> = 1 / √(<i>s<sub>y</sub></i>) (等積保存)</td>
+            <td><code>shimPulseBell</code>（金色アンビエントドローン）</td>
           </tr>
           <tr>
-            <td><b>歌唱 (Sing / Sacred Pulse)</b></td>
-            <td>頭頂部ジェムの5倍速高速回転、サックスフルート音響と放射状パルス波の発生。</td>
-            <td><code>[Space]</code>, <code>[P]</code>, <code>[J]</code> またはマスコットクリック</td>
+            <td><b>2. てくてく歩行 (WADDLE)</b></td>
+            <td>足 rotX = ±0.45·sin(φ), 胴体 rotZ = 0.08·sin(φ)<br><i>y</i> = 0.12·|sin(2φ)| (左右足踏みピッチロール)</td>
+            <td><code>shimWaddle(time, freq, vol)</code>（足踏みゼロ交差で基音/5度音のアコースティックウォーキングベース）</td>
           </tr>
           <tr>
-            <td><b>視線追従 (Gaze Tracking)</b></td>
-            <td>マウスポインタのXY座標に応じた頭部クォータニオンと眼球3D追従。</td>
-            <td>マウス移動</td>
+            <td><b>3. ぷかぷか飛行 (FLOAT)</b></td>
+            <td><i>y</i> = <i>y</i>₀ + 0.8 + 0.25·sin(1.8<i>t</i>), rotX = −0.15 + 0.05·sin(1.8<i>t</i>)<br>足 rotX = 0.35（無重力浮遊ドリフト）</td>
+            <td><code>shimFloat(time, 'm9', vol)</code>（頂点アペックス到達時に発火するRhodesモーダルローリング和音）</td>
           </tr>
           <tr>
-            <td><b>4D Hopf Fibration 密度</b></td>
-            <td>ファイバー本数・ステップ密度の動的切り替え（Sparse / Medium / Dense）。</td>
-            <td><code>[&lt; / ,]</code> 前, <code>[&gt; / .]</code> 次</td>
+            <td><b>4. 氷晶ダンス (DANCE)</b></td>
+            <td>rotY += 0.12 (高速ピルエット連続回転)<br><i>y</i> = 0.28·|sin(8<i>t</i>)|, 腕 rotZ = 0.65·sin(8<i>t</i>)</td>
+            <td><code>shimDance(time, scale, vol)</code>（90度旋回ごとに放出される16分音符星屑アルペジオ）</td>
           </tr>
           <tr>
-            <td><b>DSP 楽曲シーケンス</b></td>
-            <td>Track 1〜4（4つのテーマ楽曲）のリアルタイム即時切り替え、ミュート切り替え。</td>
-            <td><code>[1]</code>〜<code>[4]</code>, <code>[M]</code></td>
+            <td><b>5. 神聖波動 (SQUASH)</b></td>
+            <td>0〜80ms: <i>s<sub>y</sub></i> = 0.60, <i>s<sub>xz</sub></i> = 1.30 (予備圧縮)<br>80〜200ms: <i>s<sub>y</sub></i> = 1.45, <i>s<sub>xz</sub></i> = 0.82 (跳躍伸長)<br>200〜450ms: 減衰振動復帰</td>
+            <td><code>shimPulseSquash(time, pitch, vol)</code>（デュアルPWM矩形波パルス）＋ <code>shimPianoHammer</code>（打撃衝撃）</td>
+          </tr>
+          <tr>
+            <td><b>6. 跳躍・着地 (JUMP)</b></td>
+            <td>放物線弾道軌道（予備圧縮 → アペックス浮遊 → 急降下 → 地面着地弾性変形）</td>
+            <td>跳躍風切り音 → 着地時に <code>shimPianoHammer</code> ＋ <code>shimKick</code></td>
+          </tr>
+          <tr>
+            <td><b>7. 天球熱唱 (SING)</b></td>
+            <td>頭部仰角+25度、胴体膨張、神聖光輪の極大放射</td>
+            <td><code>shimPulseSquash</code>（歌唱主旋律）＋ <code>shimSaxFlute</code>（高音対位法リード）</td>
           </tr>
         </tbody>
       </table>
     </div>
 
     <div class="section">
-      <h2>2. 機能仕様とアーキテクチャ (Functional &amp; Architecture Specifications)</h2>
+      <h2>3. プロシージャルDSPシンセサイザーの数理基盤 (Mathematical Foundations of Procedural DSP Synthesizer)</h2>
       <p>
-        Lil Cu 64 アプリケーションの内部構造、DSP音響エンジン、およびシステムコール仕様。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Audio synthesis pipeline, VU0/SIMD vector math acceleration, and OpenGL state machine."</span>
+        BTRON音響エンジン（<code>btron-sound.tex</code>）は、外部PCMサンプルを一切使用せず、信号処理の第一原理（オシレータ、ノイズバッファ、双二次フィルタ、非線形飽和歪み、動的VCAオートメーション）から全ての音響を決定論的に合成します。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Theoretical synthesis paradigms, physical acoustics modelling, transfer functions, and zero-leak lifecycle theorems."</span>
+      </p>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.1 5大音響合成パラダイムの数理モデル (Mathematical Models of 5 Synthesis Paradigms)</h3>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>合成パラダイム</th>
+            <th>数理定式化 (Mathematical Formulation)</th>
+            <th>BTRON適用シムと物理音響 (Application &amp; Physics)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>加算合成 (Additive Synthesis)</b></td>
+            <td><i>y</i>(<i>t</i>) = ∑ [<i>k</i>=1..<i>K</i>] <i>A</i><sub><i>k</i></sub>(<i>t</i>) · sin(2π <i>f</i><sub><i>k</i></sub><i>t</i> + φ<sub><i>k</i></sub>)</td>
+            <td><code>shimPulseSquash</code>（6正弦波上昇三和音）、<code>shimPulseBell</code>（8正弦波霊性ベル）、<code>shimGrandPiano</code>（3倍音弦振動）など。部分音ごとに個別のADSRエンベロープ <i>A</i><sub><i>k</i></sub>(<i>t</i>) を適用。</td>
+          </tr>
+          <tr>
+            <td><b>減算合成とBiquad伝達関数 (Subtractive)</b></td>
+            <td><i>H</i>(<i>z</i>) = (<i>b</i>₀ + <i>b</i>₁<i>z</i>⁻¹ + <i>b</i>₂<i>z</i>⁻²) / (1 + <i>a</i>₁<i>z</i>⁻¹ + <i>a</i>₂<i>z</i>⁻²)<br>共振器: <i>H</i><sub>body</sub>(<i>s</i>) = ∑<sub><i>n</i></sub> <i>G</i><sub><i>n</i></sub>ω<sub><i>n</i></sub>² / (<i>s</i>² + (ω<sub><i>n</i></sub>/<i>Q</i><sub><i>n</i></sub>)<i>s</i> + ω<sub><i>n</i></sub>²)</td>
+            <td>鋸歯状波・三角波・ノイズなどの倍音豊富な波形を共振双二次フィルタ（ローパス・バンドパス・ピーキング）で成形。尖鋭度 <i>Q</i><sub><i>n</i></sub> = <i>f</i><sub><i>n</i></sub> / Δ<i>f</i><sub><i>n</i></sub>。<code>shimGuitar</code>, <code>shimCello</code>, <code>shimIndustrialBass</code>, <code>shimSaxFlute</code> に採用。</td>
+          </tr>
+          <tr>
+            <td><b>FM周波数変調合成 (FM Synthesis)</b></td>
+            <td><i>y</i>(<i>t</i>) = <i>A</i><sub><i>c</i></sub> · sin(2π <i>f</i><sub><i>c</i></sub><i>t</i> + <i>I</i>(<i>t</i>) · sin(2π <i>f</i><sub><i>m</i></sub><i>t</i>))</td>
+            <td>変調指数 <i>I</i>(<i>t</i>) に応じたベッセル関数 <i>J</i><sub><i>n</i></sub>(<i>I</i>) の側波帯分布。非整数比 <i>r</i> = <i>f</i><sub><i>m</i></sub>/<i>f</i><sub><i>c</i></sub> ∉ ℤ により金属質倍音を生成。<code>shimPulseBell</code>（2-Op FM, <i>r</i> ≈ 2.76 相当の金色アンビエントベル）に結実。</td>
+          </tr>
+          <tr>
+            <td><b>Karplus-Strong &amp; 導波管 (Waveguide)</b></td>
+            <td>ループ遅延 <i>N</i> = <i>f</i><sub><i>s</i></sub> / <i>f</i>₀, <i>H</i><sub>lp</sub>(<i>z</i>) = (1 + <i>z</i>⁻¹) / 2</td>
+            <td>撥弦・打弦の巡回型遅延フィードバックと進行波物理。<code>shimGuitar</code> では動的ローパス掃引（2800 → 1400 Hz）による等価コム共振・高域減衰モデリングを実現。</td>
+          </tr>
+          <tr>
+            <td><b>Chebyshev 非線形飽和歪み (WaveShaper)</b></td>
+            <td><i>C</i>(<i>x</i>) = [((3 + <i>k</i>) · <i>x</i> · 20°) / (π + <i>k</i>·|<i>x</i>|)] / maxVal<br>(20° = 20π / 180, 歪み係数 <i>k</i> = 25)</td>
+            <td>デジタルクリッピングを排し、偶数・奇数倍音を音楽的に励起する真空管ウォームサチュレーション。<code>shimIndustrialBass</code>, <code>shimCyberLead</code>, <code>shimIndustrialKick</code> の重厚な音圧基盤。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.2 代表的楽器の物理音響モデリング詳解 (Physical Acoustic Modelling Deep Dives)</h3>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>対象楽器・音響シム</th>
+            <th>物理音響メカニズム (Acoustic Physics)</th>
+            <th>BTRON DSP実装設計 (DSP Topology &amp; Parameters)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Gibson L-5 フルアコギター<br>(<code>shimGuitar</code>)</b></td>
+            <td>・スプルース単板響板共鳴 <i>T</i>₁ (150〜200 Hz)<br>・f字孔ヘルムホルツ空気共振 <i>A</i>₀ (≈ 100 Hz)<br>・親指ピック弾弦アタック</td>
+            <td>三角波オシレータ（温かみある基音重視）＋ 弦の振動減衰を模した動的LP掃引（2800 → 1400 Hz）＋ 15ms 緩やかなピックアタック ＋ ポルタメント滑音（<code>n.slide</code>）。</td>
+          </tr>
+          <tr>
+            <td><b>Fender Rhodes エレピ<br>(<code>shimFloat</code>)</b></td>
+            <td>・片持ち梁鋼鉄タイン振動モード:<br>&nbsp;&nbsp;<i>f</i><sub><i>n</i></sub> = <i>f</i>₁ · (λ<sub><i>n</i></sub>/λ₁)², <i>f</i>₂/<i>f</i>₁ ≈ 6.27<br>・打弦初期の周波数過渡緩和</td>
+            <td>4音ポリフォニック正弦波スタック。打弦直後の周波数が −1.5% から40msで静定する過渡ピッチグライド。ジャズピアニストの手首ロールを再現する60msステップ分散発振。</td>
+          </tr>
+          <tr>
+            <td><b>擦弦バイオリン<br>(<code>shimViolin</code>)</b></td>
+            <td>・松脂スティックスリップ非線形摩擦振動<br>・1/<i>k</i> 鋸歯状波高調波列＋弦不対称性<br>・遅延ビブラートと二重胴体フォルマント</td>
+            <td>5要素並列DSPグラフ：<br>① 松脂ノイズバースト（BP 3200 Hz, <i>Q</i> = 3.0, 40ms）<br>② デュアル鋸歯状波（+2.5 cents / 1.002 アンサンブル微小デチューン）<br>③ 5.8 Hz 遅延ビブラートLFO（80ms遅延後、深度 1.2% <i>f</i>₀ でクレッシェンド）<br>④ 胴体ピーキングEQ（520 Hz +4dB 胴鳴り ＋ 2800 Hz +3dB ブリッジヒル）<br>⑤ ボウイングADSR（アタック ≤ 45ms, サステイン 90%）。</td>
+          </tr>
+          <tr>
+            <td><b>コンサートグランドピアノ<br>(<code>shimGrandPiano</code> ＋ <code>shimPianoHammer</code>)</b></td>
+            <td>・弦の剛性による非調和性方程式:<br>&nbsp;&nbsp;<i>f</i><sub><i>k</i></sub> = <i>k</i> <i>f</i>₀ √(1 + <i>B</i> <i>k</i>²), <i>B</i> ≈ 10⁻⁴<br>・フェルトハンマー打撃（励起子）と弦共鳴（共振子）の分離</td>
+            <td>励起子と共振子の独立シム分離合成パターン：<br>・励起子（<code>shimPianoHammer</code>）: 120 → 40 Hz を35msで急降下する木質フェルト衝撃音。<br>・共振子（<code>shimGrandPiano</code>）: 非整数倍音比 1.000 (正弦波, 0.16V, 全長), 2.002 (三角波, 0.08V, 0.75倍長), 3.006 (正弦波, 0.035V, 0.50倍長) の3倍音並列発振。</td>
+          </tr>
+          <tr>
+            <td><b>ジャズフルート / メロディカ<br>(<code>shimSaxFlute</code>)</b></td>
+            <td>・円筒管共振（1/<i>k</i>² 奇数倍音中空音）<br>・エッジ衝突空気噴流乱流ノイズ（全音持続）</td>
+            <td>デュアル並列ソースバス合成：<br>・音色管（三角波 ＋ 2400 Hz LP, <i>Q</i> = 2.0, 25ms 吹込アタック）<br>・乱流ノイズ（狭帯域 BP 1.8 <i>f</i>₀, <i>Q</i> = 5.0、−16dB 音声比率 0.025V、全音持続）。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.3 マスターシグナルフロー (Master Signal Flow Graph)</h3>
+      <div class="code-block">
+<pre><code>[音響シム発振源]
+├── 各種オシレータ (Sine, Tri, Saw, Custom Pulse)
+├── 確定論的ホワイトノイズ源 (2秒間巡回バッファ getNoiseBuffer)
+└── WaveShaper (Chebyshev 非線形飽和歪み getDistortionCurve)
+      │
+      ▼
+[Biquad フィルタ段] (Lowpass 24dB, Highpass 12dB, Bandpass Formant Q=3.0〜6.0, Peaking EQ)
+      │
+      ▼
+[ADSR エンベロープ VCA] (線形アタック ramp 8〜45ms, 指数減衰 exponentialRamp)
+      │
+      ▼
+[チャンネルバス段] (Track 1〜4 各減衰ゲイン, 例: t1Vol = 0.78)
+      │
+      ▼
+[マスターコンプレッサー / ソフトクリッパー] (DynamicsCompressorNode)
+      │
+      ▼
+[AudioContext.destination / VirtIO-Sound DMA] (物理DAC / スピーカー出力)</code></pre>
+      </div>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.4 形式的数理定理とライフサイクル保証 (Formal Theorems &amp; Lifecycle Proof)</h3>
+      <div class="stage-card" style="margin: 0.8rem 0;">
+        <h4 style="margin:0 0 0.4rem; color:DarkMagenta; font-size:1.02rem;">定義 1: BTRON Sound Shim 互換性規約 (Compatibility Contract)</h4>
+        <p style="margin:0; font-size:0.88rem; line-height:1.6;">
+          関数 <i>S</i>(<i>t</i>₀, …) が正当な BTRON Sound Shim であるための必要十分条件：<br>
+          1. <b>無状態性 (Stateless):</b> <code>AudioContext</code> および登録配列以外のグローバル音響状態を読み書きしない。<br>
+          2. <b>自己完結性 (Self-contained):</b> 単一の同期呼出し内で全 <code>AudioNode</code> を生成・接続・起動する。<br>
+          3. <b>GC回収可能性 (Garbage-collectible):</b> 生成した全オシレータ／音源ノードを <code>registerTrackOsc()</code> に登録する。<br>
+          4. <b>例外沈黙性 (Silent-on-error):</b> 本体全体を <code>try { … } catch(e) {}</code> で防護し、例外を外部に波及させない。
+        </p>
+      </div>
+
+      <div class="stage-card" style="margin: 0.8rem 0;">
+        <h4 style="margin:0 0 0.4rem; color:DarkMagenta; font-size:1.02rem;">定理 1: ゼロメモリリーク定理 (Zero Memory Leak Theorem)</h4>
+        <p style="margin:0; font-size:0.88rem; line-height:1.6;">
+          全シムが互換性規約を充足するとき、任意のトラック停止時刻 <i>t</i><sub>stop</sub> において <code>stopAllTracks()</code> の呼出しは以下を保証する：<br>
+          <b>lim<sub><i>t</i> → <i>t</i><sub>stop</sub>⁺</sub> |𝒩(<i>t</i>)| = 0</b> （ここで 𝒩(<i>t</i>) は生存する <code>AudioNode</code> の集合）。<br>
+          <i>証明骨子:</i> <code>stopAllTracks()</code> は登録された全ノードに対し <code>osc.stop()</code> と <code>osc.disconnect()</code> を実行し追跡配列をクリアする。参照カウントが即座にゼロとなり、JavaScript V8 / JSC GC（またはC99メモリマネージャ）によって完全に解放回収される。［証明終］
+        </p>
+      </div>
+
+      <p style="margin-top: 0.8rem;">
+        新音色の同定・拡張には短時間フーリエ変換（STFT）を採用し、スペクトログラム <i>X</i>(<i>m</i>, <i>k</i>) = ∑ [<i>n</i>=0..<i>N</i>−1] <i>x</i>(<i>n</i> + <i>mH</i>) · <i>w</i>(<i>n</i>) · <i>e</i><sup>−<i>j</i> 2π <i>kn</i> / <i>N</i></sup> から倍音構造・共振尖鋭度・ノイズ比率を逆算してシムへ符号化します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>4. プロシージャル音源パレット (23 Shim Modular Sound Bank)</h2>
+      <p>
+        BTRON音響エンジンが内蔵する全23種のプロシージャル音響シム一覧（<code>btron-sound.tex</code> Table 1 完全準拠）。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Complete inventory of the 23 procedural sound shims, acoustic analogues, and DSP topologies."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>番号</th>
+            <th>音響シム名 (Shim)</th>
+            <th>音響・楽器アナログ (Analogue)</th>
+            <th>DSP合成方式・構成 (Synthesis &amp; DSP Topology)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1A</td><td><code>shimPulseSquash</code></td><td>デュアルパルス・チップチューンリード</td><td>2基の微小デチューンPulse波 ＋ コーラス効果</td></tr>
+          <tr><td>1B</td><td><code>shimFrogCroak</code></td><td>クイーカ／夜行蛙の摩擦鳴き声 (蛙)</td><td>バンドパスフィルタ適用ホワイトノイズ ＋ FM変調</td></tr>
+          <tr><td>1C</td><td><code>shimPulseBell</code></td><td>FM霊性チャイムベル / 気功ドローン</td><td>2オペレータFMサイン波（モジュレータ比率 2.76×）</td></tr>
+          <tr><td>2</td><td><code>shimWaddle</code></td><td>福井五十雄アコースティック・ウッドベース</td><td>デュアル三角波 ＋ 胴鳴り180Hzローパスフィルタ</td></tr>
+          <tr><td>3</td><td><code>shimFloat</code></td><td>今田勝フェンダー・ローズ・エレピ</td><td>多重加算サイン波 ＋ 金属タイン打撃倍音成分</td></tr>
+          <tr><td>4</td><td><code>shimDance</code></td><td>ビバップ／星屑アルペジオ</td><td>高速16分音符サイン波カスケード ＋ 急峻指数減衰</td></tr>
+          <tr><td>5</td><td><code>shimDing</code></td><td>氷晶ハイベル／モーニングスター</td><td>高純度サイン波（A6 1760Hz / E7 2637Hz）＋ 超長残響</td></tr>
+          <tr><td>6</td><td><code>shimKick</code></td><td>小原哲次郎ジャズ／チップチューン・バスドラム</td><td>高速指数ピッチ下降スイープ（150Hz → 35Hz）</td></tr>
+          <tr><td>7</td><td><code>shimSnare</code></td><td>デュアルコンポーネント・ジャズスネア</td><td>175Hz三角波胴鳴り ＋ スナッピー金属ワイヤーノイズ</td></tr>
+          <tr><td>8</td><td><code>shimHiHat</code></td><td>ハイハット・シンバル</td><td>7.5kHz高域通過ハイパスフィルタ・ノイズバースト</td></tr>
+          <tr><td>9</td><td><code>shimGuitar</code></td><td>渡辺香津美ギブソン L-5 フルアコギター</td><td>デュアル三角波 ＋ コムフィルタ共振ボディモデリング</td></tr>
+          <tr><td>10</td><td><code>shimGrandPiano</code></td><td>トーマス・クリューガー式コンサートグランド</td><td>3倍音弦振動サイン波 ＋ 木質フェルトハンマー打撃音</td></tr>
+          <tr><td>11</td><td><code>shimPedalBass</code></td><td>スフォルツァンド超重低音 (A0/A1)</td><td>27.5Hz (A0) / 55Hz (A1) の地響きサブベースサイン波</td></tr>
+          <tr><td>12</td><td><code>shimIndustrialKick</code></td><td>トレント・レズナー重厚ディストーションキック</td><td>サイン波（160→42Hz）＋ 三角波 ＋ WaveShaper歪み</td></tr>
+          <tr><td>13</td><td><code>shimIndustrialSnare</code></td><td>サイバークランク／ゲート金属スネア</td><td>バンドパスノイズ（2600/3600Hz）＋ 矩形波リング変調</td></tr>
+          <tr><td>14</td><td><code>shimIndustrialBass</code></td><td>16分音符アナログオーバードライブベース</td><td>鋸歯状波 ＋ 矩形波（×1.005）＋ WaveShaper(20)</td></tr>
+          <tr><td>15</td><td><code>shimSwarmatron</code></td><td>Dewan 8ボイス・リボン群発振器</td><td>群発振するマイクロデチューン（±24¢）鋸歯状波ピッチベンド</td></tr>
+          <tr><td>16</td><td><code>shimGlitchZap</code></td><td>ターミナルデータパルス / TRON Zap</td><td>急降下鋸歯状波（×2.5f → 80Hz）＋ 1800Hz HPフィルタ</td></tr>
+          <tr><td>17</td><td><code>shimCyberLead</code></td><td>NIN TRON オーバードライブ・シンセリード</td><td>鋸歯状波 ＋ 矩形波 ＋ レゾナントLP ＋ WaveShaper(25)</td></tr>
+          <tr><td>18</td><td><code>shimSaxFlute</code></td><td>今田勝ジャズフルート / メロディカ</td><td>三角波リード音 ＋ バンドパス（1.8f₀, Q=5）息成分ノイズ混入</td></tr>
+          <tr><td>19</td><td><code>shimPianoHammer</code></td><td>フェルトハンマー打撃衝撃音</td><td>低域三角波クリック（120Hz → 40Hz 急降下, 35ms）</td></tr>
+          <tr><td>20</td><td><code>shimPedalSwoosh</code></td><td>ダンパーペダル解放空気音</td><td>共振バンドパスフィルタ（450→280Hz）弦共鸣空気摩擦音</td></tr>
+          <tr><td>21</td><td><code>shimViolin</code></td><td>独奏／合奏擦弦バイオリン</td><td>松脂擦過ノイズバースト ＋ デュアル鋸歯状波 ＋ 5.8Hz LFO</td></tr>
+          <tr><td>22</td><td><code>shimCello</code></td><td>オーケストラ擦弦／ピチカートチェロ</td><td>重厚ローパス鋸歯状波 ＋ 胴体フォルマント共振（520/1200Hz）</td></tr>
+          <tr><td>23</td><td><code>shimTimpani</code></td><td>コンサート・ティンパニ</td><td>膜振動ピッチグライド（×1.55f → f）＋ 倍音（×1.48f）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>5. 音律・MIDI周波数・音色プログラム (Tuning, MIDI &amp; Program Schemas)</h2>
+      <p>
+        全音響シムは標準ISO 16平均律（A4 = 440.00Hz）に準拠し、数式 <i>f</i>(<i>n</i>) = 440.0 × 2<sup>(<i>n</i> − 69) / 12</sup> により正確な周波数へ写像されます。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Equal temperament pitch reference matrix, dynamic velocity staging, and JSON program schemas."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>音名 (Note)</th>
+            <th>周波数 (Hz)</th>
+            <th>楽曲内での主な役割 (Role in Score)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><b>A0 / A1</b></td><td>27.50 / 55.00</td><td>大聖堂グランドピアノの最重低音ペダル基音 (<code>shimPedalBass</code>)</td></tr>
+          <tr><td><b>E2 / A2</b></td><td>82.41 / 110.00</td><td>ウッドベースおよびジャズギターの低音基盤 (<code>shimWaddle</code>)</td></tr>
+          <tr><td><b>C4 / A4</b></td><td>261.63 / 440.00</td><td>中央C音およびコンサート基準調律音</td></tr>
+          <tr><td><b>E5 / G5</b></td><td>659.25 / 783.99</td><td>鐘のキャロル主旋律テーマ開始音 (<code>shimDing</code>)</td></tr>
+          <tr><td><b>E6 / A6</b></td><td>1318.51 / 1760.00</td><td>超絶技巧ピアノカデンツァおよび星屑チャイム (<code>shimGrandPiano</code>)</td></tr>
+          <tr><td><b>E7</b></td><td>2637.02</td><td>黎明のモーニングスター超高域クリスタル共振音</td></tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">ベロシティ階調と音色プログラム定義 (Program Schema)</h3>
+      <p>
+        ベロシティは <i>pp</i> (0.08〜0.12), <i>mp</i> (0.14〜0.18), <i>mf</i> (0.20〜0.26), <i>f</i> (0.28〜0.36), <i>ff</i> (0.38〜0.45) の厳密なゲインステージングを持ちます。音色はJSONスキーマにより宣言的に記述されます：
+      </p>
+      <div class="code-block">
+<pre><code>{
+  "programId": "PROG_CHIPTUNE_BELL_LEAD",
+  "baseShim": "shimDing",
+  "octaveOffset": 0,
+  "defaultVelocity": 0.24,
+  "decaySeconds": 0.70,
+  "filterType": "bandpass",
+  "filterQ": 4.5,
+  "harmonicDoubling": [
+    { "pitchRatio": 2.0, "volumeRatio": 0.65, "delayMs": 2.0 }
+  ]
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>6. 空間音響・トラッカー調時・適応型機構 (Spatial Audio, Tracker &amp; Adaptive Gameplay)</h2>
+      <p>
+        3D音響空間、トラッカーグリッドの数学的調時式、およびプレイヤー入力の量子化アーキテクチャ。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Spatial panning laws, tracker timing equations, 8-channel voice allocation, and interactive quantization."</span>
+      </p>
+      <ul class="setting-features" style="margin-top: 0.8rem; margin-bottom: 1.2rem;">
+        <li><b>3D空間音響と定位則</b>: リスナーはカメラ座標 (0, 0.08, 9.2) に位置し、水平パン角 <i>p</i> ∈ [−1, +1] に対する等パワー定位則 Gain<sub><i>L</i></sub> = cos(<sup>π</sup>/₄·(<i>p</i> + 1)), Gain<sub><i>R</i></sub> = sin(<sup>π</sup>/₄·(<i>p</i> + 1)) を適用。距離減衰 <i>d</i><sub>ref</sub> / (<i>d</i><sub>ref</sub> + max(0, <i>d</i> − <i>d</i><sub>ref</sub>)) および大気高域吸収（2kHz以上カット）をリアルタイム計算。</li>
+        <li><b>トラッカー数学的調時式</b>: <i>T</i><sub>beat</sub> = 60 / BPM, <i>T</i><sub>bar</sub> = <i>T</i><sub>beat</sub> × 拍数, <i>T</i><sub>8th</sub> = <i>T</i><sub>beat</sub> / 2, <i>T</i><sub>16th</sub> = <i>T</i><sub>beat</sub> / 4。</li>
+        <li><b>8チャンネルボイスマトリクス</b>: Ch1(ベース/サブ) · Ch2(ドラム/打楽器) · Ch3(和声パッド) · Ch4(主旋律リード) · Ch5(対位法管楽器) · Ch6(アルペジオ/FX) · Ch7(高域チャイム) · Ch8(アンビエント)。</li>
+        <li><b>対話型入力の16分音符量子化 (Input Quantization)</b>: プレイヤーがSpaceキー等を押下した際、入力時刻 <i>t</i><sub>in</sub> は直後の16分音符境界 <i>t</i><sub>trigger</sub> = <i>t</i><sub>bar</sub> + ⌈(<i>t</i><sub>in</sub> − <i>t</i><sub>bar</sub>) / <i>T</i><sub>16th</sub>⌉ · <i>T</i><sub>16th</sub> に即座に吸着。演奏と操作が絶対に不協和を起こさない即興音楽メカニクスを実現。</li>
+        <li><b>動的ステムミキシング (Dynamic Stem Mixing)</b>: プレイヤー体力満全時は全音量、被弾時は800Hzローパス ＋ 心音キックドラムが強調され、無敵スター獲得時は <code>shimDance</code> アルペジオが +3dB で前面浮上。</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>7. 全4ステージ楽曲仕様とゲームプレイ (Detailed Level &amp; Composition Architecture)</h2>
+      <p>
+        Lil Cube 64 に収録された全4ステージの音楽諸元、プロシージャル編成、および楽曲と完全同期したゲームプレイ仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Comprehensive level design, musical parameters, instrumentation, and narrative mechanics for Levels 1 to 4."</span>
+      </p>
+
+      <!-- Stage 1 -->
+      <div class="stage-card">
+        <h3>Level 1: 氷晶雪原の疾走 (Crystalline Snowfield Speedrun)</h3>
+        <div>
+          <span class="stage-badge">楽曲: 鐘のキャロル (Carol of the Bells)</span>
+          <span class="stage-badge">テンポ: 168 BPM (Vivace 3/4拍子)</span>
+          <span class="stage-badge">調性: ホ短調 (E Minor)</span>
+          <span class="stage-badge">小節数: 24小節 (~25.8秒)</span>
+          <span class="stage-badge">音量バランス: t1Vol = 0.78</span>
+        </div>
+        <p><b>プロシージャル編成:</b> <code>shimDing</code>（G5-F#5-G5-E5 の象徴的4音モティーフ）、<code>shimWaddle</code>（E2-B2-E3 軽快な8-bitベース）、<code>shimPulseSquash</code>（B5-C6 高音リード）、<code>shimDance</code>（Em-D-C-B7 上を舞う16分星屑アルペジオ）、<code>shimFloat</code>（FM和音パッド）、チップドラムキット、<code>shimSaxFlute</code>（疾走フルート対位旋律）。</p>
+        <p><b>ゲームプレイ設計:</b> マウント・ビートロンの凍結斜面で雪崩とともに覚醒。3/4拍子のワルツのリズムに合わせて氷のレールを滑走し氷河のクレバスを跳躍。雪の結晶を獲得するたびに16分音符アルペジオが鳴り響き、冬の神殿ポータルへと飛び込みます。</p>
+      </div>
+
+      <!-- Stage 2 -->
+      <div class="stage-card">
+        <h3>Level 2: 夜行バイユーと蛍の沼 (Nocturnal Bayou &amp; Neon Bog)</h3>
+        <div>
+          <span class="stage-badge">楽曲: 今田勝 "Green Caterpillar" (1975 TBM)</span>
+          <span class="stage-badge">テンポ: 98 BPM (Swinging 4/4拍子)</span>
+          <span class="stage-badge">調性: ニ短調ブルース (D Minor Blues)</span>
+          <span class="stage-badge">小節数: 10小節 (~26.0秒)</span>
+          <span class="stage-badge">音量バランス: t2Vol = 1.0</span>
+        </div>
+        <p><b>プロシージャル編成:</b> <code>shimFloat</code>（今田勝スタイルのフェンダー・ローズ・エレピ＆ピアノ）、<code>shimWaddle</code>（福井五十雄直伝のアコースティック・ウォーキングアップライトベース）、<code>shimGuitar</code>（渡辺香津美 Gibson L-5 クリーンジャズギター）、フルジャズドラム（小原哲次郎ライドシンバル＆ブラシスネア）、<code>shimPulseFrog</code>（今村祐司クイーカ蛙擦過音）、<code>shimSaxFlute</code>（夜行メロディカ）。</p>
+        <p><b>ゲームプレイ設計:</b> 三日月が照らす蛍光キノコと霧の沼地。クイーカの鳴き声（<code>shimPulseFrog</code>）が水中に隠れた足場の出現合図となり、ウォーキングベースのスイングに合わせて眠る沼の怪物の頭上を静かに飛び移るステルスアクションが展開されます。</p>
+      </div>
+
+      <!-- Stage 3 -->
+      <div class="stage-card">
+        <h3>Level 3: 黎明の天空大聖堂 (Dawn Sky Cathedral)</h3>
+        <div>
+          <span class="stage-badge">楽曲: 朝日のあたる家 (House of the Rising Sun / Thomas Krüger Arr.)</span>
+          <span class="stage-badge">テンポ: 76 BPM (Slow 6/8拍子, 8分=0.24s)</span>
+          <span class="stage-badge">調性: イ短調 (A Minor)</span>
+          <span class="stage-badge">小節数: 18小節 (~26.5秒)</span>
+          <span class="stage-badge">音量バランス: t3Vol = 1.0</span>
+        </div>
+        <p><b>プロシージャル編成:</b> <code>shimGrandPiano</code>（三倍音弦振動＋木質ハンマー打弦）、<code>shimPianoHammer</code>、<code>shimPedalSwoosh</code>、<code>shimPedalBass</code>（A0 27.5Hz / A1 55Hz 地響き重低音）、<code>shimSaxFlute</code> ＆ <code>shimPulseSquash</code>（エリック・バードン風の熱唱ボーカル主旋律）、左手6/8ローリングアルペジオ（Am-C-D-F-Am-E-E7）、トーマス・クリューガー式高音滝カスケード（E6からG#5）、<code>shimDing</code>（A6 1760Hz / E7 2637Hz 明星チャイム）。</p>
+        <p><b>ゲームプレイ設計:</b> ステンドグラスに朝日が差し込む天空のゴシック廃大聖堂を登攀。波打つ6/8拍子のピアノアルペジオが雲の足場の上下浮遊と同期。第2節でオクターブフォルテが入ると大理石の巨大な鐘が揺れ動き、最後の滝カスケードが電脳次元への黄金ポータルを開放します。</p>
+      </div>
+
+      <!-- Stage 4 -->
+      <div class="stage-card">
+        <h3>Level 4: 電脳要塞コア侵入 (TRON: Ares Cyber-Grid Core)</h3>
+        <div>
+          <span class="stage-badge">楽曲: Nine Inch Nails "Init" (TRON: Ares OST / Trent Reznor)</span>
+          <span class="stage-badge">テンポ: 132 BPM (Industrial 4/4拍子)</span>
+          <span class="stage-badge">調性: 嬰ヘ短調 (F# Minor)</span>
+          <span class="stage-badge">小節数: 14小節 (~25.8秒)</span>
+          <span class="stage-badge">音量バランス: t4Vol = 1.0</span>
+        </div>
+        <p><b>プロシージャル編成:</b> <code>shimIndustrialBass</code>（WaveShaper飽和歪み16分鋸歯状波ベース）、<code>shimCyberSynth</code>（80sデチューン・インダストリアル金管ブラス）、<code>shimSwarmatron</code>（8ボイス・リボンコントローラ群発振グリッサンド）、インダストリアルドラム（重低音サブドロップキック＋ゲート金属スネア）、<code>shimPulseBell</code>（暗黒アンビエントドローン）。</p>
+        <p><b>ゲームプレイ設計:</b> ネオンベクターグリッド内部での最終決戦。パルスする16分音符インダストリアルベースが可動レーザー防壁を制御。恐怖のスウォルマトロン（Swarmatron）のピッチベンドが鳴り響くとマザー制御コアが画面全域粒子ビームを充填。コアを撃破することで4次元ホップ束の宇宙に調和が蘇ります。</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>8. クリエイター・モッダー向け拡張手順 (Creator &amp; Modder Guidelines)</h2>
+      <p>
+        BTRON音響エンジンに新規ステージや楽曲を追加する際の5ステップ標準開発手順。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"5-step procedural expansion guidelines for adding new levels, shims, and choreographies."</span>
+      </p>
+      <ul class="workflow-list">
+        <li><b>調時定数の定義</b>: <code>beat = 60 / BPM</code>, <code>bar = beat * 拍数</code>, <code>eighth</code>, <code>sixteenth</code> を算出。</li>
+        <li><b>3Dキネマティクス主軸の選定</b>: レベルのリズムを牽引するマスコット主動作（<code>walk</code> / <code>float</code> / <code>dance</code> / <code>squash</code>）を決定。</li>
+        <li><b>トラッカースコア関数の実装</b>: <code>window.playTrack()</code> 内で各音響シム（<code>shimDing</code>, <code>shimWaddle</code>, <code>shimGrandPiano</code> 等）を小節オフセットで配置。</li>
+        <li><b>ドラマツルギー振付の登録</b>: <code>scheduleTrackTimeout()</code> を用いて、フォルテシモ等の劇的展開にマスコット状態遷移（例: <code>sing</code>）を予約同期。</li>
+        <li><b>オーディオグラフ衛生管理の検証</b>: 全発振器で <code>registerTrackOsc()</code>、全タイマーで <code>scheduleTrackTimeout()</code> を呼び出し、GC回収とゼロリークを保証。</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>9. 組み込みMCU移植性とVirtIO-Sound音響プレーン (Embedded Portability &amp; VirtIO-Sound)</h2>
+      <p>
+        BTRON音響シム設計（<code>btron-sound.tex</code> Table 2）は、Web Audio APIプロトタイプからベアメタル・マイクロコントローラ（MCU）およびBTRONネイティブVirtIO-Sound DMAパイプラインへの1対1移植性を保証します。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Hardware boundaries, zero-allocation bare-metal DSP mapping, and VirtIO-Sound DMA streaming."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>ターゲット環境 (Platform)</th>
+            <th>ハードウェア諸元 (Hardware Baseline)</th>
+            <th>音響シム移植マッピング (BTRON Portability Mapping)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>BTRON ネイティブ (VirtIO)</b></td>
+            <td>AArch64 / x86-64 / RISC-V, BTRON3 3.20 カーネル</td>
+            <td><code>lilcu64_wa.c</code> 経由で <code>virtio_sound_write()</code> DMAリングバッファへ44.1kHzステレオPCM直接送出。</td>
+          </tr>
+          <tr>
+            <td><b>ESP32-S3 (Espressif)</b></td>
+            <td>Xtensa LX7 @ 240MHz, 512KB SRAM, 8MB PSRAM</td>
+            <td>I2S DMAリング ＋ AudioTools。<code>getNoiseBuffer()</code> はPSRAM静的領域に常駐し、<code>scheduleTrackTimeout</code> は <code>esp_timer_create()</code> へ1:1置換。</td>
+          </tr>
+          <tr>
+            <td><b>STM32H7 (STMicroelectronics)</b></td>
+            <td>ARM Cortex-M7 @ 480MHz, 1MB SRAM, 24-bit Codec</td>
+            <td>DaisySP / Teensy Audio ノードグラフ。ダブルバッファDMA（21KB/ペア）と固定プール型オブジェクトアロケータでゼロリーク動作。</td>
+          </tr>
+          <tr>
+            <td><b>Korg logue SDK (NTS-1)</b></td>
+            <td>Cortex-M4 専用DSPコア, 48kHz ステレオ</td>
+            <td>C APIカスタムオシレータ。<code>OSC_PARAM_SHAPE</code> がシムの <code>pitchMul</code> / <code>volMul</code> に直接対応。</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 0.8rem;">
+        <b>二層メディアプレーン連続性:</b> POSIXホスト側では GStreamer / WebRTC（<code>GST.md</code>）が多地点RTP会議・動画合成を担う一方、BTRONマイクロカーネルおよびMCU境界では本音響シムが動的メモリ割当を一切排除した「不変・無状態C99 DSPカーネル」として機能し、マイクロ秒精度の決定論的音響生成を実現します。
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>10. システムアーキテクチャと実装コンポーネント (System Architecture &amp; C99 Components)</h2>
+      <p>
+        Lil Cu 64 デモシーンの内部構造、C99/OpenGLパイプライン、およびシステムコール仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Internal architectural components, SIMD acceleration, and VirtIO-Sound DMA pipelines."</span>
       </p>
       <table class="market-table">
         <thead>
@@ -143,28 +609,28 @@
         </thead>
         <tbody>
           <tr>
-            <td><b>アーキテクチャ</b></td>
-            <td>BTRON3 Specification 3.20に完全準拠したC99/OpenGLクリーンルーム実装。</td>
+            <td><b>デモシーン統括ループ</b></td>
+            <td>BTRON3 3.20仕様準拠、60 FPS固定刻み、OpenGL ES 1.1ステートマシン制御。</td>
             <td><code>src/demo/lilcu64_demo.c</code></td>
           </tr>
           <tr>
             <td><b>プロシージャルDSPシンセ</b></td>
-            <td>外部PCM非依存、48音ボイスプール、ノードオートメーション、VirtIO-Sound DMAパイプライン。</td>
+            <td>外部PCM非依存、48音ボイスプール、VirtIO-Sound DMAバッファ転送。</td>
             <td><code>src/demo/lilcu64_synth.c</code></td>
           </tr>
           <tr>
             <td><b>楽曲スコアトランスクリプション</b></td>
-            <td>Web Audio API版の4トラック全楽譜シーケンスを1:1でC99配列へ転写・確定論的再生。</td>
+            <td>WebAudio版の全4トラック楽譜データを1:1でC99定数配列へ転写・確定論的再生。</td>
             <td><code>src/demo/lilcu64_score.c</code></td>
           </tr>
           <tr>
             <td><b>4D Hopf数理幾何エンジン</b></td>
-            <td>超球面 \(S^3\) の測地線リングバッチ演算、PS2 VU0 / SIMD ベクトル並列最適化。</td>
+            <td>超球面 <i>S</i>³ の測地線リングバッチ演算、PS2 VU0 / ARM NEON ベクトル並列最適化。</td>
             <td><code>src/drivers/ps2/ps2_vu0_kernel.c</code></td>
           </tr>
           <tr>
-            <td><b>2D BTRONダッシュボード</b></td>
-            <td>3Dサーフェス上に透過合成されるレトロフューチャーHUD、吹き出し、およびFPS計。</td>
+            <td><b>2D レトロフューチャーHUD</b></td>
+            <td>3Dサーフェス上に透過合成されるBTRONタスクバー、FPS計、および台詞吹き出し。</td>
             <td><code>render_2d_dashboard</code></td>
           </tr>
         </tbody>
@@ -178,6 +644,7 @@
         <a href="Orchestra.html">🎼 管弦楽 (Orchestra)</a>
         <a href="Cassette.html">📼 カセット (Cassette)</a>
         <a href="MSX.html">🕹️ B-MSX エミュレータ</a>
+        <a href="Quake.html">⚡ Quake Light Sport</a>
       </div>
     </div>
   </div>

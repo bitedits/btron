@@ -1972,7 +1972,7 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                 <h2 class="jp-title" style="font-size: 2.1rem; margin-top: 0.3rem;">B-System アプリケーション体系 (Applications)
                 </h2>
                 <p style="color: #334155; font-weight: 500; font-size: 1.05rem;">すべてのツールが実身（Real Body）を共有し、仮身（Virtual
-                    Body）として相互に埋め込み可能な19のネイティブ環境</p>
+                    Body）として相互に埋め込み可能な25のネイティブ環境</p>
             </div>
 
             <!-- Search & Category Filters -->
@@ -1983,7 +1983,7 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                         placeholder="アプリケーションや機能（例: TAD, メディア, 仮想オブジェクト）を検索..." onkeyup="filterApps()">
                 </div>
                 <div class="filter-buttons">
-                    <button class="filter-btn active" onclick="setAppFilter('all', this)">すべて表示 (19)</button>
+                    <button class="filter-btn active" onclick="setAppFilter('all', this)">すべて表示 (25)</button>
                     <button class="filter-btn" onclick="setAppFilter('system', this)">システム (System)</button>
                     <button class="filter-btn" onclick="setAppFilter('tad', this)">TAD (知識・文書)</button>
                     <button class="filter-btn" onclick="setAppFilter('media', this)">メディア (Media)</button>
@@ -2667,6 +2667,129 @@ shimDance(1.07, 0.89, 0.12); // D major retro arpeggio run</code></pre>
                     </ul>
                 </div>
 
+                <!-- 21. Commands -->
+                <div class="app-card" data-category="system"
+                    data-keywords="commands clu cli utilities elf posix tron vfs sh ls cp mv rm cat コマンド ツール">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F4DC.svg"
+                                    alt="📜" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Commands.html"
+                                        style="color:inherit;text-decoration:none;">Commands</a> <span
+                                        class="app-badge pink">ネイティブ CLI</span></h3>
+                                <div class="app-subtitle-en">High-Assurance Native CLU &amp; POSIX Command Suite</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            High-assurance native command line utility suite built in cleanroom C99. Operates directly on
+                            BTRON3 multi-record Real Body / Virtual Body structures without generic Unix emulation layers,
+                            packaged as standalone one-shot ELF executables across all CPU targets.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>CLU コマンド（BTRON Commands）：</b>
+                            BTRON3実身／仮身マルチレコード体系を直接駆動するゼロヒープ・決定論的C99ネイティブコマンド群。BusyBox等のUnix互換層に依存せず、T-Kernel VFS APIと1:1連動する高信頼ELFバイナリスイート。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>実身／仮身マルチレコード直接駆動（<code>src/clu/*</code>）</li>
+                        <li>ゼロヒープ・静的バッファ（NASA/JPL Rule 3 準拠）</li>
+                        <li>PS2 MIPS・Raspberry Pi ARM・x86_64 決定論的統一実行</li>
+                    </ul>
+                </div>
+
+                <!-- 22. XMB -->
+                <div class="app-card" data-category="media"
+                    data-keywords="xmb cross media bar クロスメディアバー launcher ps3 psp opengl sine wave media ランチャー">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F3AE.svg"
+                                    alt="🎮" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/XMB.html"
+                                        style="color:inherit;text-decoration:none;">XMB</a> <span
+                                        class="app-badge teal">クロスメディアバー</span></h3>
+                                <div class="app-subtitle-en">XrossMediaBar · Dynamic 2-Axis Media Launcher</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            PS3/PSP-style two-axis multimedia launcher with real-time procedural sine-wave dynamic liquid
+                            background, 60 FPS zero-heap atlas rendering, and intuitive horizontal category / vertical item
+                            navigation across BTRON hypermedia spaces.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>クロスメディアバー（XMB）：</b>
+                            水平カテゴリ×垂直アイテムの直感的2軸ナビゲーションを提供するC99/OpenGLネイティブ統合メディアランチャー。背景のリアルタイム正弦波リキッドシェーダーとゼロヒープテクスチャアトラスにより60FPS滑走描画を実現。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>水平・垂直2軸高速クロスナビゲーション＆ゲームパッド連動</li>
+                        <li>リアルタイム波形リキッドグラフィックス（OpenGL ES 1.1 / VirGL）</li>
+                        <li>設定・システム・TAD・メディア各ドメインへのワンタップ起動</li>
+                    </ul>
+                </div>
+
+                <!-- 23. MSX -->
+                <div class="app-card" data-category="media"
+                    data-keywords="msx msx2 cbios tms9918a v9938 psg geo3d rom loderunner games emulator ゲーム エミュレータ">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F579.svg"
+                                    alt="🕹️" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/MSX.html"
+                                        style="color:inherit;text-decoration:none;">MSX</a> <span
+                                        class="app-badge teal">ゲームシステム &amp; Geo3D</span></h3>
+                                <div class="app-subtitle-en">MSX/MSX2/turboR C-BIOS Emulator &amp; Geo3D Engine</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Cleanroom C99 MSX/MSX2/turboR cartridge runtime with built-in C-BIOS, TMS9918A &amp; V9938 VDP
+                            rasterisation, PSG AY-3-8910 sound emulation, dynamic MegaROM mappers, fast-forward engine, and
+                            hardware-accelerated Geo3D vector graphics pipeline.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>ゲームシステム（MSX）：</b>
+                            オープンソース C-BIOS を内蔵した純C99製 MSX/MSX2/turboR 統合エミュレータ。TMS9918A/V9938 VDP互換描画、PSG音源、MegaROMマッパー、高速早送り（Fast-Forward）、および3次元幾何学演算Geo3Dアクセラレータを完全装備。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>オープンソース C-BIOS 内蔵・MegaROM カートリッジ動的装填</li>
+                        <li>TMS9918A / V9938 VDP ＆ PSG AY-3-8910 リアルタイム音響</li>
+                        <li>Geo3D 256KB 3次元ワイヤーフレーム／ポリゴン演算パイプライン連動</li>
+                    </ul>
+                </div>
+
+                <!-- 24. Quake -->
+                <div class="app-card" data-category="media"
+                    data-keywords="quake opengl bsp virtio-gpu virgl quakec pak0 idsoftware 3d fps クエイク リアルタイム3D">
+                    <div>
+                        <div class="app-header">
+                            <div class="app-icon-wrapper"><img src="https://openmoji.org/data/color/svg/1F525.svg"
+                                    alt="🔥" width="34" height="34"></div>
+                            <div class="app-title-area">
+                                <h3 class="app-title"><a href="b-system/apps/Quake.html"
+                                        style="color:inherit;text-decoration:none;">Quake</a> <span
+                                        class="app-badge pink">3D レンダラー &amp; VM</span></h3>
+                                <div class="app-subtitle-en">5000-Line C99 Quake 1 Lightweight Client · Episode 1</div>
+                            </div>
+                        </div>
+                        <div class="app-desc-en">
+                            Cleanroom 5 000-line C99 implementation of the Quake 1 client for embedded T-Kernel 2.02 and baremetal
+                            targets. Loads pak0.pak shareware data unmodified, featuring native BSP world parsing, PVS visibility,
+                            lightmap sampling, QuakeC interpreter, and 100% automated Q&amp;A test suite.
+                        </div>
+                        <div class="app-desc-jp">
+                            <b>クエイク（Quake 軽量クライアント）：</b>
+                            組込みT-Kernel 2.02およびベアメタル向けに約5 000行のC99で完全再実装されたQuake 1軽量クライアント。無改造のpak0.pakを読込み、BSPパース、PVS可視性判定、ライトマップ合成、QuakeC PRVM、および自動化Q&amp;A検証スイートを搭載。
+                        </div>
+                    </div>
+                    <ul class="app-features-list">
+                        <li>5 000行 C99 / OpenGL ES 1.1 / VirtIO-GPU クリーンルーム実装</li>
+                        <li>Episode 1（9マップ＋全敵＋全アイテム）完全読込み・21:9 レンダリング</li>
+                        <li>QuakeC バイトコード仮想マシン（PRVM）＆ 100% 自動化 Q&amp;A 検証</li>
+                    </ul>
+                </div>
 
             </div>
         </section>

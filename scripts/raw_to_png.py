@@ -26,6 +26,10 @@ def raw_to_png(raw_path, png_path):
     transparent_count = 0
     total_pixels = width * height
 
+    # Balanced gamma curve (1.15): lifts murky shadows and brings out textures
+    # without washing out scene geometry or highlights
+    lut = [min(255, max(0, int(((i / 255.0) ** (1.0 / 1.15)) * 255.0 + 0.5))) for i in range(256)]
+
     for y in range(height):
         line = bytearray([0]) # PNG filter byte 0 (None)
         row_offset = y * width * 4
@@ -39,7 +43,7 @@ def raw_to_png(raw_path, png_path):
                 transparent_count += 1
                 line.extend((0, 0, 0, 0)) # Clean transparent pixel
             else:
-                line.extend((r, g, b, a))
+                line.extend((lut[r], lut[g], lut[b], a))
         raw_lines.append(bytes(line))
 
     compressed = zlib.compress(b"".join(raw_lines), 9)

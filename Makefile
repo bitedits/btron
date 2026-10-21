@@ -3495,3 +3495,49 @@ segui-screens: $(CAPTURE_SEGUI_BIN)
 	@echo "=========================================================="
 	@./$(CAPTURE_SEGUI_BIN)
 	@python3 scripts/update_segui_screens.py
+
+# ===================================================================
+# Quake Automated Screenshot Pipeline — 21:9 (672×288) ARGB frames
+# ===================================================================
+CAPTURE_QUAKE_BIN  = ./.build/capture_quake
+CAPTURE_QUAKE_SRCS = verify/scratch/capture_quake.c \
+                     src/quake/core/mathlib.c \
+                     src/quake/core/mem.c \
+                     src/quake/core/cvar.c \
+                     src/quake/core/cmd.c \
+                     src/quake/core/wad.c \
+                     src/quake/core/world.c \
+                     src/quake/core/pr_exec.c \
+                     src/quake/core/sv_phys.c \
+                     src/quake/core/sv_main.c \
+                     src/quake/sys/sys_btron.c \
+                     src/quake/sys/in_btron.c \
+                     src/quake/sys/fs_btron.c \
+                     src/quake/render/r_btron_gl.c \
+                     src/quake/render/r_brush.c \
+                     src/quake/render/r_light.c \
+                     src/quake/render/r_surf.c \
+                     src/quake/render/r_alias.c \
+                     src/quake/render/r_part.c \
+                     src/quake/render/texture.c \
+                     src/quake/core/cl_demo.c \
+                     src/quake/app/quake_ui.c \
+                     src/gl/gl_dispatch.c \
+                     src/gl/gl_backend_choice.c \
+                     src/gl/egl_surface.c \
+                     src/gl/backend_virgl.c
+
+CAPTURE_QUAKE_OBJS = $(CAPTURE_QUAKE_SRCS:.c=.test.o)
+
+$(CAPTURE_QUAKE_BIN): $(CAPTURE_QUAKE_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(CAPTURE_QUAKE_OBJS) -o $@ $(LDFLAGS) -lm -lz
+
+quake-screens: $(CAPTURE_QUAKE_BIN)
+	@echo "=========================================================="
+	@echo " Generating Quake 21:9 (672x288) Screenshot Set..."
+	@echo "=========================================================="
+	@mkdir -p /tmp/btron_raw_screens
+	@./$(CAPTURE_QUAKE_BIN)
+	@python3 scripts/raw_to_png.py
+	@python3 scripts/update_quake_screens.py

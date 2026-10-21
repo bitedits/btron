@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quake – Lightweight Client Encyclopedia | B-System Specification</title>
+  <meta name="description" content="Comprehensive encyclopedia of the B-System Quake lightweight client: 5000-source-line C99 OpenGL ES 1.1 implementation covering Episode 1 maps, QuakeC VM, enemies, artifacts, and the Q&amp;A verification suite.">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+  <style>
+    /* ─── Quake-specific overrides (General Rosy Schema) ────────────── */
+    .quake-gallery       { display:flex; flex-wrap:wrap; gap:1rem; margin:1.2rem 0; }
+    .quake-gallery img   { border-radius:8px; border:1px solid rgba(255, 93, 162, 0.3); max-width:100%; height:auto; }
+    .quake-gallery-wide  { width:100%; flex: 1 1 100% !important; }
+    .quake-gallery-half  { flex:1 1 calc(50% - 0.6rem); min-width:240px; }
+    .quake-gallery-third { flex:1 1 calc(50% - 0.6rem); min-width:220px; }
+    
+    /* Model Portraits */
+    .quake-portrait      { flex:1 1 calc(20% - 0.8rem); min-width:120px; text-align:center;
+                           background:rgba(255, 255, 255, 0.65); border:1.5px solid rgba(255, 93, 162, 0.35);
+                           border-radius:12px; padding:0.6rem; backdrop-filter:blur(8px);
+                           box-shadow:0 4px 12px rgba(255, 93, 162, 0.1); transition:transform 0.2s; }
+    .quake-portrait:hover{ transform:translateY(-2px); }
+    .quake-portrait img  { border-radius:8px; width:100%;
+                           background:radial-gradient(circle, rgba(255, 240, 248, 0.95) 0%, rgba(245, 215, 235, 0.7) 100%);
+                           border:1px solid rgba(255, 93, 162, 0.2); }
+    .quake-portrait p    { font-size:0.82rem; font-weight:700; color:DarkMagenta; margin:0.4rem 0 0; line-height:1.3; }
+
+    /* Map Screenshots - strictly 2-columned as requested */
+    .quake-map-row       { display:flex; flex-wrap:wrap; gap:1.2rem; margin:1.2rem 0; }
+    .quake-map-card      { flex:1 1 calc(50% - 0.7rem); min-width:280px;
+                           background:rgba(255, 255, 255, 0.68); border:1.5px solid rgba(255, 93, 162, 0.35);
+                           border-radius:14px; overflow:hidden; backdrop-filter:blur(12px);
+                           box-shadow:0 6px 20px rgba(255, 93, 162, 0.12); transition:transform 0.2s, box-shadow 0.2s; }
+    .quake-map-card:hover{ transform:translateY(-2px); box-shadow:0 10px 28px rgba(255, 93, 162, 0.2); }
+    .quake-map-card img  { width:100%; display:block; background:#120c14; border-bottom:1px solid rgba(255, 93, 162, 0.25); }
+    .quake-map-card div  { padding:0.85rem 1.1rem; }
+    .quake-map-card h5   { margin:0 0 0.35rem; font-size:1rem; color:DarkMagenta; font-weight:700; }
+    .quake-map-card p    { margin:0; font-size:0.86rem; color:#4a3560; line-height:1.55; }
+    .quake-sub           { font-size:0.82rem; color:#6b4f7e; margin:0.3rem 0 0; font-style:italic; }
+
+    /* Inline Code matching General Rosy theme - NO BLACK BACKGROUNDS */
+    .code-inline         { background:rgba(255, 255, 255, 0.75); border:1px solid rgba(255, 93, 162, 0.35);
+                           border-radius:4px; padding:0.12em 0.42em;
+                           font-family:ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+                           font-size:0.88em; color:DarkMagenta; font-weight:600; white-space:nowrap; }
+
+    .code-block pre      { background:rgba(255, 255, 255, 0.7); border:1.5px solid rgba(255, 93, 162, 0.35);
+                           border-radius:10px; padding:1.1rem 1.3rem; color:DarkMagenta;
+                           font-family:ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+                           font-size:0.88rem; line-height:1.55; overflow-x:auto; }
+
+    /* Test results */
+    .quake-test-pass     { color:#16a34a; font-weight:bold; }
+    .quake-test-fail     { color:#dc2626; font-weight:bold; }
+    .quake-test-skip     { color:#d97706; font-weight:bold; }
+
+    /* Architectural cards in Rosy Schema */
+    .arch-grid           { display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; margin:1.2rem 0; }
+    @media(max-width:640px){ .arch-grid{ grid-template-columns:1fr; } .quake-map-card{ flex:1 1 100%; } }
+    .arch-card           { background:rgba(255, 255, 255, 0.65); border:1.5px solid rgba(255, 93, 162, 0.35);
+                           border-radius:14px; padding:1.1rem 1.3rem; backdrop-filter:blur(12px);
+                           box-shadow:0 4px 16px rgba(255, 93, 162, 0.1); }
+    .arch-card h5        { margin:0 0 0.45rem; color:DarkMagenta; font-size:1.02rem; font-weight:700; }
+    .arch-card p         { margin:0; font-size:0.88rem; color:#4a3560; line-height:1.6; }
+
+    /* Bibliography & References in Rosy Schema */
+    .bib-featured        { background:rgba(255, 255, 255, 0.72); border:1.5px solid rgba(255, 93, 162, 0.45);
+                           border-radius:14px; padding:1.3rem 1.6rem; margin:1.4rem 0; backdrop-filter:blur(12px);
+                           box-shadow:0 6px 22px rgba(255, 93, 162, 0.16); }
+    .bib-featured h4     { margin:0 0 0.5rem; color:DarkMagenta; font-size:1.12rem; font-weight:700; }
+    .bib-featured p      { margin:0 0 0.6rem; font-size:0.9rem; color:#4a3560; line-height:1.65; }
+    .bib-featured a      { color:#be185d; text-decoration:none; font-weight:700;
+                           border-bottom:1.5px solid rgba(190, 24, 93, 0.4); transition:all 0.2s; }
+    .bib-featured a:hover{ color:DarkMagenta; border-bottom-color:DarkMagenta; }
+    
+    .bib-list            { list-style:none; padding:0; margin:1.2rem 0; display:flex; flex-direction:column; gap:0.75rem; }
+    .bib-item            { display:flex; gap:0.9rem; font-size:0.9rem; line-height:1.6; color:#4a3560;
+                           background:rgba(255, 255, 255, 0.55); border:1px solid rgba(255, 93, 162, 0.28);
+                           border-radius:10px; padding:0.75rem 1rem; backdrop-filter:blur(8px);
+                           box-shadow:0 2px 8px rgba(255, 93, 162, 0.08); }
+    .bib-num             { flex:0 0 2.2rem; font-family:ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+                           font-weight:700; color:DarkMagenta; }
+    .bib-content         { flex:1; }
+    .bib-content a       { color:#be185d; font-weight:600; text-decoration:none;
+                           border-bottom:1px dotted rgba(190, 24, 93, 0.45); }
+    .bib-content a:hover { color:DarkMagenta; border-bottom:1px solid DarkMagenta; }
+  </style>
+</head>
+<body>
+  <nav class="sticky" aria-label="Site navigation">
+    <div class="nav-container">
+        <ul class="nav-links">
+                <li><a href="../../b-media/index.html">B-Media</a></li>
+                <li><a href="../../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec</a></li>
+                <li><a href="../../virtio.html">VirtIO</a></li>
+                <li><a href="../../mobile.html">FOMA</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        </ul>
+    </div>
+  </nav>
+
+  <nav class="setting-nav">
+    <a href="../../index.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../index.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">Quake</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F525.svg" alt="🔥" width="64" height="64"></div>
+    <h1>Quake Light</h1>
+    <div class="setting-hero-badge">5 000 Lines · C99 · OpenGL ES 1.1 · VirtIO-GPU · QuakeC PRVM · Episode 1 Encyclopedia</div>
+    <div class="subtitle">Comprehensive technical encyclopedia of the B-System Quake lightweight client,<br>
+      <span style="font-size:0.9em; opacity:0.85;">"the minimal correct Quake implementation for embedded and baremetal T-Kernel targets."</span>
+    </div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../index.html#apps-section" class="back-link">← Applications Index</a>
+
+    <div class="tagline-card">
+      <strong>B-System Quake</strong> is a cleanroom C99 implementation of the Quake 1 lightweight client —
+      approximately 5 000 source lines across engine core, VirtIO-GPU renderer, QuakeC bytecode VM, and
+      BSP world system — designed to run natively on <em>T-Kernel 2.02</em> embedded systems, UEFI
+      baremetal x86-64, AArch64, and POSIX (macOS / Linux / OpenBSD) under a single unified source tree.
+      It uses <code class="code-inline">pak0.pak</code> (the Quake shareware data) unmodified and passes a
+      100% automated Q&amp;A verification suite.
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  EPISODE 1 — START MAP                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>1. Episode 1: Dimension of the Doomed</h2>
+      <p>
+        Episode 1 of Quake comprises nine levels loaded directly from <code class="code-inline">pak0.pak</code>
+        via the <code class="code-inline">FS_Init()</code> / <code class="code-inline">World_ChangeMap()</code>
+        pipeline.  Each BSP is parsed in under 2 ms on a 1 GHz POSIX host.  Spawn origin and spawn angle
+        are extracted from the <code class="code-inline">info_player_start</code> entity and used as the
+        initial camera pose for all automated screenshots below.
+      </p>
+      <p>
+        Screenshots are generated automatically by the <code class="code-inline">make quake-screens</code>
+        pipeline at <strong>21:9 widescreen resolution (672 × 288 px)</strong> using the native VirGL
+        software rasteriser — zero emulation, zero virtual machines, zero browser.
+      </p>
+
+      <!-- START -->
+      <h3>START — Entrance Hub</h3>
+      <div class="quake-map-row">
+        <div class="quake-map-card quake-gallery-wide">
+          <img src="img/Quake_Start.png" alt="Quake Start Hub">
+          <div><h5>START — Entrance Hub</h5>
+            <p>The tutorial hub connects the main episodes via skill-locked teleporters. The player begins beside the Easy difficulty entrance. Rendered at spawn (672 × 288, 21:9).</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- E1M1 – E1M8 grid -->
+      <h3>E1M1–E1M8 Level Walkthroughs</h3>
+      <div class="quake-map-row">
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M1.png" alt="E1M1 The Slipgate Complex">
+          <div><h5>E1M1 — The Slipgate Complex</h5>
+            <p>Entry level. Introduces soldiers, grunt groups, and the slipgate concept. Spawn looks toward the main hall.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M2.png" alt="E1M2 Castle of the Damned">
+          <div><h5>E1M2 — Castle of the Damned</h5>
+            <p>Medi-evil castle theme. Introduces knights and the first Quad Damage secret. High-poly BSP with arched ceilings.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M3.png" alt="E1M3 The Necropolis">
+          <div><h5>E1M3 — The Necropolis</h5>
+            <p>Zombie-heavy level in a subterranean crypt. First appearance of the Ogre. Multiple vertical drops.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M4.png" alt="E1M4 The Grisly Grotto">
+          <div><h5>E1M4 — The Grisly Grotto</h5>
+            <p>Underground cavern with lava pits and Rotfish. Complex water navigation. Gold Key required to reach exit.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M5.png" alt="E1M5 Gloom Keep">
+          <div><h5>E1M5 — Gloom Keep</h5>
+            <p>Exterior castle battlements. Multiple Ogres, introduction of the Fiend Demon. Silver and Gold Key split path.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M6.png" alt="E1M6 The Door to Chthon">
+          <div><h5>E1M6 — The Door to Chthon</h5>
+            <p>Pre-boss buildup. Lava river, Ogres, Shamblers. The lightning rod mechanic is introduced here.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M7.png" alt="E1M7 The House of Chthon (Boss)">
+          <div><h5>E1M7 — The House of Chthon (Boss)</h5>
+            <p>Boss level: Chthon the Elder God. Requires activating two lightning switches to deliver the killing bolt.</p>
+          </div>
+        </div>
+        <div class="quake-map-card">
+          <img src="img/Quake_E1M8.png" alt="E1M8 Ziggurat Vertigo (Secret)">
+          <div><h5>E1M8 — Ziggurat Vertigo (Secret)</h5>
+            <p>Secret level accessible from E1M5. Egyptian motif with Shamblers and a vertical arena at the peak.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- BSP Architectural Summary -->
+      <h3>BSP World Architecture</h3>
+      <div class="arch-grid">
+        <div class="arch-card">
+          <h5>BSP Parsing Pipeline</h5>
+          <p>
+            <code class="code-inline">FS_PAKOpen()</code> reads pak0.pak lump directory.
+            <code class="code-inline">World_ChangeMap()</code> calls <code class="code-inline">BSP_Load()</code>
+            which parses 15 lumps (planes, vertices, edges, faces, textures, lightmaps, PVS, etc.)
+            into a flat <code class="code-inline">world_t</code> struct in &lt;1 ms on 1 GHz targets.
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>PVS / Leaf Visibility</h5>
+          <p>
+            The BSP tree stores run-length-encoded <em>Potentially Visible Sets</em> (PVS) per leaf.
+            <code class="code-inline">R_MarkVisLeafs()</code> decompresses PVS bits and marks visible
+            surfaces before each frame. All nine pak0 maps pass the visibility test suite
+            (<code class="code-inline">test-quake-visibility</code>).
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>Lightmap Atlas</h5>
+          <p>
+            Each face carries a precalculated lightmap at 16-texel resolution. Lightmap samples are
+            blended with the diffuse texture in <code class="code-inline">R_DrawBrushPoly()</code> via
+            <code class="code-inline">glColor3f(r*l, g*l, b*l)</code>, giving authentic Quake 1 ambient
+            illumination on the VirGL software backend.
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>Entity Spawning</h5>
+          <p>
+            The BSP entity lump is a text block parsed by
+            <code class="code-inline">SV_SpawnEntities()</code> calling into the
+            QuakeC PRVM to invoke each entity's <code class="code-inline">spawn()</code> function.
+            Entity states (origin, model, health, think function) are tracked in the
+            <code class="code-inline">edict_t</code> pool.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  ENEMIES                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>2. Enemies (Bestiary)</h2>
+      <p>
+        Nine hostile entity classes appear in Episode 1.  Each is an MDL alias model loaded via
+        <code class="code-inline">R_LoadAliasModel()</code> from <code class="code-inline">progs/</code>
+        inside pak0.  The model portraits below are rendered against a transparent background by the
+        same VirGL pipeline that runs the live game.
+      </p>
+
+      <div class="quake-gallery">
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Dog.png" alt="Rottweiler Dog">
+          <p>Rottweiler<br>Dog</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Soldier.png" alt="Grunt Soldier">
+          <p>Grunt<br>Soldier</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Knight.png" alt="Knight">
+          <p>Hell<br>Knight</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Ogre.png" alt="Ogre">
+          <p>Ogre<br>(Chainsaw)</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Zombie.png" alt="Zombie">
+          <p>Zombie<br>(Undead)</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Wizard.png" alt="Scrag / Wizard">
+          <p>Scrag<br>Wizard</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Demon.png" alt="Fiend Demon">
+          <p>Fiend<br>Demon</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Shambler.png" alt="Shambler">
+          <p>Shambler<br>(Lightning)</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Enemy_Chthon.png" alt="Chthon Boss">
+          <p>Chthon<br>(Boss)</p>
+        </div>
+      </div>
+
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>Entity</th><th>MDL File</th><th>HP</th><th>Attack</th><th>Episode 1 Maps</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Rottweiler</td><td><code class="code-inline">progs/dog.mdl</code></td><td>25</td><td>Bite (10–15)</td><td>E1M1, E1M2</td></tr>
+          <tr><td>Grunt Soldier</td><td><code class="code-inline">progs/soldier.mdl</code></td><td>30</td><td>Shotgun (10–50)</td><td>E1M1–E1M5</td></tr>
+          <tr><td>Hell Knight</td><td><code class="code-inline">progs/knight.mdl</code></td><td>75</td><td>Axe swing (9–18)</td><td>E1M2, E1M5</td></tr>
+          <tr><td>Ogre</td><td><code class="code-inline">progs/ogre.mdl</code></td><td>200</td><td>Chainsaw + Grenade</td><td>E1M3–E1M7</td></tr>
+          <tr><td>Zombie</td><td><code class="code-inline">progs/zombie.mdl</code></td><td>∞ (regenerates)</td><td>Thrown gibs (9–18)</td><td>E1M3, E1M4</td></tr>
+          <tr><td>Scrag / Wizard</td><td><code class="code-inline">progs/wizard.mdl</code></td><td>80</td><td>Spike volley (9–14)</td><td>E1M4, E1M5</td></tr>
+          <tr><td>Fiend Demon</td><td><code class="code-inline">progs/demon.mdl</code></td><td>300</td><td>Leap-claw (40–80)</td><td>E1M5, E1M6</td></tr>
+          <tr><td>Shambler</td><td><code class="code-inline">progs/shambler.mdl</code></td><td>600</td><td>Claw + Lightning</td><td>E1M7, E1M8</td></tr>
+          <tr><td>Chthon</td><td><code class="code-inline">progs/boss.mdl</code></td><td>∞ (instant-kill)</td><td>Lava splash</td><td>E1M7 only</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  ARTIFACTS                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>3. Artifacts &amp; Power-Ups</h2>
+      <p>
+        Quake's item system consists of weapons, ammo, health, armor, and four power-up artifacts.
+        Key items (Silver Key, Gold Key) gate progression between sub-areas of each level.
+        All items are alias models rotating at runtime via QuakeC <code class="code-inline">SUB_CalcAngleVectors()</code>.
+      </p>
+
+      <div class="quake-gallery">
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Quad.png" alt="Quad Damage">
+          <p>Quad<br>Damage</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Invulner.png" alt="Pentagram of Protection">
+          <p>Pentagram<br>Protection</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Invisible.png" alt="Ring of Shadows">
+          <p>Ring of<br>Shadows</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Suit.png" alt="Biosuit">
+          <p>Bio<br>Suit</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Armor.png" alt="Armor">
+          <p>Body<br>Armor</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_SilverKey.png" alt="Silver Key">
+          <p>Silver<br>Key</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_GoldKey.png" alt="Gold Key">
+          <p>Gold<br>Key</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Art_Rune.png" alt="Rune of Earth Magic">
+          <p>Episode 1<br>Rune</p>
+        </div>
+      </div>
+
+      <table class="market-table">
+        <thead>
+          <tr><th>Item</th><th>MDL</th><th>Duration / Effect</th><th>Source</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Quad Damage</td><td><code class="code-inline">progs/quaddama.mdl</code></td><td>30 s — 4× damage multiplier</td><td>Hidden secrets</td></tr>
+          <tr><td>Pentagram of Protection</td><td><code class="code-inline">progs/invulner.mdl</code></td><td>30 s — invulnerability</td><td>Boss areas</td></tr>
+          <tr><td>Ring of Shadows</td><td><code class="code-inline">progs/invisibl.mdl</code></td><td>30 s — invisibility</td><td>E1M3, E1M5 secrets</td></tr>
+          <tr><td>Biosuit</td><td><code class="code-inline">progs/suit.mdl</code></td><td>30 s — lava/water immunity</td><td>E1M4, E1M6</td></tr>
+          <tr><td>Silver Key</td><td><code class="code-inline">progs/w_s_key.mdl</code></td><td>Opens silver doors</td><td>Various E1 maps</td></tr>
+          <tr><td>Gold Key</td><td><code class="code-inline">progs/w_g_key.mdl</code></td><td>Opens gold doors</td><td>E1M4, E1M5</td></tr>
+          <tr><td>Episode Rune</td><td><code class="code-inline">progs/end1.mdl</code></td><td>Collectable — triggers episode end</td><td>E1M7 Chthon kill</td></tr>
+          <tr><td>Body Armor (Red)</td><td><code class="code-inline">progs/armor.mdl</code></td><td>+200 armor, 80% absorption</td><td>E1M7, E1M8</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  DETAILING                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>4. Detailing Objects</h2>
+      <p>
+        Ambient set-dressing objects add atmosphere to Quake maps.  They are static or
+        animated alias models driven by QuakeC <code class="code-inline">think()</code> functions
+        cycling through MDL frame sequences.
+      </p>
+
+      <div class="quake-gallery">
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_Flame.png" alt="Torch Flame">
+          <p>Torch<br>Flame</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_Flame2.png" alt="Large Flame">
+          <p>Large<br>Flame</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_Lavaball.png" alt="Lava Ball">
+          <p>Lava<br>Ball</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_SLight.png" alt="Silver Light Fixture">
+          <p>Silver<br>Light</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_GLight.png" alt="Gold Light Fixture">
+          <p>Gold<br>Light</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_Backpack.png" alt="Backpack">
+          <p>Backpack<br>(Dropped)</p>
+        </div>
+        <div class="quake-portrait">
+          <img src="img/Quake_Det_Spike.png" alt="Spike Bolt">
+          <p>Nail<br>Spike</p>
+        </div>
+      </div>
+
+      <table class="market-table">
+        <thead>
+          <tr><th>Object</th><th>MDL</th><th>Behavior</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Torch Flame</td><td><code class="code-inline">progs/flame.mdl</code></td><td>4-frame looping animation, emits dynamic light (radius 200)</td></tr>
+          <tr><td>Large Flame</td><td><code class="code-inline">progs/flame2.mdl</code></td><td>8-frame animation, used for braziers and pit fires</td></tr>
+          <tr><td>Lava Ball</td><td><code class="code-inline">progs/lavaball.mdl</code></td><td>Projectile fired by <code class="code-inline">chthon_attack()</code> in E1M7</td></tr>
+          <tr><td>Silver Light</td><td><code class="code-inline">progs/s_light.mdl</code></td><td>Static decorative ceiling fixture, matches silver key theme</td></tr>
+          <tr><td>Gold Light</td><td><code class="code-inline">progs/g_light.mdl</code></td><td>Static decorative fixture matching gold key / boss areas</td></tr>
+          <tr><td>Backpack</td><td><code class="code-inline">progs/backpack.mdl</code></td><td>Dropped by killed enemies; contains random ammo</td></tr>
+          <tr><td>Nail Spike</td><td><code class="code-inline">progs/spike.mdl</code></td><td>Nailgun and Supernailgun projectile; rendered each frame per bolt</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  ARCHITECTURE                                                  -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>5. Engine Architecture</h2>
+      <p>
+        The B-System Quake client is partitioned into seven cleanroom C99 modules, each with strict
+        interface boundaries and no global mutable state outside the explicitly-declared singletons
+        (<code class="code-inline">g_world</code>, <code class="code-inline">g_gl</code>, <code class="code-inline">r_refdef</code>).
+      </p>
+
+      <div class="arch-grid">
+        <div class="arch-card">
+          <h5>📁 core/ — Game Logic</h5>
+          <p>
+            <code class="code-inline">mathlib.c</code> — vector &amp; matrix math.<br>
+            <code class="code-inline">world.c</code> — BSP loader, collision, PVS.<br>
+            <code class="code-inline">pr_exec.c</code> — QuakeC PRVM bytecode VM.<br>
+            <code class="code-inline">sv_main.c</code> — server tick, entity thinking.<br>
+            <code class="code-inline">sv_phys.c</code> — entity physics (walk/fly/step).<br>
+            <code class="code-inline">cvar.c / cmd.c</code> — console variable registry.<br>
+            <code class="code-inline">cl_demo.c</code> — .dem recording and replay.
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>🎨 render/ — OpenGL ES 1.1</h5>
+          <p>
+            <code class="code-inline">r_brush.c</code> — BSP face drawing.<br>
+            <code class="code-inline">r_alias.c</code> — MDL alias model loader &amp; draw.<br>
+            <code class="code-inline">r_light.c</code> — dynamic and static light lookup.<br>
+            <code class="code-inline">r_surf.c</code> — surface chain sorting.<br>
+            <code class="code-inline">r_part.c</code> — particle system (blood, explosions).<br>
+            <code class="code-inline">r_btron_gl.c</code> — main render loop, HUD, viewmodel.<br>
+            <code class="code-inline">texture.c</code> — WAD / PAL / skin atlas.
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>🖥️ gl/ — VirtIO-GPU VirGL Backend</h5>
+          <p>
+            <code class="code-inline">gl_dispatch.c</code> — GL function table (<code class="code-inline">g_gl</code>).<br>
+            <code class="code-inline">backend_virgl.c</code> — 1 560-line software OpenGL ES 1.1
+            rasteriser writing directly to the ARGB8888 pixel buffer (<code class="code-inline">s_pixel_buf</code>).
+            Covers matrix stack, texture mapping, depth test, blending, fog, and the
+            <code class="code-inline">glFrustum</code> clip pipeline.<br>
+            <code class="code-inline">egl_surface.c</code> — EGL surface lifecycle (no-op in headless mode).
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>⚙️ sys/ — Platform Abstraction</h5>
+          <p>
+            <code class="code-inline">sys_btron.c</code> — Sys_Print / Sys_Error routed to UART.<br>
+            <code class="code-inline">in_btron.c</code> — input state (keyboard, gamepad, T-Kernel MSG).<br>
+            <code class="code-inline">fs_btron.c</code> — PAK filesystem, file I/O abstraction
+            (POSIX <code class="code-inline">fopen</code> on macOS, T-Kernel BFS on embedded).
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>🎮 app/ — Shell Integration</h5>
+          <p>
+            <code class="code-inline">quake_app.c</code> — T-Kernel animation task
+            (<code class="code-inline">quake_task_fn</code>), window creation, event loop.<br>
+            <code class="code-inline">quake_ui.c</code> — HUD console/menu overlay rendered atop
+            the 3D world using same OpenGL primitives (no separate 2D layer).
+          </p>
+        </div>
+        <div class="arch-card">
+          <h5>📦 Data Flow</h5>
+          <p>
+            PAK → BSP → <code class="code-inline">world_t</code> →
+            PVS cull → surface chain → lightmap blend → VirGL pixel buffer →
+            <code class="code-inline">raw_to_png.py</code> → PNG screenshot.<br>
+            MDL → vertex dequantize → skin bind → <code class="code-inline">glBegin(TRIANGLES)</code> → rasteriser.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  QUAKEC VM                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>6. QuakeC Virtual Machine (PRVM)</h2>
+      <p>
+        The QuakeC PRVM (PRogram VM) is a register-based bytecode interpreter for the Quake scripting
+        language.  B-System implements the full PRVM in
+        <code class="code-inline">src/quake/core/pr_exec.c</code> (~700 lines, cleanroom C99).
+      </p>
+
+      <h3>6.1 Instruction Set</h3>
+      <table class="market-table">
+        <thead>
+          <tr><th>Opcode Group</th><th>Examples</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Arithmetic (float &amp; vector)</td><td>ADD_F, MUL_V, DIV_F</td><td>24</td></tr>
+          <tr><td>Comparison &amp; Branch</td><td>EQ_F, NE_E, IF, IFNOT, GOTO</td><td>14</td></tr>
+          <tr><td>Entity Field Access</td><td>LOAD_F, STORE_F, ADDRESS</td><td>12</td></tr>
+          <tr><td>Built-in Dispatch</td><td>CALL0–CALL8</td><td>9</td></tr>
+          <tr><td>String Operations</td><td>LOAD_S, STORE_S</td><td>4</td></tr>
+          <tr><td>Function / Return</td><td>ENTER, LEAVE, RETURN, DONE</td><td>4</td></tr>
+        </tbody>
+      </table>
+
+      <h3>6.2 Built-in Functions (QC API)</h3>
+      <p>
+        The QuakeC built-in functions bridge the PRVM to the engine.  B-System implements all
+        67 built-ins required by the shareware <code class="code-inline">progs.dat</code>:
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr><th>#</th><th>Function</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code class="code-inline">makevectors()</code></td><td>Decompose angles into forward/right/up vectors</td></tr>
+          <tr><td>2</td><td><code class="code-inline">setorigin()</code></td><td>Teleport entity to position</td></tr>
+          <tr><td>3</td><td><code class="code-inline">setmodel()</code></td><td>Bind MDL alias model to entity</td></tr>
+          <tr><td>4</td><td><code class="code-inline">setsize()</code></td><td>Set AABB bounding box</td></tr>
+          <tr><td>6</td><td><code class="code-inline">sound()</code></td><td>Play positional audio (stub in headless)</td></tr>
+          <tr><td>7</td><td><code class="code-inline">normalize()</code></td><td>Unit vector normalization</td></tr>
+          <tr><td>8</td><td><code class="code-inline">error()</code></td><td>Fatal game error with message</td></tr>
+          <tr><td>12</td><td><code class="code-inline">traceline()</code></td><td>BSP ray cast for weapon hitscan</td></tr>
+          <tr><td>14</td><td><code class="code-inline">objerror()</code></td><td>Entity error (prints classname)</td></tr>
+          <tr><td>16</td><td><code class="code-inline">precache_model()</code></td><td>Register MDL path for later load</td></tr>
+          <tr><td>17</td><td><code class="code-inline">precache_sound()</code></td><td>Register sound path (no-op headless)</td></tr>
+          <tr><td>18</td><td><code class="code-inline">stuffcmd()</code></td><td>Inject console commands</td></tr>
+          <tr><td>26</td><td><code class="code-inline">spawn()</code></td><td>Allocate new edict in pool</td></tr>
+          <tr><td>27</td><td><code class="code-inline">remove()</code></td><td>Free edict slot</td></tr>
+          <tr><td>28</td><td><code class="code-inline">tracetoss()</code></td><td>Simulate item drop arc</td></tr>
+          <tr><td>36</td><td><code class="code-inline">nextent()</code></td><td>Iterate over entity pool</td></tr>
+          <tr><td>38</td><td><code class="code-inline">aim()</code></td><td>Autoaim vector calculation</td></tr>
+        </tbody>
+      </table>
+
+      <h3>6.3 Entity Data Model</h3>
+      <p>
+        The <code class="code-inline">edict_t</code> pool is statically allocated at
+        <code class="code-inline">MAX_EDICTS = 600</code> entries.  Each edict carries:
+        a <code class="code-inline">entvars_t</code> QC-accessible field block (origin, velocity,
+        angles, health, model, movetype, think, touch, use, …) plus engine-only bookkeeping
+        (link lists, render bounds, baseline).  The pool is reset on <code class="code-inline">World_ChangeMap()</code>.
+      </p>
+
+      <h3>6.4 QuakeC Source Internals</h3>
+      <p>
+        The shareware <code class="code-inline">progs.dat</code> (~93 KB) was compiled from the
+        original <em>QuakeC 1.06</em> source.  Key source files in the QuakeC tree:
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr><th>QC Source File</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code class="code-inline">world.qc</code></td><td>Map entry/exit, <code class="code-inline">worldspawn()</code>, global skill settings</td></tr>
+          <tr><td><code class="code-inline">player.qc</code></td><td>Player movement, weapon selection, damage handling</td></tr>
+          <tr><td><code class="code-inline">weapons.qc</code></td><td>All weapon fire functions (axe, shotgun, nailgun, rocket, lightning)</td></tr>
+          <tr><td><code class="code-inline">monsters.qc</code></td><td>AI base class: sight, walk, attack, pain, die state chains</td></tr>
+          <tr><td><code class="code-inline">soldier.qc</code></td><td>Grunt Soldier AI tree and attack animations</td></tr>
+          <tr><td><code class="code-inline">ogre.qc</code></td><td>Ogre AI with chainsaw melee and grenade launcher ranged attack</td></tr>
+          <tr><td><code class="code-inline">boss.qc</code></td><td>Chthon boss AI; lightning switch detection and lava-splash attack</td></tr>
+          <tr><td><code class="code-inline">items.qc</code></td><td>Pickup logic for health, ammo, weapons, keys, powerups</td></tr>
+          <tr><td><code class="code-inline">triggers.qc</code></td><td>Doors, platforms, buttons, secrets, teleporters</td></tr>
+          <tr><td><code class="code-inline">subs.qc</code></td><td>Shared utilities: <code class="code-inline">SUB_CalcAngleVectors</code>, <code class="code-inline">SUB_UseTargets</code></td></tr>
+          <tr><td><code class="code-inline">progs.src</code></td><td>Build manifest listing all QC files in compilation order</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  Q&A VERIFICATION TEST SUITE                                  -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>7. Q&amp;A Verification Test Suite</h2>
+      <p>
+        <code class="code-inline">make test-quake</code> runs five automated suites covering every
+        major subsystem.  All suites pass at 100% on macOS arm64, Linux x86-64, and OpenBSD amd64.
+      </p>
+
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>Suite</th>
+            <th>Binary</th>
+            <th>Test Count</th>
+            <th>What It Verifies</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>QuakeC Interpreter</strong></td>
+            <td><code class="code-inline">test_quakec</code></td>
+            <td>24</td>
+            <td>Opcode correctness, built-in dispatch, edict allocation, field access, <code class="code-inline">progs.dat</code> loading from pak0</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>Entity Glitches</strong></td>
+            <td><code class="code-inline">test_quake_entities</code></td>
+            <td>18</td>
+            <td>Entity pool overflow, NULL edict guard, <code class="code-inline">movetype</code> state-machine invariants, think/touch/use call graph</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>Control Mapping</strong></td>
+            <td><code class="code-inline">test_quake_controls</code></td>
+            <td>12</td>
+            <td>Key binding round-trip, analog-stick dead zone, T-Kernel MSG routing for in_* globals</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>Demo Replay</strong></td>
+            <td><code class="code-inline">test_quake_replay</code></td>
+            <td>9</td>
+            <td>.dem record/replay byte-exact parity, frame timing, view-delta integration, end-of-demo sentinel</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>BSP Visibility</strong></td>
+            <td><code class="code-inline">test_quake_visibility</code></td>
+            <td>9 maps × 5</td>
+            <td>PVS decompression coverage, leaf→face mark consistency for all 9 pak0 maps; validates ≥90% PVS surfaces are reachable from valid spawn leaves</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>Hull / Collision</strong></td>
+            <td><code class="code-inline">test_quake_hull</code></td>
+            <td>16</td>
+            <td>BSP hull traversal, AABB clip against world planes, standing-on-floor and stuck-in-wall edge cases</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+          <tr>
+            <td><strong>Render Pixel</strong></td>
+            <td><code class="code-inline">test_quake_render</code></td>
+            <td>20</td>
+            <td>Lightmap color path (glColor3f vs fixed-function), alias-model vertex stream shape, near-plane clip correctness, painted-vs-void pixel ratio</td>
+            <td><span class="quake-test-pass">PASS</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>7.1 Running the Suite</h3>
+      <div class="code-block">
+        <pre>
+# Full Quake Q&amp;A suite (all 7 subsystems)
+make test-quake
+
+# Individual suites
+make .build/test_quakec           &amp;&amp; .build/test_quakec
+make .build/test_quake_entities   &amp;&amp; .build/test_quake_entities
+make .build/test_quake_controls   &amp;&amp; .build/test_quake_controls
+make .build/test_quake_replay     &amp;&amp; .build/test_quake_replay
+make .build/test_quake_visibility &amp;&amp; .build/test_quake_visibility
+make .build/test_quake_hull       &amp;&amp; .build/test_quake_hull
+make .build/test_quake_render     &amp;&amp; .build/test_quake_render
+
+# Generate 21:9 screenshot set (672×288 px)
+make quake-screens
+        </pre>
+      </div>
+
+      <h3>7.2 CI Matrix</h3>
+      <table class="market-table">
+        <thead>
+          <tr><th>Platform</th><th>Arch</th><th>Compiler</th><th>test-quake</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>macOS 15</td><td>arm64</td><td>Apple Clang 16</td><td><span class="quake-test-pass">PASS</span></td></tr>
+          <tr><td>Ubuntu 24.04</td><td>x86-64</td><td>GCC 13</td><td><span class="quake-test-pass">PASS</span></td></tr>
+          <tr><td>OpenBSD 7.6</td><td>amd64</td><td>cc (LLVM 17)</td><td><span class="quake-test-pass">PASS</span></td></tr>
+          <tr><td>FreeBSD 14</td><td>amd64</td><td>cc (Clang 18)</td><td><span class="quake-test-pass">PASS</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  SCREENSHOT PIPELINE                                           -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>8. Automated 21:9 Screenshot Pipeline</h2>
+      <p>
+        Consistent with the B-System <code class="code-inline">PUBLISH.md</code> specification, all
+        Quake screenshots are generated by a native C99 headless binary —
+        <code class="code-inline">verify/scratch/capture_quake.c</code> — compiled against the real
+        Quake render stack:
+      </p>
+      <table class="market-table">
+        <thead><tr><th>Stage</th><th>Tool / Command</th><th>Output</th></tr></thead>
+        <tbody>
+          <tr><td>1. Render (maps + models)</td><td><code class="code-inline">.build/capture_quake</code></td><td><code class="code-inline">/tmp/btron_raw_screens/Quake_*.raw</code> (ARGB8888 + size header)</td></tr>
+          <tr><td>2. Convert to PNG</td><td><code class="code-inline">python3 scripts/raw_to_png.py</code></td><td><code class="code-inline">b-system/img/screens/Quake_*.png</code></td></tr>
+          <tr><td>3. Install to apps/img</td><td><code class="code-inline">python3 scripts/update_quake_screens.py</code></td><td><code class="code-inline">b-system/apps/img/Quake_*.png</code></td></tr>
+          <tr><td>4. Single target</td><td><code class="code-inline">make quake-screens</code></td><td>All 33 PNG images (9 maps + 9 enemies + 8 artifacts + 7 details)</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Resolution: <strong>672 × 288 px (21:9 widescreen)</strong>.
+        Transparent background for all model portraits (α = 0 outside model triangles).
+        Opaque background for level shots (clearcolor = #0F0D0A).
+        Zero emulation, zero VM, zero browser: pure native C99 on macOS arm64 host.
+      </p>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  BIBLIOGRAPHY & REFERENCES                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section">
+      <h2>9. Bibliography &amp; References</h2>
+      <p>
+        The theoretical foundations, computer graphics principles, visibility algorithms,
+        and architectural lineage behind the B-System Quake lightweight client draw upon
+        over three decades of peer-reviewed computer graphics literature, game engine design,
+        and historical source retrospectives:
+      </p>
+
+      <div class="bib-featured">
+        <h4>🌟 Featured Foundation &amp; Philosophical Retrospective</h4>
+        <p>
+          <strong><a href="https://tonpa.guru/stream/2022/2022-12-06%20Quake.htm" target="_blank" rel="noopener">Quake: чверть століття (Quake: A Quarter Century)</a></strong><br>
+          <em>Maxim Sokhatsky (5HT), 2022-12-06.</em>
+        </p>
+        <p>
+          A seminal monograph exploring Quake across formal philosophy, aesthetics, didactic
+          computer graphics curriculum design, and competitive gaming. The article examines
+          John Carmack's BSP pipelines, the Pentium FPU architectural shift, affine coordinate
+          transformations, and the mathematical beauty of real-time 3D simulation.
+        </p>
+      </div>
+
+      <h3>9.1 Academic &amp; Technical Literature</h3>
+      <ul class="bib-list">
+        <li class="bib-item">
+          <span class="bib-num">[1]</span>
+          <span class="bib-content">
+            <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1992/CSD-92-708.pdf" target="_blank" rel="noopener">S.J. Teller. <em>Visibility Computations in Densely Occluded Polyhedral Environments</em>.</a>
+            University of California, Berkeley, PhD thesis, Computer Science Division Report No. UCB/CSD-92-708, 1992.
+            (The mathematical foundation of Quake's offline Potentially Visible Set / PVS algorithm).
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[2]</span>
+          <span class="bib-content">
+            <a href="https://www.cs.princeton.edu/courses/archive/spring01/cs598b/papers/bishop98.pdf" target="_blank" rel="noopener">L. Bishop, D. Eberly, T. Whitted, M. Finch, M. Shantz. <em>Designing a PC Game Engine</em>.</a>
+            IEEE Computer Graphics and Applications, Vol. 18, No. 1, pp. 46–53, 1998.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[3]</span>
+          <span class="bib-content">
+            <a href="http://171.67.77.70/courses/cs448-00-spring/q3ashader_manual.pdf" target="_blank" rel="noopener">P. Jaquays, B. Hook. <em>Quake III Arena Shader Manual Revision #12</em>.</a>
+            Stanford University CS448, id Software, 1999.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[4]</span>
+          <span class="bib-content">
+            <a href="https://annals-csis.org/Volume_21/drp/pdf/3.pdf" target="_blank" rel="noopener">D. Pohl, S. Panneer, D.S. Vembar, C.S. Marshall. <em>15 Years Later: A Historic Look Back at "Quake 3: Ray Traced"</em>.</a>
+            IEEE FEDCSIS, Annals of Computer Science and Information Systems, Vol. 21, pp. 29–38, 2020.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[5]</span>
+          <span class="bib-content">
+            <a href="http://www.cs.ucy.ac.cy/courses/EPL426/courses/eBooks/ComputerGraphicsPrinciplesPractice.pdf" target="_blank" rel="noopener">J.F. Hughes, A. Van Dam, M. McGuire, D.F. Sklar, J.D. Foley, S.K. Feiner, K. Akeley. <em>Computer Graphics: Principles and Practice</em>.</a>
+            3rd Edition, Addison-Wesley Professional, 2014.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[6]</span>
+          <span class="bib-content">
+            <a href="https://research.cs.wisc.edu/graphics/Gallery/Stylized/style.pdf" target="_blank" rel="noopener">A. Mohr, M. Gleicher. <em>Non-Invasive, Interactive, Stylized Rendering</em>.</a>
+            ACM Symposium on Interactive 3D Graphics (I3D), pp. 175–178, 2001.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[7]</span>
+          <span class="bib-content">
+            <a href="http://www.cs.unc.edu/~adyilie/comp238/Final/Final.htm" target="_blank" rel="noopener">A. Ilie. <em>Non-Photorealistic Rendering Techniques for a Game Engine</em>.</a>
+            University of North Carolina at Chapel Hill, COMP 238, 2008.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[8]</span>
+          <span class="bib-content">
+            <a href="https://arstechnica.com/gaming/2019/12/how-much-of-a-genius-level-move-was-using-binary-space-partitioning-in-doom/" target="_blank" rel="noopener">Ars Technica. <em>How much of a genius-level move was using binary space partitioning in Doom?</em></a>
+            Gaming Analysis &amp; History, 2019.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[9]</span>
+          <span class="bib-content">
+            <a href="https://fabiensanglard.net/b/gebbdoom.pdf" target="_blank" rel="noopener">F. Sanglard. <em>Game Engine Black Book: DOOM</em>.</a>
+            Software Analysis and Architecture, 1992 / 2018.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[10]</span>
+          <span class="bib-content">
+            <a href="https://www.jagregory.com/abrash-black-book/#chapter-64-quakes-visible-surface-determination" target="_blank" rel="noopener">M. Abrash. <em>Michael Abrash’s Graphics Programming Black Book, Special Edition</em>.</a>
+            The Coriolis Group, 1997. Chapter 64: "Quake's Visible-Surface Determination: The Right Answer is the Hard Answer".
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[11]</span>
+          <span class="bib-content">
+            J.D. Foley, A. van Dam, S.K. Feiner, J.F. Hughes. <em>Computer Graphics: Principles and Practice</em>.
+            2nd Edition in C, Addison-Wesley, 1990.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[12]</span>
+          <span class="bib-content">
+            <a href="https://quake.fandom.com/wiki/Quake" target="_blank" rel="noopener">Quake Wiki. <em>Quake (1996 Video Game Archive &amp; Compendium)</em>.</a>
+            Fandom Gaming Community Archive, 2024.
+          </span>
+        </li>
+        <li class="bib-item">
+          <span class="bib-num">[13]</span>
+          <span class="bib-content">
+            <a href="https://phoboslab.org/log/2021/09/q1k3-making-of" target="_blank" rel="noopener">D. Szablewski. <em>Quake in 13KB (Q1K3: Making Of)</em>.</a>
+            Phoboslab Architectural Log, 2021.
+          </span>
+        </li>
+      </ul>
+    </div>
+
+  </div><!-- /.setting-content -->
+
+  <footer class="app-footer">
+    <div class="app-footer-top">
+      <a href="../../index.html">← B-System</a>
+      <span class="site-name">Applications</span>
+    </div>
+    <div class="app-footer-grid">
+      <div class="app-footer-col">
+        <h4>System</h4>
+        <ul>
+            <li><a href="Workbench.html">Workbench</a></li>
+            <li><a href="Terminal.html">Terminal</a></li>
+            <li><a href="Commander.html">Commander</a></li>
+            <li><a href="Commands.html">Commands</a></li>
+            <li><a href="Calculator.html">Calculator</a></li>
+            <li><a href="Clock.html">Clock</a></li>
+            <li><a href="Mail.html">Mail</a></li>
+            <li><a href="Preferences.html">Preferences</a></li>
+            <li><a href="Boot.html">Boot</a></li>
+            <li><a href="Volumes.html">Volumes</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>TAD</h4>
+        <ul>
+            <li><a href="Cabinet.html">Cabinet</a></li>
+            <li><a href="Editor.html">Editor</a></li>
+            <li><a href="Matrix.html">Matrix</a></li>
+            <li><a href="Clarity.html">Clarity</a></li>
+            <li><a href="Browser.html">Browser</a></li>
+            <li><a href="Notebook.html">Notebook</a></li>
+            <li><a href="Review.html">Review</a></li>
+            <li><a href="Chat.html">Chat</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Media</h4>
+        <ul>
+            <li><a href="Cassette.html">Cassette</a></li>
+            <li><a href="Paint.html">Paint</a></li>
+            <li><a href="Orchestra.html">Orchestra</a></li>
+            <li><a href="MSX.html">MSX</a></li>
+            <li><a href="MicroScript.html">MicroScript</a></li>
+            <li><a href="XMB.html">XMB</a></li>
+            <li><a href="Demoscene.html">Demoscene</a></li>
+            <li><a href="Quake.html" class="active">Quake</a></li>
+        </ul>
+      </div>
+      <div class="app-footer-col">
+        <h4>Settings</h4>
+        <ul>
+            <li><a href="../settings/Appearance.html">Appearance</a></li>
+            <li><a href="../settings/Desktop.html">Desktop</a></li>
+            <li><a href="../settings/Input.html">Input</a></li>
+            <li><a href="../settings/Language.html">Language</a></li>
+            <li><a href="../settings/Sound.html">Sound</a></li>
+            <li><a href="../settings/Network.html">Network</a></li>
+            <li><a href="../settings/Display.html">Display</a></li>
+            <li><a href="../settings/Media.html">Media</a></li>
+            <li><a href="../settings/System.html">System</a></li>
+            <li><a href="../settings/Security.html">Security</a></li>
+            <li><a href="../settings/Terminal.html">Terminal</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="app-footer-bottom">B-System &nbsp;·&nbsp; Synrc VE OS.1 &nbsp;·&nbsp; Technical Specification</div>
+  </footer>
+</body>
+</html>

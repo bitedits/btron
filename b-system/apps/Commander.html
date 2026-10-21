@@ -50,7 +50,7 @@
       </span>
     </div>
 
-                                                                    <!-- 画面プレビュー -->
+                                                                        <!-- 画面プレビュー -->
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
       <div class="screen-preview">
@@ -166,6 +166,45 @@
     </div>
 
     <div class="section">
+      <h2>3. 対応アーキテクチャ (Architectures)</h2>
+      <p>
+        Binary Editor (BE) が対応する逆アセンブラおよび命令セットアーキテクチャの一覧。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Supported processor architectures and instruction set extensions in Binary Editor (BE)."</span>
+      </p>
+      <ul class="setting-features" style="margin-top: 0.8rem; margin-bottom: 1.5rem;">
+        <li><b>EM64T</b>: SSE5, KNI, AVX-512, AES, AMX, TSX, MPX, FMA, VNNI, GFNI, SGX, CET, PKU</li>
+        <li><b>AArch32</b>: v6, V6-M, v7-A, v7-M, v8-M</li>
+        <li><b>AArch64</b>: v8-A, NEON, SVE, SME</li>
+        <li><b>RISC-V</b>: RV32, RV64, RV128</li>
+        <li><b>PowerPC</b>: POWER, Cell/BE (Sony PS3)</li>
+        <li><b>MIPS</b>: MIPS32, MIPS64 (Nintendo 64, Sony PS2)</li>
+        <li><b>SuperH</b>: SH-4 (Sega Dreamcast)</li>
+        <li><b>M68K</b>: M68000 (Motorola CD-920)</li>
+        <li><b>PDP-11</b>: EIS, FIS, CIS (DEC PDP-11/70)</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>4. 開発元クレジット (Credits)</h2>
+      <p>
+        各アーキテクチャの逆アセンブラおよびバイナリ解析コンポーネントの原作者・オープンソースプロジェクトへの謝辞。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Credits and acknowledgments to upstream disassembler authors and projects."</span>
+      </p>
+      <ul class="setting-features" style="margin-top: 0.8rem;">
+        <li>Kevin Pors, <a href="https://github.com/krpors/hx" target="_blank" rel="noopener">hx</a></li>
+        <li>Wouter de Waal, <a href="https://github.com/TomHarte/dis68k" target="_blank" rel="noopener">dis68k</a></li>
+        <li>Snickerbockers, <a href="https://github.com/washingtondc-emu/sh4asm" target="_blank" rel="noopener">sh4asm</a></li>
+        <li>Frank Wille, <a href="https://github.com/BullyWiiPlaza/vdappc" target="_blank" rel="noopener">vdappc</a></li>
+        <li>Michael Clark, <a href="https://github.com/michaeljclark/riscv-disassembler" target="_blank" rel="noopener">riscv-disassembler</a></li>
+        <li>Justin Sherman, <a href="https://github.com/jsherman212/armadillo" target="_blank" rel="noopener">armadillo</a></li>
+        <li>Thiadmer Riemersma, <a href="https://github.com/compuphase/ARM-disassembler/" target="_blank" rel="noopener">ARM-disassembler</a></li>
+        <li>NASM Authors, <a href="https://github.com/netwide-assembler/nasm" target="_blank" rel="noopener">nasm</a></li>
+        <li>Marcelina Kościelnicka, <a href="https://github.com/envytools/envytools" target="_blank" rel="noopener">envytools</a></li>
+        <li>Namdak Tonpa, <a href="https://github.com/asmedit/dasm-pdp11" target="_blank" rel="noopener">dasm-pdp11</a>, <a href="https://github.com/asmedit/dasm-mips" target="_blank" rel="noopener">dasm-mips</a></li>
+      </ul>
+    </div>
+
+    <div class="section">
       <h2>関連コンポーネント (Related Components)</h2>
       <div class="related-apps">
         <a href="Workbench.html">🗄️ ワークベンチ</a>
@@ -219,6 +258,7 @@
             <li><a href="MicroScript.html">MicroScript</a></li>
             <li><a href="XMB.html">XMB</a></li>
             <li><a href="Demoscene.html">Demoscene</a></li>
+             <li><a href="Quake.html">Quake</a></li>
         </ul>
       </div>
       <div class="app-footer-col">

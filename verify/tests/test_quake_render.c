@@ -79,6 +79,7 @@ void P_UpdateParticles(float dt) { (void)dt; }
 void Draw_Fill(int x, int y, int w, int h, uint32_t c) { (void)x; (void)y; (void)w; (void)h; (void)c; }
 void Draw_String(int x, int y, const char *s) { (void)x; (void)y; (void)s; }
 void close_quake_window(void) {}
+uint32_t btron_render_perf_us(void) { return 0; }
 
 #define RW 320
 #define RH 240

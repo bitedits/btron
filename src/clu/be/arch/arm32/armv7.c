@@ -17,10 +17,7 @@
  */
 #include <assert.h>
 #include <ctype.h>
-#if __APPLE__
-#else
-#include <malloc.h>
-#endif
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include "../../editor.h"

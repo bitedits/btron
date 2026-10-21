@@ -299,7 +299,7 @@ APPS_MAP = {
             "alt": "Cross Media Bar (XMB) 画面"
         }
     ],
-    "Demoscene.html": [
+    "SDK.html": [
         {
             "screen": "../img/screens/Demoscene_Application.png",
             "caption": "実機描画フレームバッファより自動抽出された Lil Cu 64 ネイティブ 3D デモシーン画面 (4D Hopf Fibration & Procedural DSP Synth)",

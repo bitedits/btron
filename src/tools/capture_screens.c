@@ -100,6 +100,7 @@ void* SDL_CreateSystemCursor(int id) { (void)id; return NULL; }
 void  SDL_SetCursor(void *cursor) { (void)cursor; }
 ER init_evt_sys(void) { return E_OK; }
 ER get_evt(EVT *p_evt, W timeout_ms) { (void)p_evt; (void)timeout_ms; return E_TMOUT; }
+ER snd_evt(const EVT *p_evt) { (void)p_evt; return E_OK; }
 ER init_vobj_sys(const char *storage_root) { (void)storage_root; return E_OK; }
 /* Minimal VOBJ stubs for clarity_export.c in headless build */
 #include <btron/vobj.h>
@@ -225,6 +226,56 @@ static void reset_isolation_state(GDEV *dev) {
     memset((void*)dev->pixels, 0, dev->width * dev->height * sizeof(COLOR));
 }
 
+/* Deliver one key-down to a window's handler, then repaint it. */
+static void send_key(WND *wnd, UW key) {
+    if (!wnd || !wnd->event_handler) return;
+    EVT evt;
+    memset(&evt, 0, sizeof(EVT));
+    evt.type = EV_KEY_DOWN;
+    evt.key = key;
+    wnd->event_handler(wnd, &evt);
+    inval_wnd(wnd);
+    redraw_all_windows();
+}
+
+/* Open the first regular /SYS file in BE (via SC, F4), overwrite its bytes with
+ * `code` by typing hex digits in BE's hex editor (the file on disk is never
+ * saved), then pick architecture/bitness through the F2 dialog.  SC lists
+ * directories first, so the file is the fifth entry (.., TRASH, cbios, msx, file).
+ * arch_key/bits_key are the dialog's digit shortcuts.  With `asm_view` the
+ * dialog is confirmed and BE switches to disassembly (F4); otherwise the dialog
+ * stays open over the hex view.  `code` is typed `reps` times so the
+ * disassembly fills every terminal row; it must outgrow the 22-byte file. */
+static void capture_be(GDEV *dev, H x, H y, H w, H h, UW attr,
+                       const unsigned char *code, size_t len, int reps,
+                       int arch_key, int bits_key, BOOL asm_view, const char *raw_out) {
+    static const char hexd[] = "0123456789abcdef";
+    reset_isolation_state(dev);
+    WND *wnd = open_gterm_window_rect(x, y, w, h, attr);
+    if (!wnd) return;
+    gterm_exec(wnd, "sc");
+    for (int i = 0; i < 4; i++) send_key(wnd, BTRON_KEY_DOWN);
+    send_key(wnd, BTRON_KEY_F4);                     /* SC: edit in BE */
+    for (int r = 0; r < reps; r++) {
+        for (size_t i = 0; i < len; i++) {
+            send_key(wnd, (UW)hexd[code[i] >> 4]);
+            send_key(wnd, (UW)hexd[code[i] & 15]);
+        }
+    }
+    send_key(wnd, BTRON_KEY_PAGE_UP);                /* back to offset 0 */
+    send_key(wnd, BTRON_KEY_HOME);
+    send_key(wnd, BTRON_KEY_F2);                     /* BE: architecture dialog */
+    send_key(wnd, (UW)arch_key);
+    send_key(wnd, BTRON_KEY_TAB);
+    send_key(wnd, (UW)bits_key);
+    if (asm_view) {
+        send_key(wnd, BTRON_KEY_RETURN);
+        send_key(wnd, BTRON_KEY_F4);                 /* BE: hex -> disassembly */
+    }
+    dump_window_rect(dev, wnd, raw_out);
+    cls_wnd(wnd);
+}
+
 static void simulate_menu_click(WND *wnd, int header_idx) {
     if (!wnd || !wnd->event_handler) return;
     EVT evt;
@@ -338,40 +389,59 @@ int main(int argc, char **argv) {
             cls_wnd(w_term);
         }
 
-        /* Sokhatsky Commander (SC) Dual-Pane File Manager */
+        /* Commander suite window geometry: 1120 px wide (140 text columns at 8 px,
+         * fits the 1280x800 canvas with a 70 px margin) and 475 px tall
+         * (previous 396 px x 1.2). */
+        const H CMD_X = 70, CMD_Y = 150, CMD_W = 1120, CMD_H = 475;
+        const UW CMD_ATTR = WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE;
+
+        /* Sokhatsky Commander (SC) with the F10 Quit dialog opened */
         reset_isolation_state(dev);
-        WND *w_sc = open_gterm_window_rect(70, 180, 1120, 396,
-                                           WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+        WND *w_sc = open_gterm_window_rect(CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR);
         if (w_sc) {
             gterm_exec(w_sc, "sc");
-            inval_wnd(w_sc);
-            redraw_all_windows();
+            send_key(w_sc, BTRON_KEY_F10);
             dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_SC.raw");
-            dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_Application.raw");
-
-            /* F10 Quit Sokhatsky Commander (Exit Confirmation Panel) */
-            EVT evt_f10;
-            memset(&evt_f10, 0, sizeof(EVT));
-            evt_f10.type = EV_KEY_DOWN;
-            evt_f10.key = BTRON_KEY_F10;
-            if (w_sc->event_handler) w_sc->event_handler(w_sc, &evt_f10);
-            inval_wnd(w_sc);
-            redraw_all_windows();
-            dump_window_rect(dev, w_sc, "/tmp/btron_raw_screens/Commander_Exit.raw");
             cls_wnd(w_sc);
         }
 
-        /* Terminal Vision (TV) Table/Text Viewer */
+        /* Terminal Vision (TV) with the F2 Find dialog opened */
         reset_isolation_state(dev);
-        WND *w_tv = open_gterm_window_rect(70, 180, 1120, 396,
-                                           WND_ATTR_TITLE | WND_ATTR_CLOSE | WND_ATTR_BORDER | WND_ATTR_RESIZE);
+        WND *w_tv = open_gterm_window_rect(CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR);
         if (w_tv) {
             gterm_exec(w_tv, "tv /SYS/Heart_Sutra_Tibetan.txt");
-            inval_wnd(w_tv);
-            redraw_all_windows();
+            send_key(w_tv, BTRON_KEY_F2);
             dump_window_rect(dev, w_tv, "/tmp/btron_raw_screens/Commander_TV.raw");
             cls_wnd(w_tv);
         }
+
+        /* Binary Editor (BE, launched from SC via F4).  Each shot types a small
+         * machine-code sample into the first regular file in /SYS opened in BE,
+         * selects the architecture/bitness through the F2 dialog and either leaves
+         * the dialog open or switches to disassembly (F4). */
+        static const unsigned char x64_code[] = {
+            0x55, 0x48,0x89,0xE5, 0x48,0x83,0xEC,0x10, 0x89,0x7D,0xFC, 0x8B,0x45,0xFC,
+            0x83,0xC0,0x01, 0x89,0x45,0xF8, 0x48,0x8D,0x3D,0x10,0x00,0x00,0x00,
+            0xE8,0x00,0x00,0x00,0x00, 0x31,0xC0, 0x48,0x01,0xD8, 0x0F,0x05, 0x90,
+            0xB8,0x2A,0x00,0x00,0x00, 0x48,0x89,0xC7, 0xC9, 0xC3
+        };
+        static const unsigned char a32_code[] = {   /* AArch32 (A32), little endian */
+            0x00,0x48,0x2D,0xE9, 0x04,0xB0,0x8D,0xE2, 0x2A,0x00,0xA0,0xE3, 0x01,0x00,0x80,0xE2,
+            0x00,0x00,0x00,0xEB, 0x00,0x30,0xA0,0xE1, 0x00,0xF0,0x20,0xE3, 0x04,0xD0,0x4B,0xE2,
+            0x00,0x88,0xBD,0xE8, 0x1E,0xFF,0x2F,0xE1
+        };
+        static const unsigned char rv_code[] = {
+            0x13,0x01,0x01,0xFF, 0x23,0x34,0x11,0x00, 0x13,0x05,0xA0,0x02, 0x33,0x05,0xB5,0x00,
+            0xEF,0x00,0x00,0x00, 0x83,0x30,0x81,0x00, 0x13,0x01,0x01,0x01, 0x67,0x80,0x00,0x00
+        };
+        capture_be(dev, CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR, x64_code, sizeof(x64_code), 3,
+                   '1', '3', FALSE, "/tmp/btron_raw_screens/Commander_BE.raw");
+        capture_be(dev, CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR, x64_code, sizeof(x64_code), 3,
+                   '1', '4', TRUE,  "/tmp/btron_raw_screens/Commander_BE_X64.raw");
+        capture_be(dev, CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR, a32_code, sizeof(a32_code), 4,
+                   '2', '3', TRUE,  "/tmp/btron_raw_screens/Commander_BE_ARM.raw");
+        capture_be(dev, CMD_X, CMD_Y, CMD_W, CMD_H, CMD_ATTR, rv_code, sizeof(rv_code), 4,
+                   '3', '4', TRUE,  "/tmp/btron_raw_screens/Commander_BE_RISCV.raw");
 
         /* Cassette Application Window */
         reset_isolation_state(dev);

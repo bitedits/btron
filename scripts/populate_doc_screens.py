@@ -147,18 +147,33 @@ APPS_MAP = {
     "Commander.html": [
         {
             "screen": "../img/screens/Commander_SC.png",
-            "caption": "実機描画フレームバッファより自動抽出された Sokhatsky Commander (sc) 左右二面ファイルマネージャ (Dual-Pane File Manager)",
-            "alt": "Sokhatsky Commander (sc) 二面ファイル管理画面"
+            "caption": "実機描画フレームバッファより自動抽出された Sokhatsky Commander (sc) 終了確認ダイアログ (F10 Quit Dialog)",
+            "alt": "Sokhatsky Commander (sc) 終了確認ダイアログ (Quit Dialog)"
         },
         {
             "screen": "../img/screens/Commander_TV.png",
-            "caption": "実機描画フレームバッファより自動抽出された Terminal Vision (tv) テキスト閲覧画面 (Heart Sutra Tibetan)",
-            "alt": "Terminal Vision (tv) テキスト閲覧画面 (Heart Sutra)"
+            "caption": "実機描画フレームバッファより自動抽出された Terminal Vision (tv) 検索ダイアログ (F2 Find Dialog)",
+            "alt": "Terminal Vision (tv) 検索ダイアログ (Search Dialog)"
         },
         {
-            "screen": "../img/screens/Commander_Exit.png",
-            "caption": "実機描画フレームバッファより自動抽出された F10 終了確認パネル (Exit Panel F10 Quit Sokhatsky Commander)",
-            "alt": "F10 終了確認パネル (Exit Panel F10 Quit Sokhatsky Commander)"
+            "screen": "../img/screens/Commander_BE.png",
+            "caption": "実機描画フレームバッファより自動抽出された Binary Editor (be) アーキテクチャ選択ダイアログ (F2 Architecture Dialog)",
+            "alt": "Binary Editor (be) アーキテクチャ選択ダイアログ (Architecture Dialog)"
+        },
+        {
+            "screen": "../img/screens/Commander_BE_X64.png",
+            "caption": "実機描画フレームバッファより自動抽出された Binary Editor (be) 逆アセンブル表示 (EM64T Intel/AMD x86-64)",
+            "alt": "Binary Editor (be) EM64T 逆アセンブル (Disassembly)"
+        },
+        {
+            "screen": "../img/screens/Commander_BE_ARM.png",
+            "caption": "実機描画フレームバッファより自動抽出された Binary Editor (be) 逆アセンブル表示 (AArch32 / ARM 32-bit)",
+            "alt": "Binary Editor (be) AArch32 逆アセンブル (Disassembly)"
+        },
+        {
+            "screen": "../img/screens/Commander_BE_RISCV.png",
+            "caption": "実機描画フレームバッファより自動抽出された Binary Editor (be) 逆アセンブル表示 (RISC-V)",
+            "alt": "Binary Editor (be) RISC-V 逆アセンブル (Disassembly)"
         }
     ],
     "Cassette.html": [

@@ -3376,6 +3376,8 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/clu/sc/menus.c \
                        src/clu/sc/sc.c \
                        src/clu/tv/tv.c \
+                       src/clu/be/native.c \
+                       $(BE_DASM_SRCS) \
                        $(CLU_APPS_SRCS) \
                        src/clu/clu.c \
                        src/apps/b_drivesetup.c \

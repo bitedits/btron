@@ -170,7 +170,7 @@
       <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">シーングラフ・ピボット階層構造 (Hierarchical Pivot Structure)</h3>
       <p>ボーンスキニングを用いずに非線形な潰れ・伸び（Squash &amp; Stretch）と歩行揺動を実現するため、原点ピボット（足底 <i>y</i> = −1.25）を基準とした親子階層を採用しています：</p>
       <div class="code-block">
-<pre><code>rootGroup (グローバル座標変換, XZ平面移動, Y軸跳躍)
+<pre>rootGroup (グローバル座標変換, XZ平面移動, Y軸跳躍)
   ├── nimbusRings (4次元ホップ束リングの回転姿勢)
   └── bodyGroup (潰れ・伸びローカル変形アンカー: 底面 y = -1.25)
         ├── torsoMesh (面取りコアキューブ本体)
@@ -178,7 +178,7 @@
         ├── leftHandPivot &amp; rightHandPivot (浮遊ミトン手の羽ばたき)
         └── feetGroup
               ├── leftFootPivot (左足首ピッチ/ロール回転)
-              └── rightFootPivot (右足首ピッチ/ロール回転)</code></pre>
+              └── rightFootPivot (右足首ピッチ/ロール回転)</pre>
       </div>
     </div>
 
@@ -321,7 +321,7 @@
 
       <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.3 マスターシグナルフロー (Master Signal Flow Graph)</h3>
       <div class="code-block">
-<pre><code>[音響シム発振源]
+<pre>[音響シム発振源]
 ├── 各種オシレータ (Sine, Tri, Saw, Custom Pulse)
 ├── 確定論的ホワイトノイズ源 (2秒間巡回バッファ getNoiseBuffer)
 └── WaveShaper (Chebyshev 非線形飽和歪み getDistortionCurve)
@@ -339,7 +339,7 @@
 [マスターコンプレッサー / ソフトクリッパー] (DynamicsCompressorNode)
       │
       ▼
-[AudioContext.destination / VirtIO-Sound DMA] (物理DAC / スピーカー出力)</code></pre>
+[AudioContext.destination / VirtIO-Sound DMA] (物理DAC / スピーカー出力)</pre>
       </div>
 
       <h3 style="margin-top: 1.4rem; color: DarkMagenta; font-size: 1.05rem;">3.4 形式的数理定理とライフサイクル保証 (Formal Theorems &amp; Lifecycle Proof)</h3>

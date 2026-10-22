@@ -68,6 +68,10 @@ static const uint8_t *rview[4];
 static uint8_t       *wview[4];
 static uint8_t        is_cart_page[4];
 static uint8_t        is_mapper_page[4];
+static uint8_t        is_disk_page[4];
+/* C-BIOS disk window: $6000, $8000 and $A000 each select one 8 KiB bank.
+ * Bank 0 and 1 are the disk ROM. Bank >= 2 is the mounted image. */
+static uint8_t        disk_b6000, disk_b8000, disk_bA000;
 
 static void remap(void);
 
@@ -282,6 +286,7 @@ static void remap(void)
 
         is_cart_page[page] = 0;
         is_mapper_page[page] = 0;
+        is_disk_page[page] = 0;
 
         if (!is_msx2_or_higher()) {
             /* MSX1 mapping */
@@ -341,8 +346,8 @@ static void remap(void)
                     is_mapper_page[page] = 1;
                 } else if (ssec == 1 && page == 0 && sub_size) {
                     r = sub_rom;
-                } else if (ssec == 3 && page == 1 && disk_size) {
-                    r = disk_rom;
+                } else if (ssec == 3 && disk_size && (page == 1 || page == 2)) {
+                    is_disk_page[page] = 1;
                 }
                 break;
 
@@ -379,8 +384,8 @@ static void remap(void)
                     r = mapper_ram + off;
                     w = mapper_ram + off;
                     is_mapper_page[page] = 1;
-                } else if (ssec == 3 && page == 1 && disk_size) {
-                    r = disk_rom;
+                } else if (ssec == 3 && disk_size && (page == 1 || page == 2)) {
+                    is_disk_page[page] = 1;
                 }
                 break;
 
@@ -408,6 +413,10 @@ void slots_init(void)
     memset(disk_rom, 0, sizeof(disk_rom));
     rom_size = bios_size = logo_size = sub_size = music_size = disk_size = 0;
     cart_mapper = MAPPER_PLAIN;
+    disk_b6000 = 1;
+    disk_b8000 = 0;
+    disk_bA000 = 1;
+    dsk_clear();
     s1985_init(&g_s1985);
     t9769b_init(&g_t9769b);
     t9769c_init(&g_t9769c);
@@ -423,6 +432,10 @@ void slots_reset(void)
     map_seg[2] = 1;
     map_seg[3] = 0;
     cart_banks[0] = cart_banks[1] = cart_banks[2] = cart_banks[3] = 0;
+    disk_b6000 = 1;
+    disk_b8000 = 0;
+    disk_bA000 = 1;
+    dsk_reset_open();
     s1985_reset(&g_s1985);
     t9769b_reset(&g_t9769b);
     t9769c_reset(&g_t9769c);
@@ -470,6 +483,60 @@ void slots_set_disk(const uint8_t *img, uint32_t size)
     remap();
 }
 
+/* C-BIOS bdos is at file+0x383 and its table at file+0x39D. The padding at
+ * file+0x4C0 becomes OUT (D4),A / RET, and functions 0x0F and 0x27 point at it. */
+static void disk_patch_bdos(void)
+{
+    if (disk_size < 0x4C3u) return;
+    if (disk_rom[0x383] != 0x79u || disk_rom[0x384] != 0xFEu || disk_rom[0x385] != 0x31u)
+        return;
+    if (disk_rom[0x4C0] == 0xD3u && disk_rom[0x4C1] == 0xD4u && disk_rom[0x4C2] == 0xC9u)
+        return;
+    if (disk_rom[0x4C0] != 0xFFu || disk_rom[0x4C1] != 0xFFu || disk_rom[0x4C2] != 0xFFu)
+        return;
+    disk_rom[0x4C0] = 0xD3u;
+    disk_rom[0x4C1] = 0xD4u;
+    disk_rom[0x4C2] = 0xC9u;
+    disk_rom[0x39D + 0x0F * 2] = 0xC0u;
+    disk_rom[0x39D + 0x0F * 2 + 1] = 0x44u;
+    disk_rom[0x39D + 0x27 * 2] = 0xC0u;
+    disk_rom[0x39D + 0x27 * 2 + 1] = 0x44u;
+
+    /* $4022 is `jp basic` / `scf`, and $4026 is FORMAT. A boot sector with
+     * no MSXDOS.SYS jumps to $4022 after it has replaced SP. basic's RET
+     * then lands in empty stack and the BIOS starts over, wiping the
+     * sector. Stay halted; an IRQ returns to the JR, which halts again. */
+    if (disk_rom[0x22] == 0xC3u) {
+        disk_rom[0x22] = 0xF3u;
+        disk_rom[0x23] = 0x76u;
+        disk_rom[0x24] = 0x18u;
+        disk_rom[0x25] = 0xFDu;
+    }
+}
+
+int slots_set_dsk(const uint8_t *img, uint32_t size)
+{
+    if (!dsk_set_image(img, size)) return MSX_ERR_SIZE;
+    disk_patch_bdos();
+    return MSX_OK;
+}
+
+void slots_ram_store(uint16_t addr, uint8_t value)
+{
+    if (addr < 0x4000u && is_msx2_or_higher()) {
+        uint32_t seg = (uint32_t)(map_seg[0] & 0x1Fu);
+        uint32_t off = (seg << 14) | addr;
+        if (off < MSX_MAPPER_RAM_SIZE) mapper_ram[off] = value;
+        return;
+    }
+    slots_write(addr, value);
+}
+
+uint8_t slots_ram_ssec(void)
+{
+    return is_turbor() ? 0u : 2u;
+}
+
 void slots_set_rom(const uint8_t *img, uint32_t size)
 {
     uint32_t i;
@@ -507,6 +574,34 @@ uint8_t slots_ppi_a(void)
 
 /* ---------------------------------------------------------------- Memory -- */
 
+static uint8_t disk_rom_byte(uint8_t bank, uint16_t off)
+{
+    uint32_t o = ((uint32_t)bank << 13) + off;
+    if (o >= disk_size) return 0xFFu;
+    return disk_rom[o];
+}
+
+/* Page 1: $4000 is always bank 0, $6000 follows disk_b6000.
+ * Page 2: $8000 follows disk_b8000, $A000 follows disk_bA000. */
+static uint8_t disk_window_read(uint16_t addr)
+{
+    uint16_t off = (uint16_t)(addr & 0x3FFFu);
+    uint8_t bank;
+
+    if ((addr >> 14) == 1u) {
+        if (off < 0x2000u) return disk_rom_byte(0, off);
+        bank = disk_b6000;
+        off = (uint16_t)(off - 0x2000u);
+    } else if (off < 0x2000u) {
+        bank = disk_b8000;
+    } else {
+        bank = disk_bA000;
+        off = (uint16_t)(off - 0x2000u);
+    }
+    if (bank < 2u) return disk_rom_byte(bank, off);
+    return dsk_bank_byte(bank, off);
+}
+
 uint8_t slots_read(uint16_t addr)
 {
     uint8_t page = (uint8_t)(addr >> 14);
@@ -530,6 +625,8 @@ uint8_t slots_read(uint16_t addr)
         return mapper_ram[off];
     }
 
+    if (is_disk_page[page]) return disk_window_read(addr);
+
     if (rview[page]) {
         return rview[page][addr & 0x3FFFu];
     }
@@ -549,6 +646,15 @@ void slots_write(uint16_t addr, uint8_t value)
             remap();
             return;
         }
+    }
+
+    /* Disk bank select. Only the three addresses, so an LDIR across the
+     * window does not change banks. */
+    if (is_disk_page[page]) {
+        if (addr == 0x6000u) disk_b6000 = value;
+        else if (addr == 0x8000u) disk_b8000 = value;
+        else if (addr == 0xA000u) disk_bA000 = value;
+        return;
     }
 
     /* Cartridge banking write */

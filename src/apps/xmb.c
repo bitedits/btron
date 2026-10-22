@@ -702,18 +702,20 @@ static xb_item_t s_items_commands[] = {
     {"Sync all volumes",     "Run the shell builtin: sync",      XB_CMD, XMB_BIND_NONE, L_NONE, 0,0,NULL, "sync",  IC_PROMPT,0,0,0,0,{0}},
 };
 
-/* ── The Games band: the cartridge images of MSX_ROM_CATALOGUE ──────────────
+/* ── The Games band: cartridges and disk images in MSX_ROM_CATALOGUE ────────
  *
- * One row per ROM, made by reading that catalogue once on the way in, and each
- * row opens the B-MSX window with its own cartridge loaded.  The list is the
+ * One row per .rom or .dsk, made by reading that catalogue once on the way in,
+ * and each row opens the B-MSX window with that file.  The list is the
  * catalogue -- a folder below the checkout on a host, the /SYS volume's `msx`
- * drawer on a machine -- so nothing here copies what a ROM is called, and an
- * empty catalogue simply has no rows.
+ * drawer on a machine -- so nothing here copies what a file is called, and an
+ * empty catalogue simply has no rows.  The cap matches the B-MSX menu
+ * (MSX_MAX_ROMS): the folder holds both cartridges and disks.
  */
 
-#define XB_GAME_ROWS   16
+#define XB_GAME_ROWS   32
 #define XB_GAME_NAME   64
 #define XB_GAME_SUB    "MSX cartridge: opens in B-MSX"
+#define XB_GAME_DSK_SUB "MSX disk: opens in B-MSX"
 
 static char      s_game_names[XB_GAME_ROWS][XB_GAME_NAME];
 static xb_item_t s_items_games[XB_GAME_ROWS];   /* filled by xb_games_scan() */
@@ -766,7 +768,7 @@ static xb_cat_t s_cats[] = {
     {"Discs",       "Browse the mounted volumes",   IC_MINIDISC,     s_disc.items,     0, 0, 1, {0}},
     /* The Games band is a listing too, but a flat one: xb_games_scan() makes its
      * rows from assets/msx once, before the first frame. */
-    {"Games",       "Play MSX cartridge images",    IC_CAT_GAMES,    s_items_games,    0, 0, 0, {0}},
+    {"Games",       "Play MSX cartridges and disks", IC_CAT_GAMES,    s_items_games,    0, 0, 0, {0}},
     {"Commands",    "Run B-System shell commands",  IC_CAT_COMMANDS, s_items_commands, 0, 0, 0, {0}},
 };
 static int s_cat_count = XB_NEL(s_cats);
@@ -2523,21 +2525,46 @@ static void xb_disc_restart(void)
 
 /* ── The Games band's listing ─────────────────────────────────────────── */
 
-/* A cartridge image is a .rom, whatever case its listing spells it in. */
-static BOOL xb_game_is_rom(const char *name)
+/* A catalogue image is a .rom or a .dsk, whatever case its listing spells it in. */
+static BOOL xb_game_is_media(const char *name)
 {
-    size_t n = strlen(name);
+    size_t n;
+    char a, b, c;
 
+    if (!name)
+        return FALSE;
+    n = strlen(name);
     if (n < 5 || n >= XB_GAME_NAME || name[n - 4] != '.')
         return FALSE;
-    return (name[n - 3] == 'r' || name[n - 3] == 'R')
-        && (name[n - 2] == 'o' || name[n - 2] == 'O')
-        && (name[n - 1] == 'm' || name[n - 1] == 'M');
+    a = name[n - 3];
+    b = name[n - 2];
+    c = name[n - 1];
+    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return (a == 'r' && b == 'o' && c == 'm') ||
+           (a == 'd' && b == 's' && c == 'k');
 }
 
-/* Read the catalogue once and make one XB_APP row per ROM, in name order so the
- * bar lands on the same row from one run to the next.  The rows carry the
- * listing's index, which is how xb_launch() names the cartridge to B-MSX with.
+static BOOL xb_game_is_dsk(const char *name)
+{
+    size_t n = strlen(name);
+    char a, b, c;
+
+    if (n < 5 || name[n - 4] != '.')
+        return FALSE;
+    a = name[n - 3];
+    b = name[n - 2];
+    c = name[n - 1];
+    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return a == 'd' && b == 's' && c == 'k';
+}
+
+/* Read the catalogue once and make one XB_APP row per image, in name order so
+ * the bar lands on the same row from one run to the next.  The rows carry the
+ * listing's index, which is how xb_launch() names the file to B-MSX with.
  *
  * The catalogue is MSX_ROM_CATALOGUE: a folder below the checkout where a host
  * file system exists, and the /SYS volume's `msx` drawer on a machine, where the
@@ -2555,7 +2582,7 @@ static void xb_games_scan(void)
         while ((de = readdir(dir)) != NULL && rows < XB_GAME_ROWS) {
             if (de->d_name[0] == '.')
                 continue;
-            if (!xb_game_is_rom(de->d_name))
+            if (!xb_game_is_media(de->d_name))
                 continue;
             snprintf(s_game_names[rows], XB_GAME_NAME, "%s", de->d_name);
             rows++;
@@ -2563,13 +2590,13 @@ static void xb_games_scan(void)
         closedir(dir);
     }
 #else
-    /* Static: 16 VfsEntry rows are nearly 2.4 KiB, and this runs while the
-     * launcher is opening, on the desktop task's stack. */
+    /* Static: this runs while the launcher is opening, on the desktop task's
+     * stack, and a full catalogue of VfsEntry rows does not belong there. */
     static VfsEntry entries[XB_GAME_ROWS];
     int n = vfs_list_dir(MSX_ROM_CATALOGUE, entries, XB_GAME_ROWS);
 
     for (int i = 0; i < n && rows < XB_GAME_ROWS; i++) {
-        if (entries[i].is_dir || !xb_game_is_rom(entries[i].name))
+        if (entries[i].is_dir || !xb_game_is_media(entries[i].name))
             continue;
         snprintf(s_game_names[rows], XB_GAME_NAME, "%s", entries[i].name);
         rows++;
@@ -2593,7 +2620,7 @@ static void xb_games_scan(void)
 
         memset(it, 0, sizeof(*it));
         it->label  = s_game_names[i];
-        it->sub    = XB_GAME_SUB;
+        it->sub    = xb_game_is_dsk(s_game_names[i]) ? XB_GAME_DSK_SUB : XB_GAME_SUB;
         it->kind   = XB_APP;
         it->bind   = XMB_BIND_NONE;
         it->launch = L_MSX;

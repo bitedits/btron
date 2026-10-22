@@ -58,6 +58,8 @@ static uint8_t cpu_in(z80 *z, uint8_t port)
 
 static void cpu_out(z80 *z, uint8_t port, uint8_t value)
 {
+    /* C-BIOS disk BDOS stub. Not a machine port. */
+    if (port == 0xD4u) { dsk_bdos(z); return; }
     (void)z;
     msx_bus_out(port, value);
 }

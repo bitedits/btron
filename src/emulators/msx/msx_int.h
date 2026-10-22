@@ -32,6 +32,12 @@
 #define MSX_SUBROM_SIZE    16384u
 #define MSX_MUSIC_SIZE     16384u
 #define MSX_DISK_SIZE      65536u
+/* A mounted disk image. 1.44 MiB on a host; 720 KiB where the image is small. */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#define MSX_DSK_CAP        1474560u
+#else
+#define MSX_DSK_CAP         737280u
+#endif
 #define MSX_MAPPER_RAM_SIZE 524288u /* 512 KiB */
 #define MSX_SCREEN_W         256u
 #define MSX_SCREEN_H     MSX_DISPLAY_LINES
@@ -58,6 +64,14 @@ void    slots_set_logo(const uint8_t *img, uint32_t size);
 void    slots_set_sub(const uint8_t *img, uint32_t size);
 void    slots_set_music(const uint8_t *img, uint32_t size);
 void    slots_set_disk(const uint8_t *img, uint32_t size);
+/* Raw sector image for the C-BIOS disk window. The disk ROM must already
+ * be in place (FDD machine). -> MSX_OK, or MSX_ERR_SIZE. */
+int     slots_set_dsk(const uint8_t *img, uint32_t size);
+/* Store into the memory the CPU will see, including page 0 while the BIOS
+ * is still mapped there. */
+void    slots_ram_store(uint16_t addr, uint8_t value);
+/* Secondary slot of main RAM on this machine (2 on MSX2, 0 on turboR). */
+uint8_t slots_ram_ssec(void);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
 uint8_t *slots_rom_ptr(uint32_t *cap);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
@@ -157,6 +171,14 @@ uint64_t msx_fnv1a64(const void *data, uint32_t len);
 /* Loads cbios_main_<tag>.rom (+ optional logo) for `machine` from `dir` into
  * the slot 0 views.  -> MSX_OK, or MSX_ERR_BIOS when the main ROM is absent. */
 int  bios_load(uint16_t machine, const char *dir);
+
+/* ---- dsk.c: FAT12 behind the C-BIOS MegaROM window and BDOS 0x0F/0x27 -- */
+void    dsk_clear(void);
+void    dsk_reset_open(void);
+int     dsk_set_image(const uint8_t *img, uint32_t size); /* 1 = accepted */
+uint8_t dsk_bank_byte(uint8_t bank, uint16_t off);
+struct z80;
+void    dsk_bdos(struct z80 *z);
 
 /* ---- tronmsx.c: host-side BIOS directory override (posix build) --------- */
 void msx_set_bios_dir(const char *dir);

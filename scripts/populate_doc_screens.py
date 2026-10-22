@@ -287,9 +287,29 @@ APPS_MAP = {
             "alt": "NIGHT RAVEN GEO3D (MSX Geo3D Hardware Pipeline Preview)"
         },
         {
-            "screen": "../img/screens/B_MSX_Menu_Opened.png",
-            "caption": "B-MSX ファイルメニュー展開画面 (ROM カセット・カスケードメニューより動的カートリッジ装填・切り替え)",
-            "alt": "B-MSX カスケードメニュー展開 (ROM Cascade Menu Opened)"
+            "screen": "../img/screens/MSX_XRacing.png",
+            "caption": "B-MSX の窓から抽出した XRacing。MSX1 / TMS9918A / PSG。チェッカーの上にロゴ。",
+            "alt": "XRacing (MSX1, checkerboard logo)"
+        },
+        {
+            "screen": "../img/screens/MSX_BadApple.png",
+            "caption": "B-MSX の窓から抽出した Bad Apple (MDPC)。MSX2+ / V9958。PSG と YM2413。りんごを持つシルエット。",
+            "alt": "Bad Apple MSX2+ silhouette"
+        },
+        {
+            "screen": "../img/screens/MSX_DynamiteGoGo.png",
+            "caption": "B-MSX の窓から抽出した Dynamite Go! Go!。MSX2 JP / V9938 / PSG。タイトルの DYNAMITE GO! GO!。",
+            "alt": "Dynamite Go! Go! title"
+        },
+        {
+            "screen": "../img/screens/MSX_Yazzier.png",
+            "caption": "B-MSX の窓から抽出した YAZZIER。MSX1 / TMS9918A / PSG。虹とレンガのタイトル。",
+            "alt": "YAZZIER title card"
+        },
+        {
+            "screen": "../img/screens/MSX_C0man.png",
+            "caption": "B-MSX の窓から抽出した c0man。MSX1 / TMS9918A / PSG。ハイスコアと PRESS SPACE TO START。",
+            "alt": "c0man high scores"
         }
     ],
     "XMB.html": [
@@ -308,14 +328,61 @@ APPS_MAP = {
     ]
 }
 
+SCREEN_MARKER = "<!-- 画面プレビュー -->"
+OVERVIEW_ANCHOR = "<!-- 概要 -->"
+KAGEE_NOTE = (
+    "Kagee の Bad Apple はカートリッジではない。"
+    "<code>capture_screens --msx</code> は <code>assets/kagee/BADAPPLE.vid</code> と "
+    "<code>BADAPPLE.aud</code> があるとき、その窓も同じ手順で書く。"
+    "このチェックアウトにはその 2 ファイルが無い。"
+)
+
+def screen_items(items):
+    """Copy the list and attach the Kagee row when this is the MSX gallery."""
+    out = list(items)
+    if not any(item.get("screen") == "../img/screens/MSX_C0man.png" for item in items):
+        return out
+    png = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), "..", "b-system", "img", "screens", "Kagee_BadApple.png"))
+    if os.path.isfile(png):
+        out.append({
+            "screen": "../img/screens/Kagee_BadApple.png",
+            "caption": "Kagee 窓から抽出した Bad Apple。カートリッジではない。96×64 Huffman / 4-bit PCM。",
+            "alt": "Kagee Bad Apple"
+        })
+    else:
+        out.append({"note": KAGEE_NOTE})
+    return out
+
+def strip_screen_section(content):
+    """Drop the preview block and stop at the overview anchor.
+
+    A loose paragraph inside the preview (the Kagee note) sits between the
+    last screen-preview and the section close, so a search for two closing
+    divs continues through the overview and the rest of the page.
+    """
+    start = content.find(SCREEN_MARKER)
+    if start == -1:
+        return content
+    anchor = content.find(OVERVIEW_ANCHOR, start)
+    if anchor != -1:
+        anchor_line = content.rfind("\n", start, anchor) + 1
+        return content[:start] + content[anchor_line:]
+    return re.sub(
+        r'<!-- 画面プレビュー -->\s*<div class="section">\s*<h2>画面プレビュー \(Screen Preview\)</h2>.*?</div>\s*</div>\s*',
+        '',
+        content,
+        count=1,
+        flags=re.DOTALL)
+
 def remove_screen_section_if_not_mapped(dir_path, mapped_dict):
     for f in os.listdir(dir_path):
         if f.endswith(".html") and f not in mapped_dict:
             filepath = os.path.join(dir_path, f)
             with open(filepath, "r", encoding="utf-8") as fp:
                 content = fp.read()
-            if "<!-- 画面プレビュー -->" in content or "画面プレビュー (Screen Preview)" in content:
-                new_content = re.sub(r'<!-- 画面プレビュー -->\s*<div class="section">\s*<h2>画面プレビュー \(Screen Preview\)</h2>.*?</div>\s*</div>\s*', '', content, flags=re.DOTALL)
+            if SCREEN_MARKER in content or "画面プレビュー (Screen Preview)" in content:
+                new_content = strip_screen_section(content)
                 if new_content != content:
                     with open(filepath, "w", encoding="utf-8") as fp:
                         fp.write(new_content)
@@ -325,14 +392,16 @@ def inject_screen_section(filepath, items):
     if not os.path.exists(filepath):
         return
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+    items = screen_items(items)
 
-    # Remove existing screen preview section if present
-    content = re.sub(r'<!-- 画面プレビュー -->\s*<div class="section">\s*<h2>画面プレビュー \(Screen Preview\)</h2>.*?</div>\s*</div>\s*', '', content, flags=re.DOTALL)
+    with open(filepath, "r", encoding="utf-8") as f:
+        original = f.read()
 
     previews_html = []
     for item in items:
+        if item.get("note"):
+            previews_html.append(f"      <p>{item['note']}</p>")
+            continue
         previews_html.append(f"""      <div class="screen-preview">
         <img src="{item['screen']}" alt="{item['alt']}">
         <p>{item['caption']}</p>
@@ -340,30 +409,41 @@ def inject_screen_section(filepath, items):
 
     previews_body = "\n".join(previews_html)
 
-    img_block = f"""    <!-- 画面プレビュー -->
+    # Leave the indent that already sits in front of the marker.
+    img_block = f"""<!-- 画面プレビュー -->
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
 {previews_body}
-    </div>\n\n"""
+    </div>
 
-    # Inject right before <!-- 概要 --> or <h2>概要
-    if "<!-- 概要 -->" in content:
-        content = content.replace("<!-- 概要 -->", img_block + "    <!-- 概要 -->", 1)
-    elif "<h2>概要" in content:
-        idx = content.find("<h2>概要")
-        sec_idx = content.rfind('<div class="section">', 0, idx)
-        if sec_idx != -1:
-            content = content[:sec_idx] + img_block + content[sec_idx:]
-        else:
-            content = content.replace("<h2>概要", img_block + "<h2>概要", 1)
+"""
+
+    start = original.find(SCREEN_MARKER)
+    anchor = original.find(OVERVIEW_ANCHOR, start) if start != -1 else -1
+    if start != -1 and anchor != -1:
+        anchor_line = original.rfind("\n", start, anchor) + 1
+        content = original[:start] + img_block + original[anchor_line:]
     else:
-        idx = content.find('class="tagline-card"')
-        if idx != -1:
-            end_card = content.find('</div>', idx) + 6
-            content = content[:end_card] + "\n\n" + img_block + content[end_card:]
+        content = strip_screen_section(original)
+        padded = "    " + img_block
+        if OVERVIEW_ANCHOR in content:
+            content = content.replace(OVERVIEW_ANCHOR, padded + "    " + OVERVIEW_ANCHOR, 1)
+        elif "<h2>概要" in content:
+            idx = content.find("<h2>概要")
+            sec_idx = content.rfind('<div class="section">', 0, idx)
+            if sec_idx != -1:
+                content = content[:sec_idx] + padded + content[sec_idx:]
+            else:
+                content = content.replace("<h2>概要", padded + "<h2>概要", 1)
+        else:
+            idx = content.find('class="tagline-card"')
+            if idx != -1:
+                end_card = content.find('</div>', idx) + 6
+                content = content[:end_card] + "\n\n" + padded + content[end_card:]
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
+    if content != original:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
     print(f"Populated screenshot previews ({len(items)}) in: {filepath}")
 
 def main():

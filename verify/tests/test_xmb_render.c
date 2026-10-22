@@ -1784,21 +1784,31 @@ static void test_discs_band(void)
  * here the way the band counts it - same suffix test, same order - because a
  * hand-written list of six names would prove nothing about the listing. */
 #define GAME_NAME      64        /* XB_GAME_NAME in xmb.c */
-#define GAME_ROWS_MAX  16        /* XB_GAME_ROWS in xmb.c */
+#define GAME_ROWS_MAX  32        /* XB_GAME_ROWS in xmb.c */
 
+/* Same suffix test as xb_game_is_media(): .rom and .dsk, either case. */
 static BOOL game_is_rom(const char *name)
 {
-    size_t n = strlen(name);
+    size_t n;
+    char a, b, c;
 
+    if (!name)
+        return FALSE;
+    n = strlen(name);
     if (n < 5 || n >= GAME_NAME || name[n - 4] != '.')
         return FALSE;
-    return (name[n - 3] == 'r' || name[n - 3] == 'R')
-        && (name[n - 2] == 'o' || name[n - 2] == 'O')
-        && (name[n - 1] == 'm' || name[n - 1] == 'M');
+    a = name[n - 3];
+    b = name[n - 2];
+    c = name[n - 1];
+    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return (a == 'r' && b == 'o' && c == 'm') ||
+           (a == 'd' && b == 's' && c == 'k');
 }
 
-/* -> the number of cartridge images in assets/msx, names sorted; -1 when the
- * folder cannot be opened. */
+/* -> the number of cartridge and disk images in assets/msx, names sorted;
+ * -1 when the folder cannot be opened. */
 static int games_host_roms(char names[][GAME_NAME], int max)
 {
     DIR *dir = opendir("assets/msx");
@@ -1850,7 +1860,7 @@ static void test_games_band(void)
 
     park_band(BAND_GAMES);
     snprintf(msg, sizeof(msg), "the fourth band is the Games one, and it is showing the "
-             "folder as it stands (%d rows, folder holds %d cartridge%s)",
+             "folder as it stands (%d rows, folder holds %d image%s)",
              xmb_rows(), n, n == 1 ? "" : "s");
     CHECK(xmb_band() == BAND_GAMES && xmb_depth() == 1 && xmb_rows() == n, msg);
 

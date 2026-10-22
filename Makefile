@@ -174,6 +174,7 @@ MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/t9769b.c     \
            src/emulators/msx/t9769c.c     \
            src/emulators/msx/slots.c      \
+           src/emulators/msx/dsk.c        \
            src/emulators/msx/bios.c       \
            src/emulators/msx/vdp.c        \
            src/emulators/msx/psg.c        \
@@ -3080,6 +3081,17 @@ TEST_MSX_BOOT_BIN   = ./.build/test_msx_boot
 
 msx-boot: $(TEST_MSX_BOOT_BIN)
 	@./$(TEST_MSX_BOOT_BIN) "$(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)" $(or $(FRAMES),300) $(or $(DUMP),/tmp/msx_boot) "$(or $(MACH),)"
+
+TEST_MSX_DSK_SRCS  = verify/tests/test_msx_dsk.c $(MSX_SRCS)
+TEST_MSX_DSK_OBJS  = $(TEST_MSX_DSK_SRCS:.c=.test.o)
+TEST_MSX_DSK_BIN   = ./.build/test_msx_dsk
+
+msx-dsk: $(TEST_MSX_DSK_BIN)
+	@./$(TEST_MSX_DSK_BIN)
+
+$(TEST_MSX_DSK_BIN): $(TEST_MSX_DSK_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_MSX_DSK_OBJS) -o $@ $(LDFLAGS)
 
 $(TEST_MSX_BOOT_BIN): $(TEST_MSX_BOOT_OBJS)
 	@mkdir -p ./.build

@@ -17,6 +17,7 @@
 #include <emulators/tronmsx.h>
 #include <device/virtio.h>
 #include "msx_kbd.h"
+#include "msx_int.h"
 #include "../../clu/vfs.h"          /* the /SYS catalogue: src/clu/vfs.c */
 #include <stdint.h>
 
@@ -152,9 +153,32 @@ static void msx_host_pump_audio(int queue)
  * starts the YM2413 track after it reads APRLOPLL at $4018 in that ROM.
  * C-BIOS cbios_music.rom is that signature, mapped on MSX2+ and turboR.
  * Dynamite Go! Go! is the 32 KiB MSX2J demo, which the size rule would
- * boot as MSX1. */
+ * boot as MSX1. A disk image is chosen before the size rule: a 360 KiB
+ * or 720 KiB file would otherwise become a turboR cartridge with no
+ * disk ROM. Bad Apple's disk wants the V9958, so it takes MSX2+ FDD.
+ * Every other disk takes MSX2 FDD. */
+static BOOL msx_is_dsk_name(const char *name)
+{
+    size_t n;
+    char a, b, c;
+    if (!name) return FALSE;
+    n = strlen(name);
+    if (n < 5 || name[n - 4] != '.') return FALSE;
+    a = name[n - 3];
+    b = name[n - 2];
+    c = name[n - 1];
+    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return a == 'd' && b == 's' && c == 'k';
+}
+
 static uint16_t msx_machine_for(const char *name, size_t size)
 {
+    if (msx_is_dsk_name(name)) {
+        if (strstr(name, "Bad Apple")) return BMSX_MACHINE_MSX2P_CBIOS_FDD;
+        return BMSX_MACHINE_MSX2_CBIOS_FDD;
+    }
     if (name && strstr(name, "Bad Apple"))
         return BMSX_MACHINE_MSX2P_CBIOS;
     if (name && strstr(name, "Dynamite"))
@@ -166,15 +190,25 @@ static uint16_t msx_machine_for(const char *name, size_t size)
     return BMSX_MACHINE_MSX;
 }
 
-/* ── Cartridge catalogue and loading ─────────────────────────────────────── */
+/* ── Cartridge and disk catalogue ────────────────────────────────────────── */
 
-static BOOL msx_is_rom_name(const char *name)
+/* A row is a cartridge (.rom) or a raw disk image (.dsk), either case. */
+static BOOL msx_is_media_name(const char *name)
 {
-    size_t n = strlen(name);
+    size_t n;
+    char a, b, c;
+
+    if (!name) return FALSE;
+    n = strlen(name);
     if (n < 5 || name[n - 4] != '.') return FALSE;
-    return (name[n - 3] == 'r' || name[n - 3] == 'R') &&
-           (name[n - 2] == 'o' || name[n - 2] == 'O') &&
-           (name[n - 1] == 'm' || name[n - 1] == 'M');
+    a = name[n - 3];
+    b = name[n - 2];
+    c = name[n - 1];
+    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return (a == 'r' && b == 'o' && c == 'm') ||
+           (a == 'd' && b == 's' && c == 'k');
 }
 
 /* Rows are sorted so the cascade and the XMB Games band land on the same row
@@ -208,7 +242,7 @@ static void msx_scan_roms(MsxViewer *st)
     if (!d) return;
     while ((de = readdir(d)) != NULL && st->rom_count < MSX_MAX_ROMS) {
         if (de->d_name[0] == '.') continue;
-        if (!msx_is_rom_name(de->d_name)) continue;
+        if (!msx_is_media_name(de->d_name)) continue;
         snprintf(st->roms[st->rom_count], MSX_ROW_NAME, "%s", de->d_name);
         st->rom_fids[st->rom_count] = VFS_NO_FID;
         st->rom_count++;
@@ -260,17 +294,21 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     cfg.machine = msx_machine_for(name, (size_t)size);
     msx_init(&cfg);
 
-    rc = msx_load_rom(buf, (uint32_t)got, 0);
+    if (msx_is_dsk_name(name)) rc = slots_set_dsk(buf, (uint32_t)got);
+    else rc = msx_load_rom(buf, (uint32_t)got, 0);
     free(buf);
 
     if (rc != MSX_OK) {
-        if (rc == MSX_ERR_SIZE)
+        if (rc == MSX_ERR_SIZE && msx_is_dsk_name(name))
+            snprintf(st->notice, sizeof(st->notice),
+                     "%s: %ld バイトはディスクイメージではありません", name, size);
+        else if (rc == MSX_ERR_SIZE)
             snprintf(st->notice, sizeof(st->notice),
                      "%s: %ld バイトは上限 %u を超えます",
                      name, size, (unsigned)MSX_ROM_SIZE);
         else
             snprintf(st->notice, sizeof(st->notice),
-                     "%s: msx_load_rom -> error %d", name, rc);
+                     "%s: load -> error %d", name, rc);
         return FALSE;
     }
 
@@ -295,7 +333,7 @@ static void msx_scan_roms(MsxViewer *st)
 
     st->rom_count = 0;
     for (int i = 0; i < n && st->rom_count < MSX_MAX_ROMS; i++) {
-        if (entries[i].is_dir || !msx_is_rom_name(entries[i].name)) continue;
+        if (entries[i].is_dir || !msx_is_media_name(entries[i].name)) continue;
         snprintf(st->roms[st->rom_count], MSX_ROW_NAME, "%s", entries[i].name);
         st->rom_fids[st->rom_count] = entries[i].fid;
         st->rom_count++;
@@ -331,29 +369,46 @@ static BOOL msx_load(MsxViewer *st, const char *name)
 
     vfs_child_path(st->path, sizeof(st->path), MSX_ROM_CATALOGUE, name,
                    msx_rom_fid(st, name));
-    if (vfs_read_blob(st->path, rom_image, rom_cap, &got) != 0 ||
-        got == 0) {
-        snprintf(st->notice, sizeof(st->notice),
-                 "ROM を開けません (cannot open %s)", st->path);
-        return FALSE;
-    }
 
     msx_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.frame_hz = 60;
-    cfg.machine = msx_machine_for(name, got);
-    msx_init(&cfg);
 
-    rc = msx_load_rom(rom_image, (uint32_t)got, 0);
+    /* A disk is read after msx_init: that call clears the cartridge buffer,
+     * which is the only place a freestanding image can land. slots_set_dsk
+     * copies it out. A cartridge keeps the old order. */
+    if (msx_is_dsk_name(name)) {
+        cfg.machine = msx_machine_for(name, 0);
+        msx_init(&cfg);
+        if (vfs_read_blob(st->path, rom_image, rom_cap, &got) != 0 || got == 0) {
+            snprintf(st->notice, sizeof(st->notice),
+                     "ROM を開けません (cannot open %s)", st->path);
+            return FALSE;
+        }
+        rc = slots_set_dsk(rom_image, (uint32_t)got);
+    } else {
+        if (vfs_read_blob(st->path, rom_image, rom_cap, &got) != 0 || got == 0) {
+            snprintf(st->notice, sizeof(st->notice),
+                     "ROM を開けません (cannot open %s)", st->path);
+            return FALSE;
+        }
+        cfg.machine = msx_machine_for(name, got);
+        msx_init(&cfg);
+        rc = msx_load_rom(rom_image, (uint32_t)got, 0);
+    }
 
     if (rc != MSX_OK) {
-        if (rc == MSX_ERR_SIZE)
+        if (rc == MSX_ERR_SIZE && msx_is_dsk_name(name))
+            snprintf(st->notice, sizeof(st->notice),
+                     "%s: %u バイトはディスクイメージではありません",
+                     name, (unsigned)got);
+        else if (rc == MSX_ERR_SIZE)
             snprintf(st->notice, sizeof(st->notice),
                      "%s: %u バイトは上限 %u を超えます",
                      name, (unsigned)got, (unsigned)MSX_ROM_SIZE);
         else
             snprintf(st->notice, sizeof(st->notice),
-                     "%s: msx_load_rom -> error %d", name, rc);
+                     "%s: load -> error %d", name, rc);
         return FALSE;
     }
 

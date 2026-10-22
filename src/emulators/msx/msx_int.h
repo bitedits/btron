@@ -72,6 +72,9 @@ int     slots_set_dsk(const uint8_t *img, uint32_t size);
 void    slots_ram_store(uint16_t addr, uint8_t value);
 /* Secondary slot of main RAM on this machine (2 on MSX2, 0 on turboR). */
 uint8_t slots_ram_ssec(void);
+/* Page 0, 2 and 3 show main RAM. Page 1 stays the disk ROM, so the
+ * interrupt trampoline at $44E0 still runs. */
+void    slots_map_com_pages(void);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
 uint8_t *slots_rom_ptr(uint32_t *cap);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
@@ -179,8 +182,24 @@ int     dsk_set_image(const uint8_t *img, uint32_t size); /* 1 = accepted */
 uint8_t dsk_bank_byte(uint8_t bank, uint16_t off);
 struct z80;
 void    dsk_bdos(struct z80 *z);
+/* Root menu drawn into the text name table. dsk_menu_service() is called
+ * from the frame loop: 1 means the menu owns this frame and the CPU stays. */
+int     dsk_menu_service(void);
+int     dsk_menu_active(void);
+int     dsk_menu_key(int op);                 /* 0 up, 1 down, 2 enter */
+int     dsk_menu_cursor(void);
+int     dsk_menu_rows(void);
+int     dsk_menu_row(int index, char *out, uint32_t cap);
 
 /* ---- tronmsx.c: host-side BIOS directory override (posix build) --------- */
 void msx_set_bios_dir(const char *dir);
+/* One instruction, with the same VDP advance as msx_run_frame. */
+void msx_step_one(void);
+/* Point the running CPU at a loaded COM. Does not reset the chip. */
+void msx_cpu_go(uint16_t pc, uint16_t sp);
+void msx_cpu_words(uint16_t *pc, uint16_t *sp, uint16_t *bc,
+                   uint16_t *de, uint16_t *hl, uint8_t *a);
+/* Copy port hit counts since the previous take, then zero them. */
+void msx_port_take(uint32_t r[256], uint32_t w[256]);
 
 #endif /* _BTRON_EMULATOR_MSX_INT_H_ */

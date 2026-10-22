@@ -502,6 +502,37 @@ static void disk_patch_bdos(void)
     disk_rom[0x39D + 0x27 * 2] = 0xC0u;
     disk_rom[0x39D + 0x27 * 2 + 1] = 0x44u;
 
+    /* $44E0: page-0 RAM is the DOS image, so the IM 1 vector cannot stay in
+     * the BIOS. The vector jumps here. Select the main ROM, run its KEYINT,
+     * then put main RAM back in page 0. The subslot byte is filled below. */
+    if (disk_rom[0x4E0] == 0xFFu) {
+        static const uint8_t tramp[27] = {
+            0xF5,
+            0x3A, 0xFF, 0xFF,
+            0x2F,
+            0xE6, 0xFC,
+            0xF6, 0x02,
+            0x32, 0xFF, 0xFF,
+            0xDB, 0xA8,
+            0xF5,
+            0xE6, 0xFC,
+            0xD3, 0xA8,
+            0xCD, 0x38, 0x00,
+            0xF1,
+            0xD3, 0xA8,
+            0xF1,
+            0xC9
+        };
+        uint32_t i;
+        for (i = 0; i < sizeof(tramp); i++) disk_rom[0x4E0u + i] = tramp[i];
+        disk_rom[0x4E8] = slots_ram_ssec();
+    }
+    /* MSXDOS.SYS calls $50A9 after it has installed the page-0 jumps.
+     * C-BIOS left this byte as padding, so the call was an RST $38.
+     * The following instructions reload HL from memory; a return is enough
+     * to reach the resident checksum. */
+    if (disk_rom[0x10A9] == 0xFFu) disk_rom[0x10A9] = 0xC9u;
+
     /* $4022 is `jp basic` / `scf`, and $4026 is FORMAT. A boot sector with
      * no MSXDOS.SYS jumps to $4022 after it has replaced SP. basic's RET
      * then lands in empty stack and the BIOS starts over, wiping the
@@ -535,6 +566,15 @@ void slots_ram_store(uint16_t addr, uint8_t value)
 uint8_t slots_ram_ssec(void)
 {
     return is_turbor() ? 0u : 2u;
+}
+
+void slots_map_com_pages(void)
+{
+    uint8_t ram = slots_ram_ssec();
+    /* Two bits per page: RAM, disk, RAM, RAM. Disk stays in page 1. */
+    sub[3] = (uint8_t)(ram | (3u << 2) | (ram << 4) | (ram << 6));
+    ppi_a = 0xFFu;
+    remap();
 }
 
 void slots_set_rom(const uint8_t *img, uint32_t size)

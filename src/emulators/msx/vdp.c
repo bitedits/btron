@@ -310,6 +310,11 @@ uint8_t *vdp_vram(uint32_t *size)
 /* Debug hook: the live register file, for the headless boot tracer. */
 uint8_t vdp_debug_reg(uint8_t reg)
 {
+    /* MSX2 and later keep the live file in the V9938. s_reg is the TMS9918. */
+    if (!s_msx1) {
+        if (reg >= V9938_REG_COUNT) return 0u;
+        return s_v9938.regs[reg];
+    }
     return (reg < VDP_NR) ? s_reg[reg] : 0u;
 }
 

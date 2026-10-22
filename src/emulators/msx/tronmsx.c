@@ -28,6 +28,8 @@ static int         s_ready;
 static int         s_paused;
 static uint16_t    s_machine = BMSX_MACHINE_MSXTR_CBIOS;
 static uint64_t    s_body_hash;
+static uint32_t    s_port_r[256];
+static uint32_t    s_port_w[256];
 
 static const char *s_bios_dir;
 
@@ -53,11 +55,13 @@ static void cpu_write(void *ud, uint16_t addr, uint8_t value)
 static uint8_t cpu_in(z80 *z, uint8_t port)
 {
     (void)z;
+    s_port_r[port]++;
     return msx_bus_in(port);
 }
 
 static void cpu_out(z80 *z, uint8_t port, uint8_t value)
 {
+    s_port_w[port]++;
     /* C-BIOS disk BDOS stub. Not a machine port. */
     if (port == 0xD4u) { dsk_bdos(z); return; }
     (void)z;
@@ -187,6 +191,58 @@ void msx_pause(BOOL on)
 
 uint16_t msx_get_pc(void) { return s_cpu.pc; }
 uint16_t msx_get_machine(void) { return s_machine; }
+
+void msx_cpu_words(uint16_t *pc, uint16_t *sp, uint16_t *bc,
+                   uint16_t *de, uint16_t *hl, uint8_t *a)
+{
+    if (pc) *pc = s_cpu.pc;
+    if (sp) *sp = s_cpu.sp;
+    if (bc) *bc = (uint16_t)((s_cpu.b << 8) | s_cpu.c);
+    if (de) *de = (uint16_t)((s_cpu.d << 8) | s_cpu.e);
+    if (hl) *hl = (uint16_t)((s_cpu.h << 8) | s_cpu.l);
+    if (a)  *a  = s_cpu.a;
+}
+
+void msx_port_take(uint32_t r[256], uint32_t w[256])
+{
+    uint32_t i;
+    if (r) { for (i = 0; i < 256u; i++) r[i] = s_port_r[i]; }
+    if (w) { for (i = 0; i < 256u; i++) w[i] = s_port_w[i]; }
+    memset(s_port_r, 0, sizeof(s_port_r));
+    memset(s_port_w, 0, sizeof(s_port_w));
+}
+
+/* Bus cycles consumed by one instruction. R800 spends two CPU cycles per bus
+ * cycle; the frame budget and the VDP both count bus cycles. */
+static uint32_t step_one(void)
+{
+    int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c);
+    unsigned long before = s_cpu.cyc;
+    uint32_t delta, bus_t;
+    if (is_r800) r800_step(&s_cpu);
+    else z80_step(&s_cpu);
+    delta = (uint32_t)(s_cpu.cyc - before);
+    if (!delta) delta = 1;
+    bus_t = is_r800 ? ((delta + 1) >> 1) : delta;
+    if (!bus_t) bus_t = 1;
+    if (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) t9769c_advance(&g_t9769c, bus_t);
+    vdp_advance(bus_t);
+    if (vdp_vblank_taken()) z80_gen_int(&s_cpu, 0xFFu);
+    return bus_t;
+}
+
+void msx_step_one(void)
+{
+    if (!s_ready || s_paused) return;
+    (void)step_one();
+}
+
+void msx_cpu_go(uint16_t pc, uint16_t sp)
+{
+    s_cpu.pc = pc;
+    s_cpu.sp = sp;
+    s_cpu.halted = false;
+}
 int msx_is_r800_active(void) { return (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c); }
 
 void msx_run_frame(void)
@@ -194,27 +250,11 @@ void msx_run_frame(void)
     uint32_t frame_vdp_t = 0;
 
     if (!s_ready || s_paused) return;
+    /* The disk menu is the text screen. While it is up the firmware must
+     * not paint over the name table. */
+    if (dsk_menu_service()) return;
 
-    while (frame_vdp_t < MSX_T_PER_FRAME) {
-        int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c);
-        unsigned long before = s_cpu.cyc;
-        if (is_r800) {
-            r800_step(&s_cpu);
-        } else {
-            z80_step(&s_cpu);
-        }
-        uint32_t delta = (uint32_t)(s_cpu.cyc - before);
-        if (!delta) delta = 1;
-        uint32_t bus_t = is_r800 ? ((delta + 1) >> 1) : delta;
-        if (!bus_t) bus_t = 1;
-        frame_vdp_t += bus_t;
-
-        if (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) {
-            t9769c_advance(&g_t9769c, bus_t);
-        }
-        vdp_advance(bus_t);
-        if (vdp_vblank_taken()) z80_gen_int(&s_cpu, 0xFFu);
-    }
+    while (frame_vdp_t < MSX_T_PER_FRAME) frame_vdp_t += step_one();
 }
 
 void msx_blit_rgb565(uint16_t *fb)

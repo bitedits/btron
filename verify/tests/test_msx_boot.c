@@ -89,9 +89,13 @@ int main(int argc, char **argv)
         int m = atoi(mach_arg);
         if (m > 0) cfg.machine = (uint16_t)m;
     } else {
-        if (rom_len > 65536u || strstr(rom_path, "BULLRUSH") || strstr(rom_path, "NEON") || strstr(rom_path, "NIGHT")) {
+        /* Same choice as msx_machine_for() in msx_app.c. */
+        if (strstr(rom_path, "Bad Apple"))
+            cfg.machine = BMSX_MACHINE_MSX;
+        else if (strstr(rom_path, "Dynamite"))
+            cfg.machine = BMSX_MACHINE_MSX2_CBIOS_JP;
+        else if (rom_len > 65536u || strstr(rom_path, "BULLRUSH") || strstr(rom_path, "NEON") || strstr(rom_path, "NIGHT"))
             cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
-        }
     }
     cfg.frame_hz = 60;
     rc = msx_init(&cfg);

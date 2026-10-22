@@ -140,6 +140,10 @@ int msx_init(const msx_cfg_t *cfg)
     kbd_init();
     ppi_init();
     psg_init();
+    scc_init();
+    opll_init();
+    pcm_init();
+    y8950_init();
     vdp_init((uint8_t)machine);
 
     z80_init(&s_cpu);
@@ -162,6 +166,10 @@ void msx_reset(void)
     kbd_reset();
     ppi_reset();
     psg_reset();
+    scc_reset();
+    opll_reset();
+    pcm_reset();
+    y8950_reset();
     vdp_reset();
 
     z80_init(&s_cpu);
@@ -249,7 +257,7 @@ void msx_joy_set(uint8_t bits)
 void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out)
 {
     uint32_t n = 0u;
-    if (buf) n = psg_render(buf, MSX_PCM_FRAME);
+    if (buf) n = msx_audio_render(buf, MSX_PCM_FRAME);
     if (frames_out) *frames_out = n;
 }
 

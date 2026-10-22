@@ -382,6 +382,12 @@ loop: render ≤1024 frames → virtio_sound_write(chunk) until shortfall closed
           <p>No blocking, no unbounded buffering: playback stays locked to real time and worst-case added
              latency is one 100 ms target window — the audio twin of B-Media's plane budgets
              (<a href="index.html">B-Media</a>).</p>
+          <p>B-MSX is a second producer of this same interleaved S16 buffer
+             (<a href="msx.html#soundchips">Sound Chip Layer</a>). Its window fills the block from the
+             integer chip mixer and does not call <code>lilcu64_synth_render_frames</code>. One
+             VirtIO-Sound device is open at a time: the MSX window calls
+             <code>virtio_sound_open(44100, 2)</code> only when nothing is ready, and it never closes
+             the device. The demoscene pump and the MSX pump do not run in the same session.</p>
         </div>
 
         <h3 id="shims">3.5 Sound Shims (trigger surface)</h3>

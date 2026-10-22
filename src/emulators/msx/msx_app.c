@@ -15,6 +15,7 @@
 #include <btron/app_menu.h>
 #include <btron/troncode.h>
 #include <emulators/tronmsx.h>
+#include <device/virtio.h>
 #include "msx_kbd.h"
 #include "../../clu/vfs.h"          /* the /SYS catalogue: src/clu/vfs.c */
 #include <stdint.h>
@@ -75,6 +76,56 @@ static int         s_frame_ms = 16;
  * writer, one reader: a lost or duplicated tick costs one frame of speed, and
  * without it a repaint caused by desktop damage would fast-forward the machine. */
 static volatile BOOL s_frame_due;
+
+/* One emulated frame of S16, pumped like lilcu64_synth_pump_virtio: write
+ * while the device is under ~100 ms, otherwise count a drop. The device is
+ * process-wide, so this window does not close it and does not reopen it
+ * when another producer already holds 44100 Hz stereo. */
+#define MSX_AUDIO_TARGET_BYTES 17640u
+static int16_t  s_pcm[735u * 2u];
+static uint32_t s_audio_drops;
+static int      s_audio_open_tried;
+
+static void msx_host_pump_audio(int queue)
+{
+    uint32_t n = 0u;
+
+    msx_psg_submit_pcm(s_pcm, &n);
+    if (!queue || !n) return;
+    if (!virtio_sound_is_ready()) {
+        if (!s_audio_open_tried) {
+            s_audio_open_tried = 1;
+            virtio_sound_open(44100, 2);
+        }
+        if (!virtio_sound_is_ready()) {
+            s_audio_drops++;
+            return;
+        }
+    }
+    if (virtio_sound_get_queued_bytes() >= MSX_AUDIO_TARGET_BYTES) {
+        s_audio_drops++;
+        return;
+    }
+    if (virtio_sound_write(s_pcm, n) < 0) s_audio_drops++;
+    if (s_audio_drops == 0xFFFFFFFFu) s_audio_drops = 0u;
+}
+
+/* MegaROM homebrew in this drawer boots on turboR. Two file-hunter carts
+ * name their own machine: Bad Apple is an MSX1 ASCII16 image (its 2 MiB
+ * size would otherwise pick turboR) and writes the FM-PAC; Dynamite Go! Go!
+ * is the 32 KiB MSX2J demo, which the size rule would boot as MSX1. */
+static uint16_t msx_machine_for(const char *name, size_t size)
+{
+    if (name && strstr(name, "Bad Apple"))
+        return BMSX_MACHINE_MSX;
+    if (name && strstr(name, "Dynamite"))
+        return BMSX_MACHINE_MSX2_CBIOS_JP;
+    if (size > 65536u ||
+        (name && (strstr(name, "BULLRUSH") || strstr(name, "NEON") ||
+                  strstr(name, "NIGHT"))))
+        return BMSX_MACHINE_MSXTR_CBIOS;
+    return BMSX_MACHINE_MSX;
+}
 
 /* ── Cartridge catalogue and loading ─────────────────────────────────────── */
 
@@ -167,11 +218,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     msx_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.frame_hz = 60;
-    if (size > 65536 || strstr(name, "BULLRUSH") || strstr(name, "NEON") || strstr(name, "NIGHT")) {
-        cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
-    } else {
-        cfg.machine = BMSX_MACHINE_MSX;
-    }
+    cfg.machine = msx_machine_for(name, (size_t)size);
     msx_init(&cfg);
 
     rc = msx_load_rom(buf, (uint32_t)got, 0);
@@ -254,11 +301,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     msx_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.frame_hz = 60;
-    if (got > 65536 || strstr(name, "BULLRUSH") || strstr(name, "NEON") || strstr(name, "NIGHT")) {
-        cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
-    } else {
-        cfg.machine = BMSX_MACHINE_MSX;
-    }
+    cfg.machine = msx_machine_for(name, got);
     msx_init(&cfg);
 
     rc = msx_load_rom(rom_image, (uint32_t)got, 0);
@@ -464,6 +507,7 @@ static void msx_view(WND *wnd, GDEV *dev)
     if (st->running && !st->paused && (s_frame_due || s_tsk <= 0)) {
         s_frame_due = FALSE;
         msx_run_frame();
+        msx_host_pump_audio(1);
         msx_blit_rgb565(s_fb);
         st->frames++;
     }
@@ -520,7 +564,10 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
             break;
         case XCMD_EMU_FAST_FORWARD:
             if (st->running && !st->paused) {
-                for (int i = 0; i < 300; i++) msx_run_frame();
+                for (int i = 0; i < 300; i++) {
+                    msx_run_frame();
+                    msx_host_pump_audio(0);
+                }
                 s_frame_due = TRUE;
             }
             break;
@@ -761,6 +808,7 @@ void msx_app_fast_forward(int frames)
     if (s_msx.running && !s_msx.paused) {
         for (int i = 0; i < frames; i++) {
             msx_run_frame();
+            msx_host_pump_audio(0);
         }
         s_frame_due = TRUE;
         if (s_wnd) inval_wnd(s_wnd);

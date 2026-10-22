@@ -259,26 +259,47 @@ void psg_reset(void)
     s_frac = 0u;
 }
 
-/* Produce `frames` interleaved stereo frames from the chip state and move the
- * generators by exactly the ticks they consume.  The register file is read at
- * each sample, so a write taken during a frame shows up in the next block -
- * the 60 Hz block law of section 2.4.  Dropping samples is the caller's
+/* Produce `frames` of the PSG and add them to a stereo int32 accumulator.
+ * The register file is read at each sample, so a write taken during a frame
+ * shows up in the next block — the 60 Hz block law of section 2.4. The level
+ * is the historical `mix() << 5` (unipolar). Dropping samples is the caller's
  * problem (D5): it never reaches back into the chip.
  */
+void psg_mix(int32_t *acc, uint32_t frames)
+{
+    uint32_t i;
+
+    if (!acc || !frames) return;
+    for (i = 0u; i < frames; i++) {
+        uint32_t frac = s_frac + PSG_STEP_LO;
+        uint32_t n = PSG_STEP_HI + (frac < PSG_STEP_LO ? 1u : 0u);
+        int32_t v;
+
+        s_frac = frac;
+        while (n--) tick();
+        v = (int32_t)mix() << 5;
+        acc[i * 2u]     += v;
+        acc[i * 2u + 1u] += v;
+    }
+}
+
 uint32_t psg_render(int16_t *out, uint32_t frames)
 {
     uint32_t i;
 
+    if (!out || !frames) return 0u;
     for (i = 0u; i < frames; i++) {
-        uint32_t frac = s_frac + PSG_STEP_LO;
-        uint32_t n = PSG_STEP_HI + (frac < PSG_STEP_LO ? 1u : 0u);
-        s_frac = frac;
-        while (n--) tick();
-        {
-            int16_t v = (int16_t)(mix() << 5);
-            out[i * 2u] = v;
-            out[i * 2u + 1u] = v;
-        }
+        int32_t a[2];
+        int32_t v;
+
+        a[0] = 0;
+        a[1] = 0;
+        psg_mix(a, 1u);
+        v = a[0];
+        if (v > 32767) v = 32767;
+        if (v < -32768) v = -32768;
+        out[i * 2u]     = (int16_t)v;
+        out[i * 2u + 1u] = (int16_t)v;
     }
     return frames;
 }

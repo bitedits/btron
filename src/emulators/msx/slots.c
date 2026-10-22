@@ -210,7 +210,6 @@ static void cart_write(uint16_t addr, uint8_t val)
         break;
 
     case MAPPER_KONAMI:
-    case MAPPER_KONAMI_SCC:
         if (addr >= 0x5000u && addr < 0x6000u) {
             cart_banks[1] = (uint8_t)(val % num_8k);
             remap();
@@ -221,6 +220,24 @@ static void cart_write(uint16_t addr, uint8_t val)
             cart_banks[2] = (uint8_t)(val % num_8k);
             remap();
         } else if (addr >= 0xB000u && addr < 0xC000u) {
+            cart_banks[3] = (uint8_t)(val % num_8k);
+            remap();
+        }
+        break;
+
+    case MAPPER_KONAMI_SCC:
+        /* SCC / SCC-I window wins over the bank alias that shares #98xx/#B8xx. */
+        if (scc_write(addr, val)) break;
+        if (addr >= 0x5000u && addr < 0x5800u) {
+            cart_banks[1] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0x7000u && addr < 0x7800u) {
+            cart_banks[1] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0x9000u && addr < 0x9800u) {
+            cart_banks[2] = (uint8_t)(val % num_8k);
+            remap();
+        } else if (addr >= 0xB000u && addr < 0xB800u) {
             cart_banks[3] = (uint8_t)(val % num_8k);
             remap();
         }
@@ -441,6 +458,7 @@ void slots_set_rom(const uint8_t *img, uint32_t size)
         for (i = 0; i < rom_size; i++) rom[i] = img[i];
     for (i = rom_size; i < MSX_ROM_SIZE; i++) rom[i] = 0xFF;
     detect_mapper();
+    scc_reset();
     remap();
 }
 
@@ -479,6 +497,11 @@ uint8_t slots_read(uint16_t addr)
         if (is_primary_subslotted(prim)) {
             return (uint8_t)~sub[prim];
         }
+    }
+
+    if (is_cart_page[page] && cart_mapper == MAPPER_KONAMI_SCC) {
+        uint8_t sv;
+        if (scc_read(addr, &sv)) return sv;
     }
 
     if (is_mapper_page[page]) {
@@ -545,6 +568,7 @@ uint8_t msx_bus_in(uint8_t port)
         return geo3d_read(&g_geo3d, port);
     }
     if (port >= 0xA0u && port <= 0xA3u) return psg_read(port);
+    if (port >= 0xC0u && port <= 0xC3u) return y8950_read(port);
     if (is_ppi(port, &reg))             return ppi_read(reg);
 
     if (is_turbor()) {
@@ -576,6 +600,16 @@ void msx_bus_out(uint8_t port, uint8_t value)
         return;
     }
     if (port >= 0xA0u && port <= 0xA3u) { psg_write(port, value); return; }
+    if (port >= 0xC0u && port <= 0xC3u) { y8950_write(port, value); return; }
+    if (port == 0x7Cu || port == 0x7Du) {
+        /* MSX2+ and turboR forward from the engine latch. MSX / MSX2 see an
+         * FM-PAC here, the same OPLL object. */
+        if (!is_turbor() && s_machine < BMSX_MACHINE_MSX2P_CBIOS) {
+            if (port == 0x7Cu) opll_address(value);
+            else opll_data(value);
+            return;
+        }
+    }
     if (is_ppi(port, &reg)) {
         if (reg == 0u) slots_primary_select(value);
         ppi_write(reg, value);

@@ -1,0 +1,121 @@
+MSX-SOUND.txt — B-MSX Sound Chip Layer (tronMSX)
+=======================================================================================
+
+B-System / BTRON 3.20
+Target: MSX, MSX2, MSX2+ and turboR audio inside tronMSX
+Related: b-media/msx.html section 2.6, b-media/sound.html section 3.4,
+         b-media/audio.html, SOUND.txt, src/emulators/msx/
+
+The lilcu64 synthesizer and this layer share one PCM contract and nothing else.
+Both produce interleaved little-endian S16 at 44.1 kHz, stereo. B-MSX does not
+call lilcu64_synth_render_frames, does not use float voices, and does not apply
+master_soft_clamp. D4 forbids float and libm on the machine-state path. Chip
+state is static. There is no heap and no external sample.
+
+=======================================================================================
+1. EGRESS
+=======================================================================================
+
+msx_audio_render (audio.c) zeros an int32 stereo accumulator, calls psg_mix,
+scc_mix, opll_mix, y8950_mix and pcm_mix, then saturates each sample to int16.
+msx_psg_submit_pcm fills one 735-frame block (44100/60) from that mixer.
+
+The POSIX / BTRON window (msx_app.c, msx_host_pump_audio) is the only VirtIO
+client. It writes the block while virtio_sound_get_queued_bytes() stays under
+17640 (about 100 ms). An absent device, or a queue already at that target, is
+a counted drop. The window calls virtio_sound_open(44100, 2) only when no
+device is ready, and it never closes the device. One VirtIO-Sound device
+exists per process. The demoscene pump and this pump do not run in the same
+session. Fast-forward still renders the chips and does not queue those blocks.
+
+$ make run-posix queues the same block through SDL2 AUDIO_S16LSB. Hearing a
+ROM is a manual listen. The headless check is $ make msx-audio, which links
+the chip sources and not msx_app.c, so it does not open SDL.
+
+PSG, SCC, OPLL and Y8950 advance only while a block is rendered. turboR PCM
+is clocked from t9769c_advance, because BIOS playback polls port 0xA4 during
+the CPU frame. pcm_mix only resamples samples that frame already captured.
+
+=======================================================================================
+2. CHIPS
+=======================================================================================
+
+PSG (psg.c) — AY-3-8910 / YM2149 at 0xA0–0xA3. Unipolar, level = mix()<<5,
+copied to L and R. A set mixer bit disables that generator and leaves its gate
+at 1. Both generators off (register 7 = 0x3F) at volume 15 is the flat level
+8160, not silence. Volume 0 is silence. The tone generator is clocked at
+MSX_PSG_HZ per tick. Section 2.4 of b-media/msx.html records the datasheet
+period law (PSG_HZ/16); the test below records this renderer. Tone A period
+256, register 7 = 0x38, volume 15: 116 unipolar edges in one 735-frame block.
+
+SCC / SCC-I (scc.c) — memory mapped, not I/O. Ports 0x98–0x9F are the VDP.
+Plain SCC is active when the bank at 0x9000–0x97FF holds 0x3F in its low six
+bits and mode bit 5 is clear. Window 0x9800:
+  0x00–0x7F   waveforms 1–4; a write to channel 4 also fills channel 5
+  0x80–0x89   12-bit frequency, little-endian, mirrored at 0x90
+  0x8A–0x8E   4-bit volume
+  0x8F        enable, bit 0 = channel 1
+  0xE0–0xFF   deformation, latched, not applied
+SCC-I: mode register 0xBFFE/0xBFFF bit 5, plus bit 7 of the 0xB000 bank.
+Window 0xB800: waves 0x00–0x9F, frequency 0xA0–0xA9, volume 0xAA–0xAE,
+enable 0xAF, deformation 0xC0 latched. The mode register is write-only.
+A bank write at 0x9000 or 0xB000 returns 0 from scc_write so the mapper still
+updates the ROM bank. f = 3579545 / (32 * period). A period below 9 is silent.
+Period 0x100 is about 437 Hz: 14 signed zero-crossings per 735 frames.
+
+YM2413 OPLL (opll.c) — 0x7C address, 0x7D data, write-only. MSX and MSX2 route
+those ports as an FM-PAC. MSX2+ and turboR forward them from the engine latch.
+One object. Nine melodic channels. Register 0x0E bit 5 silences channels 6–8;
+rhythm voices are a later step, not melodic stand-ins. The fifteen built-in
+patches are original parameter sketches in the published instrument order.
+They are not a Yamaha instrument ROM image. Block 4, f-number 288, multiple 1
+(key register 0x19) produces 14 signed zero-crossings per 735 frames.
+
+Y8950 MSX-AUDIO (y8950.c) — 0xC0 address/status, 0xC1 data, 0xC2/0xC3 ADPCM.
+Nine 2-operator channels on fm_int.h. Key is bit 5 of 0xB0+ch. Connection is
+bit 0 of 0xC0+ch (0 = FM, 1 = additive). A status read returns 0. ADPCM-B
+registers written through 0xC0/0xC1 are stored and not rendered. The 0xC2/0xC3
+data ports are accepted and discarded. ADPCM playback is a later step.
+f-number 288, block 4, key register 0xB0 = 0x31: 14 signed zero-crossings.
+
+turboR PCM (pcm.c) — 0xA4 is an unsigned sample, 0x80 at silence. A read of
+0xA4 is the low two bits of a counter that ticks every 227 Z80 T-states
+(3579545/227, about 15.77 kHz). 0xA5 bit 0 selects the 4-deep latch. Bit 1
+set is unmuted; the reset value 0x03 is latched and unmuted. Bit 1 clear is
+silence. Level = (sample - 128) << 6, so 0xFF is the constant +8128. Only
+turboR calls t9769c_advance, so other machines contribute zeros.
+
+=======================================================================================
+3. WHAT THIS STEP DOES NOT DO
+=======================================================================================
+
+- No GPL sound core (emu2413, Nuked, MAME, fMSX Fmopl, blueMSX YM2413).
+- No Yamaha instrument ROM image.
+- OPLL rhythm voices and Y8950 ADPCM-B stay follow-ups on this same mixer.
+- SCC deformation is latched, not applied.
+- lilcu64 Sound Shims are not driven from chip register writes.
+
+=======================================================================================
+4. LISTEN CARTRIDGE
+=======================================================================================
+
+assets/msx/Bad Apple (MDPC)[ASCII16].rom is Bad Apple MSX by MDPC, the 2 MiB
+ASCII16 image the file-hunter homebrew page loads (games/BadApple.zip). The
+File menu and the XMB Games band list every .rom in that folder, so the row
+appears with no extra menu table. It boots as MSX1: the size rule would
+otherwise pick turboR, and this demo writes the FM-PAC. Dynamite Go! Go!
+is assets/msx/Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM, the
+32 KiB cartridge the same site loads as games/DynamiteGoGo.zip on an MSX2
+Japanese machine. It boots as MSX2 C-BIOS JP; the size rule would otherwise
+pick MSX1. Lode Runner stays the small PSG cartridge. The /SYS image is
+unchanged and still carries only the two 32 KiB Lode Runners; the
+freestanding cartridge cap is 1 MiB.
+
+$ make msx-audio also checks a Konami SCC cart window (a write of 0x7F at
+0x9800 reads back), an SCC+ wave byte at 0xB800, a latched deformation byte,
+and the saturation case: three PSG tones at volume 15, five full-scale SCC
+channels and an OPLL sine reach +32767.
+
+=======================================================================================
+END OF MSX-SOUND.txt
+=======================================================================================

@@ -51,6 +51,7 @@
         <a href="#vdpdraw" class="nav-sublink">VDP Renderer</a>
         <a href="#psg" class="nav-sublink">PSG: Modes, Mixer, Envelope</a>
         <a href="#ppi" class="nav-sublink">PPI, Keyboard, Joystick</a>
+        <a href="#soundchips" class="nav-sublink">Sound Chip Layer</a>
       </div>
 
       <div class="nav-heading">Part 3: BIOS &amp; Boot</div>
@@ -172,9 +173,10 @@
         </table>
         <p>
           First core scope: MSX2, 64 KiB main RAM, one 32 KiB cartridge, SCREEN 0–5 rendering, PSG audio,
-          keyboard matrix, C-BIOS fallback. Outside the first core: disk drive, Kanji ROM, FM
-          (YM2413/OPLL), R800, MegaROM mappers beyond a single 32 KiB page pair, SCC, MIDI. Each of those is
-          a later step with its own acceptance delta.
+          keyboard matrix, C-BIOS fallback. SCC, YM2413, Y8950 FM and turboR PCM share that PCM contract
+          (<a href="#soundchips">2.6</a>). Outside the first core: disk drive, Kanji ROM, R800, MegaROM
+          mappers beyond a single 32 KiB page pair, MIDI, and Y8950 ADPCM-B. Each of those is a later step
+          with its own acceptance delta.
         </p>
         <p>
           The time-travel debugger is inside B-MSX scope (<a href="#timetravel">Part 8</a>): frame-granular
@@ -627,6 +629,84 @@
         </table>
       </section>
 
+      <section id="soundchips">
+        <h3>2.6 Sound Chip Layer</h3>
+        <p>
+          PSG, SCC, YM2413 (MSX-MUSIC), Y8950 FM and the turboR PCM render into one interleaved
+          little-endian S16 block at 44.1 kHz, stereo, the B-Audio egress
+          (<a href="audio.html#write"><code>virtio_sound_write</code></a>). <code>msx_audio_render</code>
+          in <code>audio.c</code> zeros an <code>int32</code> accumulator, calls each chip's mix, and
+          saturates each sample into the int16 range. <code>msx_psg_submit_pcm</code> fills one 735-frame
+          block (<code>44100/60</code>) from that mixer. No heap, and no <code>float</code> or libm on
+          this path (D4). The units are <code>audio.c</code>, <code>scc.c</code>, <code>opll.c</code>,
+          <code>pcm.c</code>, <code>y8950.c</code> and the shared integer oscillator <code>fm_int.h</code>.
+          They sit beside the eleven units of <a href="#chips">7.7</a>.
+        </p>
+        <p>
+          PSG, SCC, OPLL and Y8950 advance only while that block is rendered. A frame that is not
+          submitted does not move them. turboR PCM still ticks with the CPU, because BIOS playback
+          polls <code>0xA4</code>: <code>t9769c_advance</code> feeds it T-states, and <code>pcm_mix</code>
+          only resamples what the frame already captured. The hosted window pumps the block the way the
+          lilcu64 pump paces a queue, and it does not call <code>lilcu64_synth_render_frames</code>.
+          Procedural Sound Shims are not an overlay on these chips.
+        </p>
+        <p>
+          One VirtIO-Sound device exists per process. The window calls <code>virtio_sound_open(44100, 2)</code>
+          only when no device is ready, and it never closes the device. The demoscene pump and this pump
+          do not run in the same session. Fast-forward still renders the chips, so their state stays with
+          the CPU, and it does not queue those blocks. An absent device, or a queue already holding
+          17,640 bytes (about 100 ms), is a counted drop. <code>$ make run-posix</code> queues the same
+          block through the existing SDL2 <code>AUDIO_S16LSB</code> device. <code>$ make msx-audio</code>
+          is the headless check; it links no SDL.
+        </p>
+        <table class="api-table">
+          <caption>The five sources into the shared block. Address maps are
+          <span class="basis basis-hw">Hardware</span>. The integer level law and the deferred voices are
+          <span class="basis basis-norm">Normative</span>, closed by <code>$ make msx-audio</code>.</caption>
+          <thead><tr><th>Source</th><th>Where the machine sees it</th><th>What the mixer adds</th></tr></thead>
+          <tbody>
+            <tr><td>PSG, <code>psg.c</code></td><td><code>0xA0</code>–<code>0xA3</code>, register file of 2.4</td><td>Unipolar mono, <code>mix() &lt;&lt; 5</code>, copied to L and R. A set mixer bit disables that generator and leaves its gate at 1, so both generators off at volume 15 is a flat level, not silence. Volume 0 is silence.</td></tr>
+            <tr><td>SCC / SCC-I, <code>scc.c</code></td><td>Memory window below, not an I/O port. <code>0x98</code>–<code>0x9F</code> remain the VDP.</td><td>Signed 32-byte wavetable. <code>f = 3579545 / (32 × period)</code>. A period below 9 is silent. Mono, added to L and R.</td></tr>
+            <tr><td>YM2413, <code>opll.c</code></td><td><code>0x7C</code> address, <code>0x7D</code> data, write-only. MSX and MSX2 see an FM-PAC; MSX2+ and turboR forward the engine latch. One object.</td><td>Nine melodic 2-operator channels. Register <code>0x0E</code> bit 5 silences channels 6–8. Rhythm voices are a later step. Built-in patches are original parameter sketches, not a Yamaha instrument ROM.</td></tr>
+            <tr><td>Y8950 FM, <code>y8950.c</code></td><td><code>0xC0</code> address and status, <code>0xC1</code> data. Key is bit 5 of <code>0xB0+ch</code>. Connection is bit 0 of <code>0xC0+ch</code> (0 FM, 1 additive).</td><td>Nine 2-operator channels on the same integer oscillator as the OPLL. A status read returns 0. <code>0xC2</code>/<code>0xC3</code> ADPCM-B data is accepted and discarded. ADPCM playback is a later step.</td></tr>
+            <tr><td>turboR PCM, <code>pcm.c</code></td><td><code>0xA4</code> unsigned sample, <code>0x80</code> at silence; a read is the low two bits of the sample clock. <code>0xA5</code> bit 0 selects the 4-deep latch, bit 1 set is unmuted. Reset value <code>0x03</code>.</td><td>The clock is one sample per 227 Z80 T-states (about 15.77 kHz). The mixer spreads the frame's samples across the 735-frame block and then holds the last sample. Bit 1 clear forces silence. Only turboR advances this clock.</td></tr>
+          </tbody>
+        </table>
+        <table class="api-table">
+          <caption>Konami SCC window. Plain SCC is active when the bank at <code>0x9000</code>–<code>0x97FF</code>
+          holds <code>0x3F</code> in its low six bits and mode bit 5 is clear. SCC-I mode is bit 5 of the
+          write-only register at <code>0xBFFE</code>/<code>0xBFFF</code>, and also needs bit 7 of the
+          <code>0xB000</code> bank. Every row is <span class="basis basis-hw">Hardware</span>.</caption>
+          <thead><tr><th>Window</th><th>Plain SCC (<code>0x9800</code>)</th><th>SCC+ (<code>0xB800</code>)</th></tr></thead>
+          <tbody>
+            <tr><td>Waveforms</td><td><code>0x00</code>–<code>0x7F</code>, channels 1–4. A write to channel 4 also fills channel 5.</td><td><code>0x00</code>–<code>0x9F</code>, five independent waves.</td></tr>
+            <tr><td>Frequency</td><td><code>0x80</code>–<code>0x89</code>, 12-bit little-endian, mirrored at <code>0x90</code>.</td><td><code>0xA0</code>–<code>0xA9</code>.</td></tr>
+            <tr><td>Volume</td><td><code>0x8A</code>–<code>0x8E</code>, 4-bit.</td><td><code>0xAA</code>–<code>0xAE</code>.</td></tr>
+            <tr><td>Enable</td><td><code>0x8F</code>, bit 0 = channel 1.</td><td><code>0xAF</code>.</td></tr>
+            <tr><td>Deformation</td><td><code>0xE0</code>–<code>0xFF</code>, latched. Rotate and frequency-shift bits are not applied.</td><td><code>0xC0</code>, latched the same way.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          A bank write at <code>0x9000</code> or <code>0xB000</code> is not consumed by the SCC, so the
+          Konami SCC mapper still updates its ROM bank. <code>$ make msx-audio</code> closes the integer
+          path on one 735-frame block: register 7 = <code>0x3F</code> at volume 15 is the flat level 8160
+          with no edges, and volume 0 is all zeros; tone A period 256, register 7 = <code>0x38</code>,
+          volume 15, produces 116 unipolar edges. The renderer clocks that tone at <code>MSX_PSG_HZ</code>
+          per tick. Section 2.4 records the datasheet period law; this check records the renderer.
+          An SCC square at period <code>0x100</code>, an OPLL channel at block 4 / f-number 288 / multiple 1
+          (key register <code>0x19</code>), and a Y8950 channel at the same f-number (key register
+          <code>0xB0</code> = <code>0x31</code>) each produce 14 signed zero-crossings, about 437 Hz.
+          A turboR sample of <code>0xFF</code> is the constant +8128, and clearing bit 1 of <code>0xA5</code>
+          returns silence. Three PSG tones at volume 15, five full-scale SCC channels and an OPLL sine
+          saturate the high rail at 32767.
+        </p>
+        <p>
+          The OPLL and Y8950 are clean-room integer models written from the YM2413 and YM3526 application
+          manuals. They do not import a GPL sound core, and the fifteen OPLL patches are not a Yamaha ROM
+          image. OPLL rhythm voices and Y8950 ADPCM-B playback remain later steps on this same mix.
+        </p>
+      </section>
+
       <!-- ═══════ Part 3 ═══════ -->
       <section id="bios">
         <h2>Part 3 — BIOS &amp; Boot</h2>
@@ -995,7 +1075,11 @@ const char *msx_version_string(void);           /* "tronMSX 1.05 (C99-only core)
           and cites the book that owns the contract.</caption>
           <thead><tr><th>MSX unit</th><th>Produces or needs</th><th>B-System contract</th><th>Book</th></tr></thead>
           <tbody>
-            <tr><td><code>psg.c</code></td><td>S16 mono PCM at 44.1 kHz, duplicated to stereo</td><td>Producer into <code>virtio_sound_write(samples, frames)</code>, paced by <code>virtio_sound_get_queued_bytes() &lt; 2 × 512 × 2 × 2</code>, the synth-pump pattern of B-Audio. An absent device is a counted drop, never a block.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td><code>psg.c</code></td><td>Unipolar mono at 44.1 kHz, added to L and R</td><td>One input of the shared block in <a href="#soundchips">2.6</a>. The window writes that block with <code>virtio_sound_write</code> while <code>virtio_sound_get_queued_bytes()</code> stays under 17,640. An absent device is a counted drop, never a block. The window does not close the device.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td><code>scc.c</code></td><td>Signed wavetable, five channels, added to L and R</td><td>Same egress as <code>psg.c</code>: one mixed S16 frame per executed frame (<a href="#soundchips">2.6</a>).</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td><code>opll.c</code></td><td>YM2413 melodic FM, nine channels</td><td>Same egress. Rhythm voices are not rendered.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td><code>y8950.c</code></td><td>Y8950 FM, nine 2-operator channels</td><td>Same egress. ADPCM-B data ports are discarded.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
+            <tr><td><code>pcm.c</code></td><td>turboR samples, resampled into the 735-frame block</td><td>Same egress. The sample clock advances with turboR T-states; other machines contribute zeros.</td><td><a href="audio.html#write">B-Audio</a></td></tr>
             <tr><td>Score and chiptune authoring</td><td>3-voice envelope timeline</td><td>The AY envelope and mixer model maps onto the lilcu64 generator-event surface. A <code>lc_score_*</code> timeline MUST be able to drive the PSG; the PSG register file is the single timeline truth.</td><td><a href="sound.html#apiref">B-Sound</a></td></tr>
             <tr><td><code>vdp.c</code></td><td>256×212 RGB565 plane</td><td><code>msx_blit_rgb565</code> output is composited by the B-Video plane path at the window's ×2 magnify (×1 on 256-wide geometry). The emulator does not touch the framebuffer device.</td><td><a href="video.html#planes">B-Video</a></td></tr>
             <tr><td><code>tronmsx.c</code> loop</td><td>16.67 ms period, bounded WCET</td><td>MSX_CORE runs on the IOD plane budget; frame pacing is a plane-budget problem and not an OS-timer problem. The pcm and cmd rings are NuStream-shaped buffers with counted drops.</td><td><a href="index.html#budgets">B-Media</a></td></tr>
@@ -1004,9 +1088,10 @@ const char *msx_version_string(void);           /* "tronMSX 1.05 (C99-only core)
         </table>
         <p>
           PSG and VDP share one clock: <code>msx_total_cycles</code>, and audio is submitted once per
-          executed frame from that counter, so core-side drift cannot occur by construction. Host-side drift
-          belongs to the B-Audio queue. AV-6 measures the pair; the <code>media_avsync_*</code> proof pair
-          named in B-Video and B-Audio binds it formally when it lands.
+          executed frame from that counter, so core-side drift cannot occur by construction. That submit
+          is the shared mixer of <a href="#soundchips">2.6</a>: five sources, one S16 block, one device.
+          Host-side drift belongs to the B-Audio queue. AV-6 measures the pair; the <code>media_avsync_*</code>
+          proof pair named in B-Video and B-Audio binds it formally when it lands.
         </p>
       </section>
 
@@ -1277,7 +1362,8 @@ src/tools/mssym.c   (C99, single file)
             <tr><td>Slot map</td><td><a href="https://github.com/libretro/blueMSX-libretro">libretro/blueMSX-libretro</a>, <code>Src/Board/MSX.c</code>, <code>Src/Memory/SlotManager.c</code></td><td>BSD for blueMSX-authored files; <code>V9938.c</code> is Alex Wulms freeware and <code>R800Dasm.c</code> originates in GPL openMSX</td><td>Layout reference for 1.2 and 1.3. Those two files are not copied.</td></tr>
             <tr><td>Boot ROM</td><td><a href="https://cbios.sourceforge.io/">C-BIOS</a></td><td>BSD, redistributable</td><td>Default BIOS, so a cartridge boots without a copyrighted ROM. Settings still load <code>MSX2P.ROM</code> and <code>MSX2PEXT.ROM</code> when present.</td></tr>
             <tr><td>VDP</td><td>Yamaha V9938 Technical Data Book, V9958 application manual, MSX Red Book chapter 2</td><td>Documentation</td><td>Register map (2.2), the 0x98/0x99 VRAM port family, modes 0–8 (2.3), sprites and palette. The renderer is written from these.</td></tr>
-            <tr><td>PSG</td><td>AY-3-8910 datasheet, optionally a short MIT or BSD AY core</td><td>Datasheet, or MIT/BSD</td><td>Three tones plus noise (2.4). MSX2+ FM is outside the first core.</td></tr>
+            <tr><td>PSG</td><td>AY-3-8910 datasheet, optionally a short MIT or BSD AY core</td><td>Datasheet, or MIT/BSD</td><td>Three tones plus noise (2.4). SCC, YM2413, Y8950 FM and turboR PCM are <a href="#soundchips">2.6</a>.</td></tr>
+            <tr><td>SCC, OPLL, Y8950, turboR PCM</td><td>Konami SCC notes, YM2413 application manual, YM3526 application manual</td><td>Documentation</td><td>Integer renderers (<a href="#soundchips">2.6</a>). No GPL sound core and no Yamaha instrument ROM image. OPLL rhythm voices and Y8950 ADPCM-B are later steps.</td></tr>
             <tr><td>PPI and keyboard</td><td>MSX Red Book, ports <code>0xA8</code>–<code>0xAB</code></td><td>Documentation</td><td>Slot select and keyboard matrix; the fixed matrix of 2.5 is sufficient.</td></tr>
             <tr><td>Z80 fallback</td><td><a href="https://github.com/ggambetta/libz80">ggambetta/libz80</a></td><td>MIT</td><td>Used only if the superzazu generated tables conflict with the module shape; same library-not-application property.</td></tr>
           </tbody>

@@ -4,6 +4,7 @@
  */
 
 #include "t9769b.h"
+#include "msx_int.h"
 #include <string.h>
 
 void t9769b_init(t9769b_t *t)
@@ -90,9 +91,11 @@ void t9769b_write(t9769b_t *t, uint8_t port, uint8_t val)
     switch (port) {
     case 0x7C:
         t->opll_reg = (uint8_t)(val & 0x3Fu);
+        opll_address(val);
         break;
     case 0x7D:
         t->opll_regs[t->opll_reg] = val;
+        opll_data(val);
         break;
     case 0xB4:
         t->rtc_reg = (uint8_t)(val & 0x0Fu);

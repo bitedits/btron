@@ -4,6 +4,7 @@
  */
 
 #include "t9769c.h"
+#include "msx_int.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -30,6 +31,7 @@ void t9769c_reset(t9769c_t *t)
     t->pcm_data = 0x80;
     t->pcm_ctrl = 0x03;      /* bit 0 BUFF=1 latched mode, bit 1 unmuted */
     t->pcm_counter = 0;
+    pcm_reset();
     t->pause_led = 0x00;
     t->kanji_addr = 0;
     t->opll_reg = 0;
@@ -61,7 +63,8 @@ void t9769c_advance(t9769c_t *t, uint32_t z80_t_states)
         t->e6_accum -= 14u;
         t->e6_ticks = (t->e6_ticks + 1u) & 0xFFFFu;
     }
-    t->pcm_counter = (uint8_t)((t->pcm_counter + (uint8_t)z80_t_states) & 3u);
+    pcm_advance(z80_t_states);
+    t->pcm_counter = pcm_read_status();
 }
 
 uint8_t t9769c_read(t9769c_t *t, uint8_t port)
@@ -72,11 +75,11 @@ uint8_t t9769c_read(t9769c_t *t, uint8_t port)
     case 0x7D:
         return 0xFF;
     case 0xA4:
-        /* bit 0-1: 15.7kHz counter, bit 2-7: unused */
-        return (uint8_t)(t->pcm_counter & 3u);
+        /* bit 0-1: 15.7 kHz sample clock, the BIOS playback handshake */
+        return pcm_read_status();
     case 0xA5:
-        /* bit 0: BUFF, bit 1: MUTE, bit 7: COMP */
-        return (uint8_t)(t->pcm_ctrl & 0x1Fu);
+        /* bit 0: BUFF, bit 1 set = sound enabled */
+        return pcm_read_ctrl();
     case 0xA7:
         return t->pause_led;
     case 0xB4:
@@ -143,15 +146,19 @@ void t9769c_write(t9769c_t *t, uint8_t port, uint8_t val)
     switch (port) {
     case 0x7C:
         t->opll_reg = (uint8_t)(val & 0x3Fu);
+        opll_address(val);
         break;
     case 0x7D:
         t->opll_regs[t->opll_reg] = val;
+        opll_data(val);
         break;
     case 0xA4:
         t->pcm_data = val;
+        pcm_write_data(val);
         break;
     case 0xA5:
         t->pcm_ctrl = val;
+        pcm_write_ctrl(val);
         break;
     case 0xA7:
         t->pause_led = val;

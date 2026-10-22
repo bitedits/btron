@@ -1,0 +1,292 @@
+/*
+ * Headless checks for the tronMSX sound-chip mixer.
+ * No SDL: render into a buffer and measure it.
+ *
+ *   make msx-audio
+ */
+
+#include "../../src/emulators/msx/msx_int.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+
+#define FRAMES 735u
+
+static int g_fail;
+
+static void expect(int cond, const char *msg)
+{
+    if (!cond) {
+        printf("FAIL %s\n", msg);
+        g_fail++;
+    } else {
+        printf("ok   %s\n", msg);
+    }
+}
+
+static void quiet(void)
+{
+    psg_reset();
+    scc_reset();
+    opll_reset();
+    y8950_reset();
+    pcm_reset();
+}
+
+static void psg_reg(uint8_t r, uint8_t v)
+{
+    psg_write(0xA0, r);
+    psg_write(0xA1, v);
+}
+
+static void opll_reg(uint8_t r, uint8_t v)
+{
+    opll_address(r);
+    opll_data(v);
+}
+
+static void y8950_reg(uint8_t r, uint8_t v)
+{
+    y8950_write(0xC0, r);
+    y8950_write(0xC1, v);
+}
+
+static uint32_t edges(const int16_t *b, uint32_t frames)
+{
+    uint32_t i, n = 0;
+    for (i = 1u; i < frames; i++) {
+        int a = b[(i - 1u) * 2u] > 0;
+        int c = b[i * 2u] > 0;
+        if (a != c) n++;
+    }
+    return n;
+}
+
+static uint32_t crossings(const int16_t *b, uint32_t frames)
+{
+    uint32_t i, n = 0;
+    for (i = 1u; i < frames; i++) {
+        int16_t a = b[(i - 1u) * 2u];
+        int16_t c = b[i * 2u];
+        if ((a < 0 && c >= 0) || (a >= 0 && c < 0)) n++;
+    }
+    return n;
+}
+
+static void peak(const int16_t *b, uint32_t frames, int16_t *lo, int16_t *hi)
+{
+    uint32_t i;
+    *lo = 32767;
+    *hi = -32768;
+    for (i = 0u; i < frames; i++) {
+        int16_t s = b[i * 2u];
+        if (s < *lo) *lo = s;
+        if (s > *hi) *hi = s;
+    }
+}
+
+static int all_zero(const int16_t *b, uint32_t frames)
+{
+    uint32_t i;
+    for (i = 0u; i < frames * 2u; i++) if (b[i] != 0) return 0;
+    return 1;
+}
+
+static void scc_square(uint16_t period)
+{
+    uint8_t i;
+    scc_write(0x9000, 0x3F);
+    for (i = 0u; i < 32u; i++)
+        scc_write((uint16_t)(0x9800u + i), (i < 16u) ? 0x7Fu : 0x80u);
+    scc_write(0x9880, (uint8_t)(period & 0xFFu));
+    scc_write(0x9881, (uint8_t)((period >> 8) & 0x0Fu));
+    scc_write(0x988A, 15);
+    scc_write(0x988F, 0x01);
+}
+
+static void opll_sine(void)
+{
+    /* Custom instrument, silent modulator, sustained carrier, A-ish 437 Hz.
+     * fnum 288, block 4: reg #20 = key | (block << 1) | fnum bit 8. */
+    opll_reg(0x00, 0x21);
+    opll_reg(0x01, 0x21);
+    opll_reg(0x02, 0x3F);
+    opll_reg(0x03, 0x00);
+    opll_reg(0x04, 0xF0);
+    opll_reg(0x05, 0xF0);
+    opll_reg(0x06, 0x00);
+    opll_reg(0x07, 0x00);
+    opll_reg(0x10, 0x20);
+    opll_reg(0x30, 0x00);
+    opll_reg(0x20, 0x19);
+}
+
+static void y8950_sine(void)
+{
+    y8950_reg(0x20, 0x21);
+    y8950_reg(0x23, 0x21);
+    y8950_reg(0x40, 0x3F);
+    y8950_reg(0x43, 0x00);
+    y8950_reg(0x60, 0xF0);
+    y8950_reg(0x63, 0xF0);
+    y8950_reg(0x80, 0x00);
+    y8950_reg(0x83, 0x00);
+    y8950_reg(0xA0, 0x20);
+    y8950_reg(0xC0, 0x00);
+    y8950_reg(0xB0, 0x31);
+}
+
+int main(void)
+{
+    static int16_t buf[FRAMES * 2u];
+    int16_t lo, hi;
+    uint32_t n;
+    uint8_t i;
+
+    quiet();
+    memset(buf, 0x5A, sizeof(buf));
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "reset mix is silent");
+
+    quiet();
+    /* Both generators disabled is the AY constant level, not silence.
+     * Volume 0 is what mutes the channel. */
+    psg_reg(7, 0x3F);
+    psg_reg(8, 15);
+    msx_audio_render(buf, FRAMES);
+    n = edges(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    expect(n == 0u && hi == 8160 && lo == 8160, "PSG both-off is the flat AY level");
+    psg_reg(8, 0);
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "PSG volume 0 is silent");
+
+    quiet();
+    psg_reg(7, 0x38);
+    psg_reg(8, 15);
+    psg_reg(0, 0x00);
+    psg_reg(1, 0x01);                 /* period 256: ~116 output edges / frame */
+    msx_audio_render(buf, FRAMES);
+    n = edges(buf, FRAMES);
+    printf("     PSG edges %u\n", n);
+    expect(n >= 100u && n <= 130u, "PSG period 256 lands in band");
+
+    quiet();
+    scc_square(0x100);                /* 3579545/(32*256) ≈ 437 Hz, ~15 crossings */
+    msx_audio_render(buf, FRAMES);
+    n = crossings(buf, FRAMES);
+    printf("     SCC crossings %u\n", n);
+    expect(n >= 12u && n <= 18u, "SCC period 0x100 lands in band");
+    expect(buf[0] != 0 || buf[2] != 0, "SCC square is audible");
+
+    /* Memory hook: a Konami-SCC-shaped image, page 2 mapped to the cart. */
+    {
+        static uint8_t rom[40000];
+        uint8_t got = 0;
+        memset(rom, 0xFF, sizeof(rom));
+        rom[0] = 0x32; rom[1] = 0x00; rom[2] = 0x90;
+        rom[3] = 0x32; rom[4] = 0x00; rom[5] = 0x50;
+        rom[6] = 0x32; rom[7] = 0x00; rom[8] = 0xB0;
+        slots_init();
+        slots_set_machine(BMSX_MACHINE_MSX);
+        slots_set_rom(rom, (uint32_t)sizeof(rom));
+        slots_primary_select(0x10);
+        slots_write(0x9000, 0x3F);
+        slots_write(0x9800, 0x7F);
+        got = slots_read(0x9800);
+        expect(got == 0x7F, "SCC waveform write is visible through the cart window");
+    }
+    {
+        uint8_t v = 0u;
+        quiet();
+        scc_write(0xBFFE, 0x20);
+        scc_write(0xB000, 0x80);
+        scc_write(0xB800, 0x5A);
+        expect(scc_read(0xB800, &v) == 1 && v == 0x5A, "SCC+ waveform is at #B800");
+        scc_reset();
+        scc_write(0x9000, 0x3F);
+        scc_write(0x98E0, 0xA5);
+        v = 0u;
+        expect(scc_read(0x98E0, &v) == 1 && v == 0xA5, "SCC deformation register latches");
+    }
+
+    quiet();
+    opll_sine();
+    msx_audio_render(buf, FRAMES);
+    n = crossings(buf, FRAMES);
+    printf("     OPLL crossings %u\n", n);
+    expect(n >= 12u && n <= 18u, "OPLL fnum 288 block 4 lands in band");
+
+    quiet();
+    y8950_sine();
+    msx_audio_render(buf, FRAMES);
+    n = crossings(buf, FRAMES);
+    printf("     Y8950 crossings %u\n", n);
+    expect(n >= 12u && n <= 18u, "Y8950 fnum 288 block 4 lands in band");
+
+    quiet();
+    pcm_write_ctrl(0x03);
+    pcm_write_data(0xFF);
+    pcm_advance(227u * 80u);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    printf("     PCM peak %d..%d\n", (int)lo, (int)hi);
+    expect(hi > 1000 && lo >= 0, "turboR PCM 0xFF is a positive level");
+    expect(pcm_read_status() == (uint8_t)(80u & 3u), "PCM status is the 15.7 kHz clock");
+
+    quiet();
+    pcm_write_ctrl(0x01);             /* bit 1 clear: muted */
+    pcm_write_data(0xFF);
+    pcm_advance(227u * 40u);
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "turboR PCM mute is silent");
+
+    quiet();
+    psg_reg(7, 0x38);
+    psg_reg(8, 15);
+    psg_reg(9, 15);
+    psg_reg(10, 15);
+    psg_reg(0, 0xFF);
+    psg_reg(1, 0x0F);                 /* long high stretch so the sum can rail */
+    for (i = 0u; i < 32u; i++) scc_write((uint16_t)(0x9800u + i), 0x7F);
+    scc_write(0x9000, 0x3F);
+    for (i = 0u; i < 5u; i++) {
+        scc_write((uint16_t)(0x9800u + i * 32u), 0x7F);
+    }
+    for (i = 0u; i < 32u; i++) {
+        scc_write((uint16_t)(0x9800u + i), 0x7F);
+        scc_write((uint16_t)(0x9820u + i), 0x7F);
+        scc_write((uint16_t)(0x9840u + i), 0x7F);
+        scc_write((uint16_t)(0x9860u + i), 0x7F);
+    }
+    scc_write(0x9880, 0x00);
+    scc_write(0x9881, 0x01);
+    scc_write(0x9882, 0x00);
+    scc_write(0x9883, 0x01);
+    scc_write(0x9884, 0x00);
+    scc_write(0x9885, 0x01);
+    scc_write(0x9886, 0x00);
+    scc_write(0x9887, 0x01);
+    scc_write(0x9888, 0x00);
+    scc_write(0x9889, 0x01);
+    scc_write(0x988A, 15);
+    scc_write(0x988B, 15);
+    scc_write(0x988C, 15);
+    scc_write(0x988D, 15);
+    scc_write(0x988E, 15);
+    scc_write(0x988F, 0x1F);
+    opll_sine();
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    printf("     mix peak %d..%d\n", (int)lo, (int)hi);
+    expect(hi == 32767, "full mix saturates at 32767");
+    expect(lo > -20000, "saturation does not wrap a positive sum");
+
+    if (g_fail) {
+        printf("%d failed\n", g_fail);
+        return 1;
+    }
+    printf("msx-audio: all checks passed\n");
+    return 0;
+}

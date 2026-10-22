@@ -94,6 +94,41 @@ uint8_t psg_debug_pb(void);
 /* The chip moves only while sampled: psg_render() advances exactly
  * T_PER_FRAME/2 T-states worth of ticks per 735-sample frame. */
 uint32_t psg_render(int16_t *out, uint32_t frames);   /* L=R pairs          */
+void     psg_mix(int32_t *acc, uint32_t frames);     /* add into L/R        */
+
+/* ---- audio.c: one S16 block from every chip --------------------------- */
+uint32_t msx_audio_render(int16_t *out, uint32_t frames);
+
+/* ---- scc.c: Konami SCC / SCC-I, memory mapped ------------------------- */
+void    scc_init(void);
+void    scc_reset(void);
+int     scc_write(uint16_t addr, uint8_t value);     /* 1 = consumed       */
+int     scc_read(uint16_t addr, uint8_t *out);       /* 1 = claimed        */
+void    scc_mix(int32_t *acc, uint32_t frames);
+
+/* ---- opll.c: YM2413 at #7C/#7D ---------------------------------------- */
+void    opll_init(void);
+void    opll_reset(void);
+void    opll_address(uint8_t value);
+void    opll_data(uint8_t value);
+void    opll_mix(int32_t *acc, uint32_t frames);
+
+/* ---- pcm.c: turboR DAC at #A4/#A5 ------------------------------------- */
+void    pcm_init(void);
+void    pcm_reset(void);
+void    pcm_write_data(uint8_t value);
+void    pcm_write_ctrl(uint8_t value);
+uint8_t pcm_read_status(void);
+uint8_t pcm_read_ctrl(void);
+void    pcm_advance(uint32_t t_states);
+void    pcm_mix(int32_t *acc, uint32_t frames);
+
+/* ---- y8950.c: MSX-AUDIO FM at #C0–#C3. ADPCM-B is latched, not played. */
+void    y8950_init(void);
+void    y8950_reset(void);
+uint8_t y8950_read(uint8_t port);
+void    y8950_write(uint8_t port, uint8_t value);
+void    y8950_mix(int32_t *acc, uint32_t frames);
 
 /* ---- ppi.c: 8255 at #A8-#AB, keyboard strobe and data ------------------ */
 void    ppi_init(void);

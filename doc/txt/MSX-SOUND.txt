@@ -27,6 +27,12 @@ a counted drop. The window calls virtio_sound_open(44100, 2) only when no
 device is ready, and it never closes the device. One VirtIO-Sound device
 exists per process. The demoscene pump and this pump do not run in the same
 session. Fast-forward still renders the chips and does not queue those blocks.
+The tick task locks to 60 Hz with delays of 17, 17 and 16 ms against get_tim.
+A flat 16 ms is 62.5 Hz: each frame submits 735 samples, the queue drops the
+extra audio, and the picture runs ahead of the music. A late paint resyncs
+and does not burst. Before the block is queued, the pump subtracts a slow
+mean (about 14 Hz). That is the speaker capacitor. The chip mix itself stays
+DC-coupled, so a flat PSG level is still 8160 in the headless check.
 
 $ make run-posix queues the same block through SDL2 AUDIO_S16LSB. Hearing a
 ROM is a manual listen. The headless check is $ make msx-audio, which links
@@ -94,11 +100,14 @@ data ports are accepted and discarded. ADPCM playback is a later step.
 f-number 288, block 4, key register 0xB0 = 0x31: 14 signed zero-crossings.
 
 turboR PCM (pcm.c) — 0xA4 is an unsigned sample, 0x80 at silence. A read of
-0xA4 is the low two bits of a counter that ticks every 227 Z80 T-states
-(3579545/227, about 15.77 kHz). 0xA5 bit 0 selects the 4-deep latch. Bit 1
-set is unmuted; the reset value 0x03 is latched and unmuted. Bit 1 clear is
-silence. Level = (sample - 128) << 6, so 0xFF is the constant +8128. Only
-turboR calls t9769c_advance, so other machines contribute zeros.
+0xA4 is the low two bits of a counter that ticks every 228 Z80 T-states
+(3579545/228 = 15700 Hz, 456 clocks of the 7.15909 MHz clock). The 15750 Hz
+figure is the wrong one. 0xA5 = 03H latches the sample onto the next tick.
+0xA5 = 02H takes it immediately and slews at most 48 steps per tick, so a
+high rate cannot reach full swing. Bit 1 clear silences this DAC. The reset
+value 0x03 is latched and unmuted. Level = (sample - 128) << 6, so 0xFF held
+in 03H is the constant +8128. Only turboR calls t9769c_advance, so other
+machines contribute zeros. Bad Apple is an MSX2+ track and does not use it.
 
 =======================================================================================
 3. WHAT THIS STEP DOES NOT DO

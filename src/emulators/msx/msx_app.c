@@ -71,10 +71,12 @@ static MsxViewer   s_msx;
 static uint16_t    s_fb[MSX_SCR_W * MSX_SCR_H];   /* RGB565 written by the core */
 static WND        *s_wnd;
 static ID          s_tsk;
-static int         s_frame_ms = 16;
 /* Set by the 60 Hz tick task, cleared by the paint callback.  One byte, one
- * writer, one reader: a lost or duplicated tick costs one frame of speed, and
- * without it a repaint caused by desktop damage would fast-forward the machine. */
+ * writer, one reader: a lost tick costs one frame, and it does not burst.
+ * Without it a repaint caused by desktop damage would fast-forward the machine.
+ * The deadline is 17, 17, 16 ms (50 ms for three frames). A flat 16 ms is
+ * 62.5 Hz, and each frame submits 735 samples, so the queue fills and drops
+ * audio while the picture keeps going. */
 static volatile BOOL s_frame_due;
 
 /* One emulated frame of S16, pumped like lilcu64_synth_pump_virtio: write
@@ -85,12 +87,43 @@ static volatile BOOL s_frame_due;
 static int16_t  s_pcm[735u * 2u];
 static uint32_t s_audio_drops;
 static int      s_audio_open_tried;
+/* Speaker capacitor. The chip mix is DC-coupled: a PSG level is unipolar and
+ * shifts the bipolar FM toward the positive rail. The jack on the machine is
+ * not. Mean is Q8. Shift 9 is about 14 Hz at 44100 Hz, so a held level leaves
+ * within a few frames and a 40 Hz tone stays. */
+static int32_t  s_hp[2];
+
+static void msx_host_ac_reset(void)
+{
+    s_hp[0] = 0;
+    s_hp[1] = 0;
+}
+
+static void msx_host_ac(int16_t *pcm, uint32_t frames)
+{
+    uint32_t i;
+    for (i = 0u; i < frames; i++) {
+        int ch;
+        for (ch = 0; ch < 2; ch++) {
+            int32_t x = pcm[i * 2u + (uint32_t)ch];
+            int32_t mean = s_hp[ch];
+            int32_t y;
+            mean += ((x << 8) - mean) >> 9;
+            s_hp[ch] = mean;
+            y = x - (mean >> 8);
+            if (y > 32767) y = 32767;
+            if (y < -32768) y = -32768;
+            pcm[i * 2u + (uint32_t)ch] = (int16_t)y;
+        }
+    }
+}
 
 static void msx_host_pump_audio(int queue)
 {
     uint32_t n = 0u;
 
     msx_psg_submit_pcm(s_pcm, &n);
+    if (n) msx_host_ac(s_pcm, n);
     if (!queue || !n) return;
     if (!virtio_sound_is_ready()) {
         if (!s_audio_open_tried) {
@@ -240,6 +273,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     }
 
     msx_reset();
+    msx_host_ac_reset();
     st->paused  = FALSE;
     st->running = TRUE;
     st->joy     = 0u;
@@ -322,6 +356,7 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     }
 
     msx_reset();
+    msx_host_ac_reset();
     st->paused  = FALSE;
     st->running = TRUE;
     st->joy     = 0u;
@@ -545,6 +580,7 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
         case XCMD_FILE_RESET:
             if (st->running) {
                 msx_reset();
+                msx_host_ac_reset();
                 st->frames = 0;
                 st->joy = 0u;
                 msx_joy_set(0u);
@@ -706,11 +742,29 @@ static void msx_handle_event(WND *wnd, const EVT *evt)
 
 static void msx_task(VW exinf)
 {
+    SYSTIME next = 0;
+    unsigned phase = 0u;
+    static const int step[3] = { 17, 17, 16 };
+
     (void)exinf;
+    get_tim(&next);
     while (s_wnd) {
+        SYSTIME now = 0;
+        int delay;
+
         s_frame_due = TRUE;
         inval_wnd(s_wnd);
-        dly_tsk(s_frame_ms);
+        next += (SYSTIME)step[phase];
+        phase = phase < 2u ? phase + 1u : 0u;
+        get_tim(&now);
+        if (now >= next) next = now; /* late: resync, the flag coalesces */
+        delay = (int)(next - now);
+        if (delay < 1) delay = 1;    /* dly_tsk(0) would spin */
+        if (delay > 30) {            /* wall clock stepped backwards */
+            next = now;
+            delay = 1;
+        }
+        dly_tsk(delay);
     }
     s_tsk = 0;
 }

@@ -237,6 +237,69 @@ int main(void)
         got = slots_read(0x9800);
         expect(got == 0x7F, "SCC waveform write is visible through the cart window");
     }
+    /* 48 KiB plain carts keep "AB" in the second 16 KiB and occupy CPU
+     * pages 0..2. A 32 KiB cart still starts at page 1. */
+    {
+        static uint8_t rom[65536];
+        slots_init();
+        slots_set_machine(BMSX_MACHINE_MSX);
+
+        memset(rom, 0x11, 49152u);
+        rom[0] = 0xD1;
+        rom[0x4000] = (uint8_t)'A';
+        rom[0x4001] = (uint8_t)'B';
+        rom[0x4002] = 0x10;
+        rom[0x4003] = 0x40;
+        rom[0x8000] = 0xD2;
+        slots_set_rom(rom, 49152u);
+        slots_primary_select(0x55);
+        expect(slots_read(0x0000) == 0xD1, "48K plain page 0 is the first 16K");
+        expect(slots_read(0x4000) == (uint8_t)'A' && slots_read(0x4001) == (uint8_t)'B',
+               "48K plain page 1 holds the AB header");
+        expect(slots_read(0x8000) == 0xD2, "48K plain page 2 is the third 16K");
+
+        memset(rom, 0x22, 32768u);
+        rom[0] = (uint8_t)'A';
+        rom[1] = (uint8_t)'B';
+        rom[2] = 0x10;
+        rom[3] = 0x40;
+        rom[0x4000] = 0xD3;
+        slots_set_rom(rom, 32768u);
+        slots_primary_select(0x55);
+        expect(slots_read(0x0000) == 0xFF, "32K plain page 0 stays empty");
+        expect(slots_read(0x4000) == (uint8_t)'A', "32K plain page 1 is the file start");
+        expect(slots_read(0x8000) == 0xD3, "32K plain page 2 is the second 16K");
+
+        memset(rom, 0x33, 49152u);
+        rom[0] = 0xA1;
+        rom[0x4000] = 0xA2;
+        rom[0x8000] = 0xA3;
+        slots_set_rom(rom, 49152u);
+        slots_primary_select(0x55);
+        expect(slots_read(0x4000) == 0xA1 && slots_read(0x8000) == 0xA1,
+               "48K image without an AB header is not mapped from 0000");
+
+        memset(rom, 0x55, 49152u);
+        rom[0] = 0xC0;
+        rom[0x4000] = (uint8_t)'A';
+        rom[0x4001] = (uint8_t)'B';
+        rom[0x4002] = 0x00;
+        rom[0x4003] = 0x00;
+        slots_set_rom(rom, 49152u);
+        slots_primary_select(0x55);
+        expect(slots_read(0x4000) == 0xC0, "48K AB with INIT outside page 1 stays banked");
+
+        memset(rom, 0x44, sizeof(rom));
+        rom[0] = 0xB0;
+        rom[0x4000] = (uint8_t)'A';
+        rom[0x4001] = (uint8_t)'B';
+        rom[0x4002] = 0x10;
+        rom[0x4003] = 0x40;
+        slots_set_rom(rom, 65536u);
+        slots_primary_select(0x55);
+        expect(slots_read(0x4000) == 0xB0 && slots_read(0x8000) == 0xB0,
+               "64K image with AB at file+0x4000 stays banked");
+    }
     {
         uint8_t v = 0u;
         quiet();
@@ -388,17 +451,26 @@ int main(void)
     quiet();
     pcm_write_ctrl(0x03);
     pcm_write_data(0xFF);
-    pcm_advance(227u * 80u);
+    pcm_advance(228u * 80u);
     msx_audio_render(buf, FRAMES);
     peak(buf, FRAMES, &lo, &hi);
     printf("     PCM peak %d..%d\n", (int)lo, (int)hi);
     expect(hi > 1000 && lo >= 0, "turboR PCM 0xFF is a positive level");
-    expect(pcm_read_status() == (uint8_t)(80u & 3u), "PCM status is the 15.7 kHz clock");
+    expect(pcm_read_status() == (uint8_t)(80u & 3u), "PCM status is the 15700 Hz clock");
+
+    quiet();
+    pcm_write_ctrl(0x02);             /* immediate: one tick slews, not a step */
+    pcm_write_data(0xFF);
+    pcm_advance(228u);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    printf("     PCM 02H peak %d..%d\n", (int)lo, (int)hi);
+    expect(hi > 2800 && hi < 3400, "PCM 02H one tick does not reach full scale");
 
     quiet();
     pcm_write_ctrl(0x01);             /* bit 1 clear: muted */
     pcm_write_data(0xFF);
-    pcm_advance(227u * 40u);
+    pcm_advance(228u * 40u);
     msx_audio_render(buf, FRAMES);
     expect(all_zero(buf, FRAMES), "turboR PCM mute is silent");
 

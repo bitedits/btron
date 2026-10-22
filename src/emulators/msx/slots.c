@@ -97,12 +97,27 @@ static int is_primary_subslotted(uint8_t prim)
 
 /* ---------------------------------------------------------------- Cartridge -- */
 
+/* A 48 KiB image whose "AB" header sits at file+0x4000, with INIT inside
+ * that same page, is a plain ROM that occupies CPU pages 0..2. C-BIOS only
+ * looks for the header at $4000 and $8000, so the file must not be shown
+ * from its first byte. A header at file 0, or anything past 48 KiB, stays
+ * on the bank-write score below. */
+static int plain_48k_from_0000(void)
+{
+    uint16_t init;
+
+    if (rom_size <= 32768u || rom_size > 49152u) return 0;
+    if (rom[0x4000] != (uint8_t)'A' || rom[0x4001] != (uint8_t)'B') return 0;
+    init = (uint16_t)((uint16_t)rom[0x4002] | ((uint16_t)rom[0x4003] << 8));
+    return init >= 0x4000u && init < 0x8000u;
+}
+
 static void detect_mapper(void)
 {
     uint32_t i;
     int score_ascii16 = 0, score_ascii8 = 0, score_konami = 0;
 
-    if (rom_size <= 32768u) {
+    if (rom_size <= 32768u || plain_48k_from_0000()) {
         cart_mapper = MAPPER_PLAIN;
         cart_banks[0] = 0;
         cart_banks[1] = 0;
@@ -145,6 +160,11 @@ static const uint8_t *get_cart_view(uint8_t page)
 
     switch (cart_mapper) {
     case MAPPER_PLAIN:
+        /* 48 KiB plain-from-0000. 16/32 KiB carts still start at page 1. */
+        if (rom_size > 32768u) {
+            if (page < 3u) return rom + ((uint32_t)page << 14);
+            return NULL;
+        }
         if (page == 1) return rom;
         if (page == 2) {
             if (rom_size > 16384u) return rom + 16384u;

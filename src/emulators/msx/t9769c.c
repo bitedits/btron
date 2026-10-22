@@ -78,7 +78,8 @@ uint8_t t9769c_read(t9769c_t *t, uint8_t port)
         /* bit 0-1: 15.7 kHz sample clock, the BIOS playback handshake */
         return pcm_read_status();
     case 0xA5:
-        /* bit 0: BUFF, bit 1 set = sound enabled */
+        /* bit 0 set: timer latch (03H). bit 0 clear: immediate (02H).
+         * bit 1 set: PCM DAC on. */
         return pcm_read_ctrl();
     case 0xA7:
         return t->pause_led;

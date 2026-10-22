@@ -655,7 +655,12 @@
           only when no device is ready, and it never closes the device. The demoscene pump and this pump
           do not run in the same session. Fast-forward still renders the chips, so their state stays with
           the CPU, and it does not queue those blocks. An absent device, or a queue already holding
-          17,640 bytes (about 100 ms), is a counted drop. <code>$ make run-posix</code> queues the same
+          17,640 bytes (about 100 ms), is a counted drop. The tick is 17, 17, 16 ms, so a window
+          that keeps up produces 60 frames and 44,100 samples per second. A flat 16 ms tick is 62.5 Hz:
+          the queue drops the extra audio and the picture runs ahead of the music. A late paint resyncs
+          and does not burst. The pump subtracts a slow mean (about 14 Hz) before the queue, which is
+          the speaker capacitor; the chip block stays DC-coupled, so the flat PSG level of 8160 is
+          unchanged in the headless check. <code>$ make run-posix</code> queues the same
           block through the existing SDL2 <code>AUDIO_S16LSB</code> device. <code>$ make msx-audio</code>
           is the headless check; it links no SDL.
         </p>
@@ -669,7 +674,7 @@
             <tr><td>SCC / SCC-I, <code>scc.c</code></td><td>Memory window below, not an I/O port. <code>0x98</code>–<code>0x9F</code> remain the VDP.</td><td>Signed 32-byte wavetable. <code>f = 3579545 / (32 × period)</code>. A period below 9 is silent. Mono, added to L and R.</td></tr>
             <tr><td>YM2413, <code>opll.c</code></td><td><code>0x7C</code> address, <code>0x7D</code> data, write-only. MSX and MSX2 see an FM-PAC; MSX2+ and turboR forward the engine latch. One object.</td><td>Nine melodic 2-operator channels. Register <code>0x0E</code> bit 5 replaces channels 6–8 with bass drum, snare, tom, top cymbal and hi-hat; bits 4–0 are the keys and <code>0x36</code>–<code>0x38</code> are the volumes. A key bit that rises before the next mix still attacks. Amplitude is the manual's 0.375 dB step (a volume unit is 3 dB). Rhythm rows are the measured instrument bytes; hi-hat, snare and top cymbal use the measured phase-bit mix, and percussion is +6 dB. The fifteen melodic patches remain original sketches, not a Yamaha instrument ROM. Rate key scale, vibrato and tremolo follow the measured chip laws. Level key scale is not applied.</td></tr>
             <tr><td>Y8950 FM, <code>y8950.c</code></td><td><code>0xC0</code> address and status, <code>0xC1</code> data. Key is bit 5 of <code>0xB0+ch</code>. Connection is bit 0 of <code>0xC0+ch</code> (0 FM, 1 additive).</td><td>Nine 2-operator channels on the same integer oscillator as the OPLL. A status read returns 0. <code>0xC2</code>/<code>0xC3</code> ADPCM-B data is accepted and discarded. ADPCM playback is a later step.</td></tr>
-            <tr><td>turboR PCM, <code>pcm.c</code></td><td><code>0xA4</code> unsigned sample, <code>0x80</code> at silence; a read is the low two bits of the sample clock. <code>0xA5</code> bit 0 selects the 4-deep latch, bit 1 set is unmuted. Reset value <code>0x03</code>.</td><td>The clock is one sample per 227 Z80 T-states (about 15.77 kHz). The mixer spreads the frame's samples across the 735-frame block and then holds the last sample. Bit 1 clear forces silence. Only turboR advances this clock.</td></tr>
+            <tr><td>turboR PCM, <code>pcm.c</code></td><td><code>0xA4</code> unsigned sample, <code>0x80</code> at silence; a read is the low two bits of the sample clock. <code>0xA5</code> = <code>03H</code> latches onto the next tick. <code>02H</code> takes the sample immediately. Bit 1 clear silences this DAC. Reset value <code>03H</code>.</td><td>The clock is one sample per 228 Z80 T-states, 15,700 Hz (456 clocks of the 7.15909 MHz clock). The 15,750 Hz figure is the wrong one. Immediate mode slews at most 48 steps per tick, so a high rate cannot reach full swing. The mixer spreads the frame's samples across the 735-frame block and then holds the last sample. Only turboR advances this clock. Bad Apple is an MSX2+ track and does not use it.</td></tr>
           </tbody>
         </table>
         <table class="api-table">

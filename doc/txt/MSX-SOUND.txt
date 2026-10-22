@@ -150,5 +150,111 @@ and the saturation case: three PSG tones at volume 15, five full-scale SCC
 channels and an OPLL sine reach +32767.
 
 =======================================================================================
+5. TWO SETTINGS: RIGOUR AND SUBTLE
+=======================================================================================
+
+Rigour is the setting the B-MSX window plays. Subtle is a B-Sound score sheet
+for writing next to those chips. Subtle is not linked into tronMSX. A cartridge
+does not call lilcu64_synth_render_frames, and a shim does not write 0xA0 or
+0x7C. The two paths share the 44100 Hz stereo S16 contract and nothing else.
+
+5.1 Rigour — the chip path (msx_audio_render)
+---------------------------------------------
+
+This is the listen that the catalogue uses. Integer only. No master_soft_clamp.
+
+Host
+  Tick              17, 17, 16 ms against get_tim (60 Hz). A flat 16 ms is
+                    62.5 Hz and is not used.
+  Queue             write while queued bytes stay under 17640 (about 100 ms).
+                    At that depth the block is a counted drop.
+  Speaker cap       in msx_host_pump_audio only. Mean is Q8.
+                    mean += ((x<<8) - mean) >> 9, about 14 Hz at 44100 Hz.
+  Mix               int32 sum, then saturate to int16. The chip block stays
+                    DC-coupled, so PSG level 15 held flat is still 8160.
+
+PSG, AY-3-8910 / YM2149, ports 0xA0–0xA3. Clock 1789772 Hz.
+  Tone              f = 1789772 / (16 * TP), TP = max(1, R1<<8 | R0)
+  Noise             f = 1789772 / (16 * NP), NP = max(1, R6)
+  Envelope          one of 32 steps per EP ticks, EP = max(1, R12<<8 | R11).
+                    A full cycle is 1789772 / (256 * EP). Each level lasts
+                    two steps. Shape 0x0B holds full. Shape 0x0F holds silence.
+  Level             the 16 steps 0, 51, 57, 64, 71, 80, 90, 101, 113, 127,
+                    143, 160, 180, 202, 227, 255, then << 5. Step 15 is 8160.
+                    Fixed volume and envelope mode use that same table.
+  Mixer             R7 enables are inverted. Mono, copied to L and R.
+  One generator tick is 8 PSG clocks. Registers are sampled once per PCM
+  frame from the file the CPU left at the end of the 59664-T frame.
+
+SCC / SCC-I, memory window, not an I/O port.
+  f = 3579545 / (32 * period). A period below 9 is silent. Five signed
+  wavetables. A bank write still updates the ROM bank.
+
+YM2413 OPLL, 0x7C then 0x7D. MSX and MSX2 see an FM-PAC. MSX2+ and turboR
+forward the same object from the engine latch.
+  Nine melodic channels. 0x0E bit 5 replaces 6–8 with the five rhythm voices.
+  Amplitude is 48 dB across 128 steps of 0.375 dB. One volume unit is 3 dB.
+  One total-level unit is 0.75 dB. Vibrato is 6.1 Hz, about 14 cent. Tremolo
+  is 3.7 Hz, 4.8 dB. Rate key scale is applied. Level key scale is not.
+  The chip emits each rhythm voice twice, so percussion sits 6 dB above one
+  melodic channel. The fifteen built-in patches are the original sketches in
+  opll.c, in the published instrument order. They are not a Yamaha ROM image.
+  Rhythm rows are the measured instrument bytes.
+
+Y8950, 0xC0/0xC1. Nine 2-operator channels. ADPCM-B registers are stored and
+not rendered. The 0xC2/0xC3 data ports are discarded.
+
+turboR PCM, 0xA4/0xA5. The sample clock is 15700 Hz (228 Z80 T-states; the
+15750 Hz figure is the wrong one). 0xA5 = 03H latches onto the next tick.
+0xA5 = 02H takes the sample immediately and slews at most 48 steps per tick.
+Bit 1 clear silences the DAC. Level = (sample - 128) << 6, so 0xFF in 03H
+is the constant +8128. Other machines contribute zeros.
+
+Which machine a title boots is the same choice the エミュレータ(E) row shows.
+
+  XRacing            MSX1    TMS9918A   PSG
+  Bad Apple (MDPC)   MSX2+   V9958      PSG + YM2413, internal MSX-MUSIC
+  Dynamite Go! Go!   MSX2 JP V9938      PSG
+  YAZZIER            MSX1    TMS9918A   PSG
+  c0man              MSX1    TMS9918A   PSG
+
+5.2 Subtle — a B-Sound sheet (lilcu64), not the cartridge
+---------------------------------------------------------
+
+Author a score with these SynthVoice / WaNode values when the piece should
+sit near the chips without replacing them. The sheet uses the float voice in
+src/demo/lilcu64_synth.c. master_soft_clamp stays on, because that is the
+B-Sound convert. Pan is 0: the chips are mono and Rigour copies one sample
+to L and R. Rate is 44100. A trigger that would pass the 0.85 knee is too
+hot for this sheet; three PSG tones at the amps below sum near 0.66.
+
+  Voice            wave                         freq              amp    decay
+  PSG tone         PULSE (3), WA_SQUARE         the Rigour tone   0.22   0.18 s
+  PSG noise        NOISE (4), WA_NOISE          the Rigour noise  0.08   0.12 s
+  PSG envelope     the same pulse, gain events  held two clocks   —      —
+                   The 16 Rigour steps are the gain targets, scaled by
+                   0.22/255. The ramp between them is WA_LIN. The chip's
+                   log table is not re-derived here.
+  SCC channel      PULSE                        the Rigour SCC f  0.12   0.25 s
+                   Period below 9 sets amp to 0. The synth has no
+                   wavetable, so a custom SCC wave stays on the Rigour path.
+  OPLL melodic     FM_BELL (5)                  the block/f-num   0.16   0.40 s
+                   fm_ratio 1.0 (multiple 1). fm_index 0.35.
+                   The bell shim's own index is 1.8; that is brighter than
+                   this sheet. am_freq 3.7 Hz, am_depth 0.15.
+  OPLL rhythm      NOISE for hat, snare and cymbal. SINE for the tom.
+                   FM_BELL for the bass drum, fm_index 0.50.
+                   amp 0.10. decay 0.20 s. No extra 6 dB.
+  Y8950 pair       FM_BELL, fm_ratio 1.0, fm_index 0.45, amp 0.14,
+                   decay 0.35 s. ADPCM is omitted, as on the chip path.
+  turboR PCM       not a shim. Play the samples at 15700 Hz, resampled to
+                   44100, with no 48-step slew. 02H's duller highs are a
+                   Rigour behaviour.
+
+filter_coeff stays 0. freq_ramp_rate stays 0 except where the score itself
+glides. Do not feed this sheet from a live PSG register file, and do not
+mix its float frames into msx_audio_render.
+
+=======================================================================================
 END OF MSX-SOUND.txt
 =======================================================================================

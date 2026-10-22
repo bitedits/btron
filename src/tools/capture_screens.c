@@ -25,6 +25,7 @@
 #include <btron/pmc.h>
 #include <btron/tip.h>
 #include <btron/t_editor.h>
+#include <device/virtio.h>
 
 /* Forward declarations for Settings applet window openers */
 extern WND* open_control_panel_window(void);
@@ -63,6 +64,7 @@ extern WND* open_paint_window_with_file(const char *filepath);
 extern WND* open_paint_about_window(void);
 extern WND* open_msx_window_with_rom(const char *path);
 extern void msx_app_fast_forward(int frames);
+extern WND* open_kagee_window(void);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
 
@@ -146,6 +148,16 @@ ER get_tim(SYSTIME *p_time) {
 ID cre_tsk(const T_CTSK *pk_ctsk) { (void)pk_ctsk; return -1; }
 ER sta_tsk(ID tskid, VW exinf)    { (void)tskid; (void)exinf; return E_OK; }
 void dly_tsk(W dlytim)            { (void)dlytim; }
+
+/* Kagee will not create its window when this returns failure. The weak
+ * stub in lilcu64_synth.c returns -1. virtio_sound_is_ready stays that
+ * stub's false, so the MSX pump still drops its block and queues nothing. */
+int virtio_sound_open(uint32_t sample_rate, uint8_t channels)
+{
+    (void)sample_rate;
+    (void)channels;
+    return 0;
+}
 
 /* GTerm's `ps` walks the kernel's task table.  src/cores/core_init.c owns the walking and the
  * row formatting and is not in this link, so answer with the true thing -- "no table to walk"
@@ -293,9 +305,69 @@ static WND* open_isolated_chat_roster(void) {
     return open_chat_main_window(client);
 }
 
+/* Cartridges the B-MSX gallery shows. The first row also writes the bare
+ * application shot and the opened file menu. Frames are the title card or
+ * the first readable scene; one paint after fast-forward does not move them.
+ * Kagee is the separate 96x64 player. Paint decodes one video frame on every
+ * even tick, so 1601 paints lands on decoded frame 801. */
+static void capture_msx_windows(GDEV *dev) {
+    static const struct {
+        const char *rom;
+        const char *out_path;
+        int frames;
+    } s_msx_games[] = {
+        { "Lode Runner (1984)(Sony)[a].rom", "/tmp/btron_raw_screens/MSX_LodeRunner.raw", 500 },
+        { "Lode Runner II (Japan).rom", "/tmp/btron_raw_screens/MSX_LodeRunner2.raw", 550 },
+        { "BULLRUSH.ROM", "/tmp/btron_raw_screens/MSX_Bullrush.raw", 450 },
+        { "NEON_REVENANT-HC-Geo3D-256-v0.2.0.rom", "/tmp/btron_raw_screens/MSX_NeonRevenant.raw", 450 },
+        { "NIGHT_RAVEN_GEO3D.ROM", "/tmp/btron_raw_screens/MSX_NightRaven.raw", 450 },
+        { "xracing_v1.0.4.rom", "/tmp/btron_raw_screens/MSX_XRacing.raw", 800 },
+        { "Bad Apple (MDPC)[ASCII16].rom", "/tmp/btron_raw_screens/MSX_BadApple.raw", 800 },
+        { "Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM", "/tmp/btron_raw_screens/MSX_DynamiteGoGo.raw", 900 },
+        { "YAZZIER.ROM", "/tmp/btron_raw_screens/MSX_Yazzier.raw", 600 },
+        { "c0man.rom", "/tmp/btron_raw_screens/MSX_C0man.raw", 450 }
+    };
+
+    for (size_t gi = 0; gi < sizeof(s_msx_games)/sizeof(s_msx_games[0]); gi++) {
+        reset_isolation_state(dev);
+        WND *gw = open_msx_window_with_rom(s_msx_games[gi].rom);
+        if (gw) {
+            msx_app_fast_forward(s_msx_games[gi].frames);
+            inval_wnd(gw);
+            redraw_all_windows();
+            dump_window_rect(dev, gw, s_msx_games[gi].out_path);
+
+            if (gi == 0) {
+                dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Application.raw");
+                simulate_menu_click(gw, 0); /* ファイル(F): the ROM cascade */
+                redraw_all_windows();
+                dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Menu_Opened.raw");
+            }
+            cls_wnd(gw);
+        } else {
+            fprintf(stderr, "Error opening B-MSX cartridge: %s\n", s_msx_games[gi].rom);
+        }
+    }
+
+    reset_isolation_state(dev);
+    WND *kw = open_kagee_window();
+    if (kw) {
+        for (int i = 0; i < 1601; i++) {
+            inval_wnd(kw);
+            redraw_all_windows();
+        }
+        dump_window_rect(dev, kw, "/tmp/btron_raw_screens/Kagee_BadApple.raw");
+        cls_wnd(kw);
+    } else {
+        fprintf(stderr, "Error opening Kagee window\n");
+    }
+}
+
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    int msx_only = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] && strcmp(argv[i], "--msx") == 0) msx_only = 1;
+    }
 
     printf("==========================================================\n");
     printf(" B-System Automated Headless Window Screenshot Capturer\n");
@@ -313,6 +385,15 @@ int main(int argc, char **argv) {
         return 1;
     }
     init_wnd_mgr(dev);
+
+    if (msx_only) {
+        capture_msx_windows(dev);
+        cls_dev(dev);
+        printf("==========================================================\n");
+        printf(" Captured B-MSX cartridges and the Kagee window.\n");
+        printf("==========================================================\n");
+        return 0;
+    }
 
     /* 1. Settings Applet Windows (_Settings suffix) */
     WINDOW_TARGET settings_targets[] = {
@@ -669,40 +750,7 @@ int main(int argc, char **argv) {
             dump_window_rect(dev, w_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened.raw");
         }
 
-        /* B-MSX with cartridges in the slot. Fast-forward each game to its
-         * active title or 3D in-game scene, then redraw and capture. */
-        static const struct {
-            const char *rom;
-            const char *out_path;
-            int frames;
-        } s_msx_games[] = {
-            { "Lode Runner (1984)(Sony)[a].rom", "/tmp/btron_raw_screens/MSX_LodeRunner.raw", 500 },
-            { "Lode Runner II (Japan).rom", "/tmp/btron_raw_screens/MSX_LodeRunner2.raw", 550 },
-            { "BULLRUSH.ROM", "/tmp/btron_raw_screens/MSX_Bullrush.raw", 450 },
-            { "NEON_REVENANT-HC-Geo3D-256-v0.2.0.rom", "/tmp/btron_raw_screens/MSX_NeonRevenant.raw", 450 },
-            { "NIGHT_RAVEN_GEO3D.ROM", "/tmp/btron_raw_screens/MSX_NightRaven.raw", 450 }
-        };
-
-        for (size_t gi = 0; gi < sizeof(s_msx_games)/sizeof(s_msx_games[0]); gi++) {
-            reset_isolation_state(dev);
-            WND *gw = open_msx_window_with_rom(s_msx_games[gi].rom);
-            if (gw) {
-                msx_app_fast_forward(s_msx_games[gi].frames);
-                inval_wnd(gw);
-                redraw_all_windows();
-                dump_window_rect(dev, gw, s_msx_games[gi].out_path);
-
-                if (gi == 0) {
-                    /* Also save as generic B_MSX_Application.raw and capture opened menu */
-                    dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Application.raw");
-
-                    simulate_menu_click(gw, 0); /* ファイル(F): the ROM cascade */
-                    redraw_all_windows();
-                    dump_window_rect(dev, gw, "/tmp/btron_raw_screens/B_MSX_Menu_Opened.raw");
-                }
-                cls_wnd(gw);
-            }
-        }
+        capture_msx_windows(dev);
     }
 
     /* 4. Desktop BTRON System Menu Bar & Opened Main Menu Overlays */

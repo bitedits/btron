@@ -664,6 +664,45 @@
           block through the existing SDL2 <code>AUDIO_S16LSB</code> device. <code>$ make msx-audio</code>
           is the headless check; it links no SDL.
         </p>
+        <h4>Rigour and Subtle</h4>
+        <p>
+          Rigour is the setting this window plays. Subtle is a B-Sound score sheet for writing
+          beside the chips. Subtle is not linked into tronMSX: a cartridge does not call
+          <code>lilcu64_synth_render_frames</code>, and a shim does not write <code>0xA0</code>
+          or <code>0x7C</code>. The two paths share the 44.1 kHz stereo S16 contract and nothing else.
+          The same sheet is <code>doc/txt/MSX-SOUND.txt</code> section 5.
+        </p>
+        <table class="api-table">
+          <caption>Rigour, the chip path. <span class="basis basis-hw">Hardware</span> where the
+          clock and the register law are the chip's. <span class="basis basis-norm">Normative</span>
+          where the integer table is the core's, closed by <code>$ make msx-audio</code>.</caption>
+          <thead><tr><th>Voice</th><th>Setting</th></tr></thead>
+          <tbody>
+            <tr><td>Host</td><td>Tick 17, 17, 16 ms. Drop a block at 17,640 queued bytes. Speaker cap only in the pump, mean Q8, shift 9 (about 14 Hz). Mix is an <code>int32</code> sum saturated to int16. No <code>master_soft_clamp</code>.</td></tr>
+            <tr><td>PSG</td><td>Clock 1,789,772 Hz. Tone <code>f = 1789772 / (16 · TP)</code>. Noise the same with NP. Envelope cycle <code>1789772 / (256 · EP)</code>. Levels 0, 51, 57, 64, 71, 80, 90, 101, 113, 127, 143, 160, 180, 202, 227, 255, then <code>&lt;&lt; 5</code>. Step 15 is 8160. Shape <code>0x0B</code> holds full, <code>0x0F</code> holds silence. Mono, copied to L and R.</td></tr>
+            <tr><td>SCC</td><td><code>f = 3579545 / (32 · period)</code>. Period below 9 is silent. Five signed wavetables.</td></tr>
+            <tr><td>YM2413</td><td>48 dB across 128 steps of 0.375 dB. Volume unit 3 dB, total level 0.75 dB. Vibrato 6.1 Hz, about 14 cent. Tremolo 3.7 Hz, 4.8 dB. Rate key scale on. Level key scale off. Rhythm voices are emitted twice, so percussion is 6 dB above one melodic channel. The fifteen melodic patches stay original sketches.</td></tr>
+            <tr><td>Y8950</td><td>Nine 2-operator channels. ADPCM-B is stored and not rendered.</td></tr>
+            <tr><td>turboR PCM</td><td>15,700 Hz. <code>0xA5 = 03H</code> latches on the next tick. <code>02H</code> slews at most 48 steps per tick. Level <code>(sample − 128) &lt;&lt; 6</code>. <code>0xFF</code> in 03H is +8128.</td></tr>
+          </tbody>
+        </table>
+        <table class="api-table">
+          <caption>Subtle, a lilcu64 score sheet. It does not replace Rigour.
+          <span class="basis basis-norm">Normative</span> for a score that wants to sit near the chips.
+          Pan is 0. <code>master_soft_clamp</code> stays, because that is the B-Sound convert.
+          Three PSG tones at these amplitudes sum near 0.66, under the 0.85 knee.</caption>
+          <thead><tr><th>Voice</th><th>wave</th><th>amp</th><th>decay</th><th>The rest of the setting</th></tr></thead>
+          <tbody>
+            <tr><td>PSG tone</td><td><code>PULSE</code> / <code>WA_SQUARE</code></td><td>0.22</td><td>0.18 s</td><td>Frequency is the Rigour tone. <code>filter_coeff</code> 0.</td></tr>
+            <tr><td>PSG noise</td><td><code>NOISE</code></td><td>0.08</td><td>0.12 s</td><td>Frequency is the Rigour noise rate.</td></tr>
+            <tr><td>PSG envelope</td><td>the same pulse</td><td>the 16 steps · 0.22/255</td><td>held two clocks</td><td><code>WA_LIN</code> between the Rigour levels. The log table is not re-derived.</td></tr>
+            <tr><td>SCC channel</td><td><code>PULSE</code></td><td>0.12</td><td>0.25 s</td><td>Period below 9 sets amp to 0. A custom wavetable stays on Rigour; this synth has none.</td></tr>
+            <tr><td>OPLL melodic</td><td><code>FM_BELL</code></td><td>0.16</td><td>0.40 s</td><td><code>fm_ratio</code> 1.0, <code>fm_index</code> 0.35. Tremolo 3.7 Hz, depth 0.15. The bell shim's own index of 1.8 is brighter than this sheet.</td></tr>
+            <tr><td>OPLL rhythm</td><td>noise, sine, bell</td><td>0.10</td><td>0.20 s</td><td>Noise for hat, snare and cymbal. Sine for the tom. Bell, index 0.50, for the bass drum. No extra 6 dB.</td></tr>
+            <tr><td>Y8950 pair</td><td><code>FM_BELL</code></td><td>0.14</td><td>0.35 s</td><td><code>fm_ratio</code> 1.0, <code>fm_index</code> 0.45. ADPCM omitted.</td></tr>
+            <tr><td>turboR PCM</td><td>a sample buffer</td><td>the sample</td><td>—</td><td>15,700 Hz resampled to 44,100. No 48-step slew. That slew is Rigour.</td></tr>
+          </tbody>
+        </table>
         <table class="api-table">
           <caption>The five sources into the shared block. Address maps are
           <span class="basis basis-hw">Hardware</span>. The integer level law and the deferred voices are

@@ -3337,6 +3337,7 @@ clean:
 CAPTURE_SCREENS_BIN = ./.build/capture_screens
 CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/emulators/msx/msx_app.c \
+                       src/apps/kagee.c \
                        $(MSX_SRCS) \
                        src/window/dnd.c \
                        src/graphics/image_decode.c \

@@ -77,6 +77,27 @@
         <img src="../img/screens/B_MSX_Menu_Opened.png" alt="B-MSX カスケードメニュー展開 (ROM Cascade Menu Opened)">
         <p>B-MSX ファイルメニュー展開画面 (ROM カセット・カスケードメニューより動的カートリッジ装填・切り替え)</p>
       </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_XRacing.png" alt="XRacing (MSX1, checkerboard logo)">
+        <p>B-MSX の窓から抽出した XRacing。MSX1 / TMS9918A / PSG。チェッカーの上にロゴ。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_BadApple.png" alt="Bad Apple MSX2+ silhouette">
+        <p>B-MSX の窓から抽出した Bad Apple (MDPC)。MSX2+ / V9958。PSG と YM2413。りんごを持つシルエット。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_DynamiteGoGo.png" alt="Dynamite Go! Go! title">
+        <p>B-MSX の窓から抽出した Dynamite Go! Go!。MSX2 JP / V9938 / PSG。タイトルの DYNAMITE GO! GO!。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_Yazzier.png" alt="YAZZIER title card">
+        <p>B-MSX の窓から抽出した YAZZIER。MSX1 / TMS9918A / PSG。虹とレンガのタイトル。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/MSX_C0man.png" alt="c0man high scores">
+        <p>B-MSX の窓から抽出した c0man。MSX1 / TMS9918A / PSG。ハイスコアと PRESS SPACE TO START。</p>
+      </div>
+      <p>Kagee の Bad Apple はカートリッジではない。<code>capture_screens --msx</code> は <code>assets/kagee/BADAPPLE.vid</code> と <code>BADAPPLE.aud</code> があるとき、その窓も同じ手順で書く。このチェックアウトにはその 2 ファイルが無い。</p>
     </div>
 
     <!-- 概要 -->
@@ -134,6 +155,36 @@
             <td>V9938 パレット最適化<br>リアルタイム 3D フライトシミュレーション</td>
             <td>高速マトリクス幾何学変換と陰面消去パイプライン。夜間フライトコックピット計器と立体地形ポリゴンのリアルタイム描画。</td>
           </tr>
+          <tr>
+            <td><b>6) XRacing</b><br>(v1.0.4)</td>
+            <td>48 KiB、先頭から連続<br>(<code>AB</code> は <code>0x4000</code>)</td>
+            <td>MSX1 / TMS9918A<br>PSG</td>
+            <td>48 KiB の素のイメージを <code>0x0000</code> から載せる。チェッカーの上にロゴが出る。</td>
+          </tr>
+          <tr>
+            <td><b>7) Bad Apple</b><br>(MDPC, ASCII16)</td>
+            <td>2048 KiB ASCII16<br>(ヘッダは <code>0x4000</code>)</td>
+            <td>MSX2+ / V9958<br>PSG + YM2413</td>
+            <td>ファイル名が MSX2+ C-BIOS を選ぶ。内蔵 MSX-MUSIC。画面はりんごを持つシルエット。</td>
+          </tr>
+          <tr>
+            <td><b>8) Dynamite Go! Go!</b><br>(Rutubo Gameworks, 2021)</td>
+            <td>32 KiB<br>(ヘッダは <code>0x4000</code>)</td>
+            <td>MSX2 JP / V9938<br>PSG</td>
+            <td>サイズだけなら MSX1 になる。ファイル名の Dynamite が MSX2 JP を選ぶ。タイトルは DYNAMITE GO! GO!。</td>
+          </tr>
+          <tr>
+            <td><b>9) YAZZIER</b></td>
+            <td>32 KiB<br>(ヘッダは <code>0x4000</code>)</td>
+            <td>MSX1 / TMS9918A<br>PSG</td>
+            <td>虹とレンガのタイトルカード。</td>
+          </tr>
+          <tr>
+            <td><b>10) c0man</b></td>
+            <td>16 KiB<br>(ヘッダは <code>0x4000</code>)</td>
+            <td>MSX1 / TMS9918A<br>PSG</td>
+            <td>緑のハイスコア。PRESS SPACE TO START。</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -160,8 +211,8 @@
           </tr>
           <tr>
             <td><b>エミュレータ (Emulator)</b></td>
-            <td>一時停止 (Pause, Ctrl+P)<br>再開 (Resume, Ctrl+P)<br><b>早送り (Fast-Forward, Tab)</b></td>
-            <td><code>msx_app_fast_forward()</code> による高速フレームスキップ実行。C-BIOS の初期化・ロゴ画面を高速スキップしてタイトル画面やゲームプレイへ瞬時到達。</td>
+            <td>一時停止 (Pause, Ctrl+P)<br>再開 (Resume, Ctrl+P)<br><b>早送り (Fast-Forward, Tab)</b><br>機械 (running machine)</td>
+            <td><code>msx_app_fast_forward()</code> による高速フレームスキップ。最終行は状態表示で、<code>msx_init</code> が選んだ機械を出す。空の窓は turboR / R800。XRacing、YAZZIER、c0man は MSX1 / TMS9918A。Bad Apple は MSX2+ / V9958。Dynamite Go! Go! は MSX2 JP / V9938。</td>
           </tr>
           <tr>
             <td><b>表示 (View)</b></td>
@@ -209,8 +260,8 @@
           </tr>
           <tr>
             <td><b>音源システム</b></td>
-            <td>General Instrument AY-3-8910 (PSG)<br>Yamaha YM2149</td>
-            <td>3ch 矩形波発振器、プログラマブルホワイトノイズ発生器、16段階音量包絡線（エンベロープジェネレータ）、VirtIO-Sound / DMA 出力。</td>
+            <td>AY-3-8910 / YM2149 (PSG)<br>Konami SCC<br>Yamaha YM2413 (MSX-MUSIC)<br>Y8950 (MSX-AUDIO FM)<br>turboR PCM</td>
+            <td>再生中の設定は Rigour。B-Sound の譜面用設定は Subtle。両者は 44.1 kHz ステレオ S16 だけを共有し、シンセはチップへ書き込まない。</td>
           </tr>
           <tr>
             <td><b>BIOS</b></td>
@@ -233,11 +284,73 @@
         <span style="font-size:0.9em; opacity:0.85;">"Native BTRON window manager event dispatch, multi-window compositing, and headless screenshot automation."</span>
       </p>
       <ul>
-        <li><b>早送り (Fast-Forward) アーキテクチャ:</b> <code>msx_app_fast_forward(int frames)</code> により、描画遅延を伴うことなく CPU 命令サイクルおよび VDP レジスタ更新のみを任意のフレーム数（300〜550 フレーム）高速進捗。C-BIOS 初期化待機をスキップし、瞬時にタイトル画面・ゲーム本編に到達します。</li>
+        <li><b>早送り (Fast-Forward) アーキテクチャ:</b> <code>msx_app_fast_forward(int frames)</code> により、描画遅延を伴うことなく CPU 命令サイクルおよび VDP レジスタ更新のみを任意のフレーム数（450〜900 フレーム）高速進捗。C-BIOS 初期化待機をスキップし、瞬時にタイトル画面・ゲーム本編に到達します。</li>
         <li><b>独立 μITRON タスク駆動:</b> <code>msx_task</code> がバックグラウンドタスクとして独立稼働し、ウィンドウメッセージキューをブロックすることなく 60fps でフレームを更新。</li>
         <li><b>ゼロコピー描画:</b> VDP の 256×212 ピクセルバッファから B-System の GDEV フレームバッファへダイレクトスケーリング転送。</li>
         <li><b>自動テスト＆スクリーンショット自動抽出:</b> <code>src/tools/capture_screens.c</code> により、ヘッドレス環境で実機描画パイプラインを起動し、カートリッジ画面およびメニュー展開状態をピクセルパーフェクトに PNG 抽出。</li>
       </ul>
+    </div>
+
+    <div class="section">
+      <h2>5. 音源の二つの設定 — Rigour と Subtle (Two Synthesizer Settings)</h2>
+      <p>
+        カートリッジが鳴らしているのは Rigour です。Subtle は、同じ音色の近くに譜面を書くための B-Sound 設定で、tronMSX にはリンクされません。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Rigour is the chip path the window plays. Subtle is a lilcu64 score sheet and does not write the PSG or the OPLL."</span>
+      </p>
+      <p>詳細な数値は <code>doc/txt/MSX-SOUND.txt</code> 第5節、および B-Media の MSX 仕様 2.6 と同じです。</p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>声部</th>
+            <th>Rigour（再生中のチップ）</th>
+            <th>Subtle（B-Sound 譜面。再生パスではない）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>送り</b></td>
+            <td>17 / 17 / 16 ms。キュー 17,640 バイトで 1 ブロックを落とす。スピーカのコンデンサはポンプ内だけ（約 14 Hz）。整数ミックス。ソフトニーは使わない。</td>
+            <td>44,100 Hz。<code>master_soft_clamp</code> は B-Sound 側に残す。パンは 0。</td>
+          </tr>
+          <tr>
+            <td><b>PSG</b></td>
+            <td>1,789,772 Hz。<code>f = 1789772 / (16·TP)</code>。16 段階は 0, 51, 57, 64, 71, 80, 90, 101, 113, 127, 143, 160, 180, 202, 227, 255 を左へ 5。15 は 8160。形状 0x0B は最大を保持、0x0F は無音を保持。</td>
+            <td>矩形 <code>PULSE</code>、振幅 0.22、減衰 0.18 秒。ノイズは振幅 0.08、減衰 0.12 秒。エンベロープは同じ 16 段階を 0.22/255 に縮め、<code>WA_LIN</code> でつなぐ。</td>
+          </tr>
+          <tr>
+            <td><b>SCC</b></td>
+            <td><code>f = 3579545 / (32·period)</code>。周期 9 未満は無音。5 本の波形テーブル。</td>
+            <td>矩形、振幅 0.12、減衰 0.25 秒。波形テーブルは Rigour に残す。このシンセはテーブルを持たない。</td>
+          </tr>
+          <tr>
+            <td><b>YM2413</b></td>
+            <td>128 段 × 0.375 dB。ビブラート 6.1 Hz（約 14 cent）。トレモロ 3.7 Hz、4.8 dB。リズムは +6 dB。メロディ 15 音色はオリジナルのスケッチ。</td>
+            <td><code>FM_BELL</code>、<code>fm_ratio</code> 1.0、<code>fm_index</code> 0.35、振幅 0.16、減衰 0.40 秒。リズムは振幅 0.10 で、+6 dB は足さない。</td>
+          </tr>
+          <tr>
+            <td><b>Y8950</b></td>
+            <td>2 オペレータ 9 チャンネル。ADPCM-B は保持するだけで鳴らさない。</td>
+            <td><code>FM_BELL</code>、指数 0.45、振幅 0.14、減衰 0.35 秒。ADPCM は書かない。</td>
+          </tr>
+          <tr>
+            <td><b>turboR PCM</b></td>
+            <td>15,700 Hz。<code>03H</code> は次の刻みで出す。<code>02H</code> は即時で、1 刻み最大 48 段。<code>0xFF</code> の 03H は +8128。</td>
+            <td>15,700 Hz のサンプルを 44,100 Hz へ詰める。48 段のスルーは Rigour のまま。</td>
+          </tr>
+        </tbody>
+      </table>
+      <table class="market-table">
+        <thead>
+          <tr><th>タイトル</th><th>Rigour で起動する機械</th><th>鳴るチップ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>XRacing</td><td>MSX1 / TMS9918A</td><td>PSG</td></tr>
+          <tr><td>Bad Apple (MDPC)</td><td>MSX2+ / V9958</td><td>PSG + YM2413（内蔵 MSX-MUSIC）</td></tr>
+          <tr><td>Dynamite Go! Go!</td><td>MSX2 JP / V9938</td><td>PSG</td></tr>
+          <tr><td>YAZZIER</td><td>MSX1 / TMS9918A</td><td>PSG</td></tr>
+          <tr><td>c0man</td><td>MSX1 / TMS9918A</td><td>PSG</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
   <footer class="app-footer">

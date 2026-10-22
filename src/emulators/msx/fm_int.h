@@ -2,10 +2,16 @@
  * fm_int.h — integer helpers shared by the YM2413 and Y8950 renderers.
  *
  * Include after msx_int.h. No float and no libm on the machine path (D4):
- * the quarter sine is a static table, and the phase increment is the
- * published Yamaha relation
+ * the quarter sine and the log-amplitude table are static constants, and
+ * the phase increment is the published Yamaha relation
  *   f = fnum * multi * clock / (72 * 2^(19-block))
  * rearranged so a 32-bit phase (2^32 = one cycle) advances at MSX_PCM_HZ.
+ *
+ * The DAC is logarithmic: 48 dB across 128 steps, 0.375 dB each (YM2413
+ * application manual). Callers still pass an attenuation of 0..511.
+ * fm_exp[n] is round(32767 * 10^(-0.375*n/20)), so index (eg+tl)>>2 keeps
+ * the existing shifts: a volume unit is <<5 (8 steps, 3 dB) and a total-level
+ * unit is <<3 (2 steps, 0.75 dB). Attenuation at or above 511 is silence.
  */
 
 #ifndef _BTRON_EMULATOR_MSX_FM_INT_H_
@@ -55,6 +61,26 @@ static const uint8_t fm_mul_x2[16] = {
     1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30
 };
 
+/* 0.375 dB per entry. Entry 8 is one volume step (−3 dB, 23197/32767). */
+static const int16_t fm_exp[128] = {
+    32767, 31382, 30056, 28786, 27570, 26405, 25289, 24221,
+    23197, 22217, 21278, 20379, 19518, 18693, 17903, 17147,
+    16422, 15728, 15064, 14427, 13818, 13234, 12675, 12139,
+    11626, 11135, 10664, 10214,  9782,  9369,  8973,  8594,
+     8231,  7883,  7550,  7231,  6925,  6633,  6352,  6084,
+     5827,  5581,  5345,  5119,  4903,  4696,  4497,  4307,
+     4125,  3951,  3784,  3624,  3471,  3324,  3184,  3049,
+     2920,  2797,  2679,  2566,  2457,  2353,  2254,  2159,
+     2067,  1980,  1896,  1816,  1740,  1666,  1596,  1528,
+     1464,  1402,  1343,  1286,  1232,  1179,  1130,  1082,
+     1036,   992,   950,   910,   872,   835,   800,   766,
+      734,   703,   673,   644,   617,   591,   566,   542,
+      519,   497,   476,   456,   437,   418,   401,   384,
+      368,   352,   337,   323,   309,   296,   284,   272,
+      260,   249,   239,   229,   219,   210,   201,   192,
+      184,   176,   169,   162,   155,   148,   142,   136
+};
+
 typedef struct FmOp {
     uint32_t phase;
     uint16_t eg;       /* 0 = full amplitude, 511 = silent */
@@ -88,8 +114,8 @@ static inline uint32_t fm_phase_inc(uint32_t fnum, uint32_t block, uint32_t mul_
 static inline int32_t fm_amp(int32_t s, uint16_t eg, uint16_t tl)
 {
     uint16_t att = (uint16_t)(eg + tl);
-    if (att > 511u) att = 511u;
-    return (s * (int32_t)(511u - att)) >> 9;
+    if (att >= 511u) return 0;
+    return (s * (int32_t)fm_exp[att >> 2]) >> 15;
 }
 
 /* Rising key restarts the operator. AR 15 reaches full amplitude immediately. */
@@ -121,7 +147,9 @@ static inline void fm_op_env(FmOp *o, uint8_t ar, uint8_t dr, uint8_t sl,
     else if (o->stage == 1u) rate = dr;
     else rate = rr;
     if (rate == 0u) return;
-    period = (rate >= 15u) ? 1u : (uint16_t)(1u << (14u - rate));
+    /* One attenuation unit per tick is 0.375 dB. Rate 12 and above
+     * move every sample; rate 1 waits 2048 samples. */
+    period = (rate >= 12u) ? 1u : (uint16_t)(1u << (12u - rate));
     if (++o->eg_ct < period) return;
     o->eg_ct = 0u;
     if (o->stage == 0u) {
@@ -130,9 +158,7 @@ static inline void fm_op_env(FmOp *o, uint8_t ar, uint8_t dr, uint8_t sl,
         else o->eg = (uint16_t)(o->eg - step);
         return;
     }
-    step = (uint16_t)(((511u - o->eg) >> 5) + 1u);
-    if ((uint16_t)(o->eg + step) > 511u) o->eg = 511u;
-    else o->eg = (uint16_t)(o->eg + step);
+    if (o->eg < 511u) o->eg = (uint16_t)(o->eg + 1u);
     if (o->stage == 1u && o->eg >= sl_level) {
         o->eg = sl_level;
         o->stage = (uint8_t)(percussive ? 3u : 2u);

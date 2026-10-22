@@ -70,11 +70,18 @@ One object. Nine melodic channels. Register 0x0E bit 5 replaces channels
 6–8 with bass drum, snare, tom, top cymbal and hi-hat. Bits 4–0 are their
 keys. Volumes are 0x36 (bass drum), 0x37 (hi-hat / snare) and 0x38
 (tom / top cymbal), 0 loudest. A key bit that falls and rises before the
-next mix still attacks. The rhythm rows are original percussive sketches,
-not a Yamaha rhythm ROM. The fifteen built-in
-patches are original parameter sketches in the published instrument order.
-They are not a Yamaha instrument ROM image. Block 4, f-number 288, multiple 1
-(key register 0x19) produces 14 signed zero-crossings per 735 frames.
+next mix still attacks. The rhythm rows are the measured instrument bytes
+(bass drum 01 01 18 0F DF F8 6A 6D, and one operator row each for the other
+four). Hi-hat, snare and top cymbal use the measured phase-bit mix and a
+23-bit noise generator; the tom is a sine. The chip emits each rhythm voice
+twice, so percussion is 6 dB above a melodic channel. Amplitude follows the
+manual: 48 dB across 128 steps of 0.375 dB. One volume unit is 3 dB and one
+total-level unit is 0.75 dB. Decay and release move one step per tick. The
+fifteen built-in patches are original parameter sketches in the published
+instrument order. They are not a Yamaha instrument ROM image. Key scale,
+vibrato and amplitude modulation are not applied. Block 4, f-number 288,
+multiple 1 (key register 0x19) produces 14 signed zero-crossings per 735
+frames. On that sine, volume 8 is 24 dB under volume 0.
 
 Y8950 MSX-AUDIO (y8950.c) — 0xC0 address/status, 0xC1 data, 0xC2/0xC3 ADPCM.
 Nine 2-operator channels on fm_int.h. Key is bit 5 of 0xB0+ch. Connection is
@@ -95,7 +102,8 @@ turboR calls t9769c_advance, so other machines contribute zeros.
 =======================================================================================
 
 - No GPL sound core (emu2413, Nuked, MAME, fMSX Fmopl, blueMSX YM2413).
-- No Yamaha instrument ROM image.
+- No Yamaha instrument ROM image. The fifteen melodic patches stay sketches.
+- Key scale, vibrato and amplitude modulation are not applied.
 - Y8950 ADPCM-B stays a follow-up on this same mixer.
 - SCC deformation is latched, not applied.
 - lilcu64 Sound Shims are not driven from chip register writes.
@@ -112,6 +120,10 @@ would otherwise pick turboR. The file-hunter page leaves the machine blank,
 and WebMSX then selects MSX2+ with MSX-MUSIC. MGSDRV starts the YM2413
 track, including the opening, only after it reads APRLOPLL at $4018.
 cbios_music.rom is that signature; no Panasonic or Yamaha BIOS is loaded.
+A headless pass of that image first exceeds a sample of 100 at frame 306,
+and that block is bipolar, which is the FM rhythm. Frame 900 is silent.
+Frame 1200 is the unipolar PSG level. That pass is not a speaker listen.
+The melodic lead still uses the original instrument sketches.
 Dynamite Go! Go!
 is assets/msx/Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM, the
 32 KiB cartridge the same site loads as games/DynamiteGoGo.zip on an MSX2

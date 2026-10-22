@@ -14,8 +14,12 @@
  *
  * The fifteen built-in patches are clean-room parameter sketches in the
  * published instrument order. They are not a Yamaha instrument ROM image.
- * Phase and envelope come from fm_int.h. A full carrier (volume 0, no
- * modulator) is about ±8k and sums with the PSG under the int16 saturate.
+ * Rhythm instrument bytes and the hi-hat / snare / top-cymbal phase mix are
+ * the published hardware measurements (register bytes and phase-bit
+ * formulas), reimplemented here. Phase, log amplitude and envelope come
+ * from fm_int.h. A full carrier (volume 0) is shifted down 2 so one melodic
+ * channel sits near a PSG channel. Percussion is shifted down 1: the chip
+ * emits each rhythm voice twice (+6 dB).
  */
 
 #include "msx_int.h"
@@ -90,12 +94,14 @@ void opll_data(uint8_t value)
     s_regs[s_addr] = value;
 }
 
-/* Bass drum is a 2-operator hit on channel 6. Hi-hat and snare share
- * channel 7, tom and top cymbal share channel 8. The rows are original
- * percussive sketches (EG-TYPE clear), not Yamaha rhythm-ROM bytes. */
-static const uint8_t s_bd[8] = {
-    0x00, 0x01, 0x04, 0x00, 0xF8, 0xF7, 0x45, 0x56
-};
+/* Measured rhythm rows. Don't-care bytes are 0. Bass drum is the 2-operator
+ * instrument on channel 6. Hi-hat (mod7) and snare (car7) share channel 7.
+ * Tom (mod8) and top cymbal (car8) share channel 8. KSL on these rows is 0. */
+static const uint8_t s_bd[8]  = { 0x01, 0x01, 0x18, 0x0F, 0xDF, 0xF8, 0x6A, 0x6D };
+static const uint8_t s_hh[8]  = { 0x01, 0x00, 0x00, 0x00, 0xC8, 0x00, 0xA7, 0x00 };
+static const uint8_t s_sd[8]  = { 0x00, 0x01, 0x00, 0x00, 0x00, 0xD8, 0x00, 0x68 };
+static const uint8_t s_tom[8] = { 0x05, 0x00, 0x00, 0x00, 0xF8, 0x00, 0x59, 0x00 };
+static const uint8_t s_cy[8]  = { 0x00, 0x01, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x55 };
 
 static uint16_t ch_fnum(int ch, uint8_t *block)
 {
@@ -105,28 +111,75 @@ static uint16_t ch_fnum(int ch, uint8_t *block)
     return fnum;
 }
 
-static int32_t hit(FmOp *o, int key, uint32_t inc, int noise, uint16_t tl)
+/* Half-sine (DM on the modulator, DC on the carrier): the negative half
+ * of the cycle is zero. Bit 31 of the 32-bit phase is that half. */
+static int32_t fm_wave(uint32_t phase, int half)
 {
-    int32_t s;
-    uint32_t spins;
-    fm_op_key(o, key, 15u);
-    fm_op_env(o, 15u, noise ? 9u : 6u, noise ? 1u : 4u, 7u, 1);
-    if (noise) {
-        spins = 1u + (inc >> 23);
-        if (spins > 6u) spins = 6u;
-        s = 0;
-        while (spins--) {
-            uint32_t fb = (s_noise ^ (s_noise >> 2) ^ (s_noise >> 3) ^
-                           (s_noise >> 5)) & 1u;
-            s_noise = (s_noise >> 1) | (fb << 16);
-            if (s_noise == 0u) s_noise = 1u;
-            s = fb ? 12000 : -12000;
-        }
-    } else {
-        s = fm_sin(o->phase);
-    }
-    o->phase += inc;
-    return fm_amp(s, o->eg, tl) >> 2;
+    if (half && (phase & 0x80000000u)) return 0;
+    return fm_sin(phase);
+}
+
+/* Feedback shift fb+6 of a full-scale sample stays inside int32 for fb ≤ 7. */
+static uint32_t fm_feedback(uint32_t phase, int32_t prev, unsigned fb)
+{
+    unsigned sh;
+    if (!fb) return phase;
+    sh = fb + 6u;
+    return phase + (uint32_t)(prev * (int32_t)(1u << sh));
+}
+
+static void op_tick(FmOp *o, int key, const uint8_t *pat, int modulator)
+{
+    uint8_t ar, dr, sl, rr, row;
+    row = modulator ? pat[0] : pat[1];
+    ar = (uint8_t)((modulator ? pat[4] : pat[5]) >> 4);
+    dr = (uint8_t)((modulator ? pat[4] : pat[5]) & 15u);
+    sl = (uint8_t)((modulator ? pat[6] : pat[7]) >> 4);
+    rr = (uint8_t)((modulator ? pat[6] : pat[7]) & 15u);
+    fm_op_key(o, key, ar);
+    fm_op_env(o, ar, dr, sl, rr, (row & 0x20u) ? 0 : 1);
+}
+
+/* 10-bit phase bit n. fm_sin uses phase>>22 as that index. */
+static unsigned phase_bit(uint32_t phase, unsigned n)
+{
+    return (phase >> (22u + n)) & 1u;
+}
+
+/* Shared by hi-hat and top cymbal. Bits are from mod7 (HH) and car8 (CY). */
+static unsigned rhythm_bit(void)
+{
+    uint32_t m7 = s_op[14].phase;
+    uint32_t c8 = s_op[17].phase;
+    unsigned c85 = phase_bit(c8, 5);
+    unsigned c83 = phase_bit(c8, 3);
+    unsigned m77 = phase_bit(m7, 7);
+    unsigned m72 = phase_bit(m7, 2);
+    unsigned m73 = phase_bit(m7, 3);
+    return (c85 ^ c83) | (m77 ^ m72) | (c85 ^ m73);
+}
+
+/* x^23 + x^9 + 1, one step. The waveform reads bit 0 before the step.
+ * Hi-hat and snare are three operator slots apart, so the snare reads the
+ * bit three steps later. Eighteen steps close one chip sample. */
+static void noise_step(void)
+{
+    uint32_t bit = (s_noise ^ (s_noise >> 14)) & 1u;
+    s_noise = (bit << 22) | (s_noise >> 1);
+}
+
+static void noise_hats(int *hh, int *sd)
+{
+    int i;
+    *hh = (int)(s_noise & 1u);
+    for (i = 0; i < 3; i++) noise_step();
+    *sd = (int)(s_noise & 1u);
+    for (i = 0; i < 15; i++) noise_step();
+}
+
+static int32_t sin10(unsigned pg)
+{
+    return fm_sin((uint32_t)pg << 22);
 }
 
 static int32_t bass_drum(int key, uint16_t vol)
@@ -136,21 +189,19 @@ static int32_t bass_drum(int key, uint16_t vol)
     uint16_t fnum = ch_fnum(6, &block);
     uint32_t inc_m = fm_phase_inc(fnum, block, fm_mul_x2[pat[0] & 15u]);
     uint32_t inc_c = fm_phase_inc(fnum, block, fm_mul_x2[pat[1] & 15u]);
-    int32_t mod;
-    int32_t car;
-    fm_op_key(&s_op[12], key, (uint8_t)(pat[4] >> 4));
-    fm_op_key(&s_op[13], key, (uint8_t)(pat[5] >> 4));
-    fm_op_env(&s_op[12], (uint8_t)(pat[4] >> 4), (uint8_t)(pat[4] & 15u),
-              (uint8_t)(pat[6] >> 4), (uint8_t)(pat[6] & 15u), 1);
-    fm_op_env(&s_op[13], (uint8_t)(pat[5] >> 4), (uint8_t)(pat[5] & 15u),
-              (uint8_t)(pat[7] >> 4), (uint8_t)(pat[7] & 15u), 1);
-    mod = fm_amp(fm_sin(s_op[12].phase), s_op[12].eg,
+    uint32_t mp;
+    int32_t mod, car;
+    op_tick(&s_op[12], key, pat, 1);
+    op_tick(&s_op[13], key, pat, 0);
+    mp = fm_feedback(s_op[12].phase, s_fb[6], (unsigned)(pat[3] & 7u));
+    mod = fm_amp(fm_wave(mp, pat[3] & 0x08), s_op[12].eg,
                  (uint16_t)((pat[2] & 0x3Fu) << 3));
-    car = fm_amp(fm_sin(s_op[13].phase + (((uint32_t)mod) << 14)),
+    s_fb[6] = mod;
+    car = fm_amp(fm_wave(s_op[13].phase + ((uint32_t)mod << 14), pat[3] & 0x10),
                  s_op[13].eg, (uint16_t)(vol << 5));
     s_op[12].phase += inc_m;
     s_op[13].phase += inc_c;
-    return car >> 2;
+    return car >> 1;
 }
 
 static int32_t rhythm_sample(void)
@@ -159,18 +210,45 @@ static int32_t rhythm_sample(void)
     uint8_t block7, block8;
     uint16_t f7 = ch_fnum(7, &block7);
     uint16_t f8 = ch_fnum(8, &block8);
-    uint32_t inc7 = fm_phase_inc(f7, block7, 8u);
-    uint32_t inc8 = fm_phase_inc(f8, block8, 4u);
+    unsigned rm, pg, b8;
+    int hh_n, sd_n;
     int32_t sum = 0;
-    sum += bass_drum((rhy & 0x10u) != 0u, (uint16_t)(s_regs[0x36] & 0x0Fu));
-    sum += hit(&s_op[14], (rhy & 0x01u) != 0u, inc7 << 1, 1,
-               (uint16_t)((s_regs[0x37] >> 4) << 5));          /* hi-hat */
-    sum += hit(&s_op[15], (rhy & 0x08u) != 0u, inc7, 1,
-               (uint16_t)((s_regs[0x37] & 0x0Fu) << 5));       /* snare */
-    sum += hit(&s_op[16], (rhy & 0x04u) != 0u, inc8, 0,
-               (uint16_t)((s_regs[0x38] >> 4) << 5));          /* tom */
-    sum += hit(&s_op[17], (rhy & 0x02u) != 0u, inc8 << 2, 1,
-               (uint16_t)((s_regs[0x38] & 0x0Fu) << 5));       /* top cymbal */
+    int32_t s;
+
+    noise_hats(&hh_n, &sd_n);
+    rm = rhythm_bit();
+
+    op_tick(&s_op[14], (rhy & 0x01u) != 0, s_hh, 1);
+    op_tick(&s_op[15], (rhy & 0x08u) != 0, s_sd, 0);
+    op_tick(&s_op[16], (rhy & 0x04u) != 0, s_tom, 1);
+    op_tick(&s_op[17], (rhy & 0x02u) != 0, s_cy, 0);
+
+    sum += bass_drum((rhy & 0x10u) != 0, (uint16_t)(s_regs[0x36] & 0x0Fu));
+
+    /* Hi-hat: sine of a phase built from rm_bit and the noise bit. */
+    pg = (rm << 9) | ((rm ^ (unsigned)hh_n) ? 0xD0u : 0x34u);
+    s = fm_amp(sin10(pg), s_op[14].eg, (uint16_t)((s_regs[0x37] >> 4) << 5));
+    sum += s >> 1;
+
+    /* Snare: sign follows hi-hat phase bit 8. Full scale when noise differs. */
+    b8 = phase_bit(s_op[14].phase, 8);
+    pg = (b8 << 9) | ((b8 ^ (unsigned)sd_n) << 8);
+    s = fm_amp(sin10(pg), s_op[15].eg, (uint16_t)((s_regs[0x37] & 0x0Fu) << 5));
+    sum += s >> 1;
+
+    s = fm_amp(fm_sin(s_op[16].phase), s_op[16].eg,
+               (uint16_t)((s_regs[0x38] >> 4) << 5));
+    sum += s >> 1;
+
+    /* Top cymbal: rm_bit selects +full or −full through the sine peak. */
+    pg = (rm << 9) | 0x100u;
+    s = fm_amp(sin10(pg), s_op[17].eg, (uint16_t)((s_regs[0x38] & 0x0Fu) << 5));
+    sum += s >> 1;
+
+    s_op[14].phase += fm_phase_inc(f7, block7, fm_mul_x2[s_hh[0] & 15u]);
+    s_op[15].phase += fm_phase_inc(f7, block7, fm_mul_x2[s_sd[1] & 15u]);
+    s_op[16].phase += fm_phase_inc(f8, block8, fm_mul_x2[s_tom[0] & 15u]);
+    s_op[17].phase += fm_phase_inc(f8, block8, fm_mul_x2[s_cy[1] & 15u]);
     return sum;
 }
 
@@ -219,11 +297,11 @@ void opll_mix(int32_t *acc, uint32_t frames)
             inc_m = fm_phase_inc(fnum, block, fm_mul_x2[pat[0] & 15u]);
             inc_c = fm_phase_inc(fnum, block, fm_mul_x2[pat[1] & 15u]);
             tl = (uint16_t)((pat[2] & 0x3Fu) << 3);
-            mp = s_op[opm].phase;
-            if (fb) mp += ((uint32_t)s_fb[ch]) << (unsigned)(fb + 6);
-            mod = fm_amp(fm_sin(mp), s_op[opm].eg, tl);
+            mp = fm_feedback(s_op[opm].phase, s_fb[ch], fb);
+            mod = fm_amp(fm_wave(mp, pat[3] & 0x08), s_op[opm].eg, tl);
             s_fb[ch] = mod;
-            car = fm_amp(fm_sin(s_op[opc].phase + (((uint32_t)mod) << 14)),
+            car = fm_amp(fm_wave(s_op[opc].phase + (((uint32_t)mod) << 14),
+                                 pat[3] & 0x10),
                          s_op[opc].eg, (uint16_t)(vol << 5));
             s_op[opm].phase += inc_m;
             s_op[opc].phase += inc_c;

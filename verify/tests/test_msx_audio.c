@@ -228,16 +228,58 @@ int main(void)
     opll_reg(0x0E, 0x30);
     msx_audio_render(buf, FRAMES);
     peak(buf, FRAMES, &lo, &hi);
+    printf("     OPLL bass drum peak %d\n", (int)hi);
     expect(hi > 1000, "OPLL bass drum is audible");
     {
         int k;
         for (k = 0; k < 24; k++) msx_audio_render(buf, FRAMES);
     }
+    peak(buf, FRAMES, &lo, &hi);
+    printf("     OPLL bass drum after 24 frames %d\n", (int)hi);
+    expect(hi == 0, "OPLL bass drum decays to silence within 24 frames");
     opll_reg(0x0E, 0x20);
     opll_reg(0x0E, 0x30);             /* rise before the next mix */
     msx_audio_render(buf, FRAMES);
     peak(buf, FRAMES, &lo, &hi);
     expect(hi > 1000, "OPLL bass drum retriggers when the key bit rises");
+
+    /* Volume nibble is 3 dB per step. Eight steps is 24 dB, about ×16. */
+    quiet();
+    opll_sine();
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    {
+        int peak0 = (int)hi;
+        int peak8;
+        int ratio10;
+        opll_reg(0x30, 0x08);
+        msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        peak8 = (int)hi;
+        ratio10 = (peak8 > 0) ? (peak0 * 10) / peak8 : 0;
+        printf("     OPLL vol0 %d vol8 %d ratio_x10 %d\n", peak0, peak8, ratio10);
+        expect(ratio10 >= 120 && ratio10 <= 220,
+               "OPLL volume 8 is 24 dB under volume 0");
+        opll_reg(0x30, 0x0F);
+        msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        printf("     OPLL vol15 peak %d\n", (int)hi);
+        expect(hi > 0 && (int)hi * 80 < peak0, "OPLL volume 15 is far below volume 0");
+    }
+
+    /* Hi-hat is the measured phase mix, not a flat level and not DC. */
+    quiet();
+    opll_reg(0x17, 0x50);
+    opll_reg(0x27, 0x05);
+    opll_reg(0x18, 0xC0);
+    opll_reg(0x28, 0x01);
+    opll_reg(0x37, 0x00);
+    opll_reg(0x0E, 0x21);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    n = crossings(buf, FRAMES);
+    printf("     OPLL hi-hat %d..%d crossings %u\n", (int)lo, (int)hi, n);
+    expect(hi > 400 && (int)hi - (int)lo > 400, "OPLL hi-hat is a moving waveform");
 
     quiet();
     y8950_sine();

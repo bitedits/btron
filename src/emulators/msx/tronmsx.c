@@ -184,6 +184,7 @@ void msx_pause(BOOL on)
 /* ---- frame loop --------------------------------------------------------- */
 
 uint16_t msx_get_pc(void) { return s_cpu.pc; }
+uint16_t msx_get_machine(void) { return s_machine; }
 int msx_is_r800_active(void) { return (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c); }
 
 void msx_run_frame(void)

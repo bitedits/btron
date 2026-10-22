@@ -172,6 +172,46 @@ int main(void)
     printf("     PSG edges %u\n", n);
     expect(n >= 12u && n <= 18u, "PSG period 256 lands in band");
 
+    /* Envelope mode is the same 16-level table as a fixed volume. */
+    quiet();
+    psg_reg(7, 0x3F);
+    psg_reg(8, 0x10);
+    psg_reg(11, 1);
+    psg_reg(12, 0);
+    psg_reg(13, 0x08);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    printf("     PSG envelope peak %d..%d\n", (int)lo, (int)hi);
+    expect(hi == 8160, "PSG envelope level 15 matches fixed volume 15");
+
+    quiet();
+    psg_reg(7, 0x3F);
+    psg_reg(8, 0x10);
+    psg_reg(11, 1);
+    psg_reg(13, 0x00);
+    msx_audio_render(buf, FRAMES);
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "PSG envelope shape 0 finishes at silence");
+
+    quiet();
+    psg_reg(7, 0x3F);
+    psg_reg(8, 0x10);
+    psg_reg(11, 1);
+    psg_reg(13, 0x0B);
+    msx_audio_render(buf, FRAMES);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    expect(lo == 8160 && hi == 8160, "PSG envelope shape 0x0B holds full level");
+
+    quiet();
+    psg_reg(7, 0x3F);
+    psg_reg(8, 0x10);
+    psg_reg(11, 1);
+    psg_reg(13, 0x0F);
+    msx_audio_render(buf, FRAMES);
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "PSG envelope shape 0x0F holds silence");
+
     quiet();
     scc_square(0x100);                /* 3579545/(32*256) ≈ 437 Hz, ~15 crossings */
     msx_audio_render(buf, FRAMES);
@@ -280,6 +320,63 @@ int main(void)
     n = crossings(buf, FRAMES);
     printf("     OPLL hi-hat %d..%d crossings %u\n", (int)lo, (int)hi, n);
     expect(hi > 400 && (int)hi - (int)lo > 400, "OPLL hi-hat is a moving waveform");
+
+    /* Same decay rate: KSR makes block 7 fall faster than block 0. */
+    {
+        int peak_lo, peak_hi;
+        int k;
+        quiet();
+        opll_reg(0x00, 0x01);
+        opll_reg(0x01, 0x31);
+        opll_reg(0x02, 0x3F);
+        opll_reg(0x05, 0xF6);
+        opll_reg(0x07, 0xF0);
+        opll_reg(0x10, 0x80);
+        opll_reg(0x30, 0x00);
+        opll_reg(0x20, 0x10);
+        for (k = 0; k < 20; k++) msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        peak_lo = (int)hi;
+        quiet();
+        opll_reg(0x00, 0x01);
+        opll_reg(0x01, 0x31);
+        opll_reg(0x02, 0x3F);
+        opll_reg(0x05, 0xF6);
+        opll_reg(0x07, 0xF0);
+        opll_reg(0x10, 0x80);
+        opll_reg(0x30, 0x00);
+        opll_reg(0x20, 0x1F);
+        for (k = 0; k < 20; k++) msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        peak_hi = (int)hi;
+        printf("     OPLL ksr block0 %d block7 %d\n", peak_lo, peak_hi);
+        expect(peak_lo > 100 && peak_hi == 0,
+               "OPLL key scale decays a high block faster");
+    }
+
+    /* Tremolo pulls a sustained carrier down inside one AM cycle. */
+    {
+        int p0, p1;
+        int k;
+        quiet();
+        opll_reg(0x00, 0x21);
+        opll_reg(0x01, 0xA1);
+        opll_reg(0x02, 0x3F);
+        opll_reg(0x04, 0xF0);
+        opll_reg(0x05, 0xF0);
+        opll_reg(0x10, 0x20);
+        opll_reg(0x30, 0x00);
+        opll_reg(0x20, 0x19);
+        msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        p0 = (int)hi;
+        for (k = 0; k < 20; k++) msx_audio_render(buf, FRAMES);
+        peak(buf, FRAMES, &lo, &hi);
+        p1 = (int)hi;
+        printf("     OPLL am %d -> %d\n", p0, p1);
+        expect(p0 > 1000 && p1 > 0 && p0 > p1 + p1 / 8,
+               "OPLL amplitude modulation deepens over a cycle");
+    }
 
     quiet();
     y8950_sine();

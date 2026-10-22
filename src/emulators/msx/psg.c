@@ -21,8 +21,12 @@
  *            so a full cycle is PSG_HZ / (256 * EP). Each amplitude level
  *            lasts two steps (YM2149's 32-step envelope).
  *   mixer  : a channel sounds when (tone disabled or tone) and (noise
- *            disabled or noise), volumes are the 16-entry table below
+ *            disabled or noise). A fixed volume and envelope mode both
+ *            use the 16-entry table below (envelope mode is the same
+ *            4-bit level, not the raw step).
  * The enable bits in R7 are inverted, as they are on the chip.
+ * Hold with alternate inverts the frozen level: shape 0xB holds full,
+ * shape 0xF holds silence.
  */
 
 #include "msx_int.h"
@@ -129,8 +133,10 @@ static void env_step(void)
 
     s_env_pos = 0u;
     if (shape & 0x01u) {                           /* hold the last level     */
+        uint8_t alt = (uint8_t)((shape >> 1) & 1u);
         s_env_done = 1u;
-        s_env_vol = (uint8_t)(s_env_dec ? 0u : 15u);
+        /* Alternate inverts the frozen level (shapes 0xB and 0xF). */
+        s_env_vol = (uint8_t)((s_env_dec ^ alt) ? 0u : 15u);
     } else if (!(shape & 0x08u)) {                 /* no continue: to silence */
         s_env_done = 1u;
         s_env_vol = 0u;
@@ -177,7 +183,7 @@ static uint32_t mix(void)
         uint8_t v;
         if (!(tone & noise)) continue;
         v = s_reg[8u + c];
-        sum += (v & 0x10u) ? s_env_vol : s_vol16[v & 0x0Fu];
+        sum += s_vol16[(v & 0x10u) ? (s_env_vol & 0x0Fu) : (v & 0x0Fu)];
     }
     return sum;
 }

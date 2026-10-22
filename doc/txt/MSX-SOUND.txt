@@ -43,10 +43,11 @@ the CPU frame. pcm_mix only resamples samples that frame already captured.
 PSG (psg.c) — AY-3-8910 / YM2149 at 0xA0–0xA3. Unipolar, level = mix()<<5,
 copied to L and R. A set mixer bit disables that generator and leaves its gate
 at 1. Both generators off (register 7 = 0x3F) at volume 15 is the flat level
-8160, not silence. Volume 0 is silence. The tone generator is clocked at
-MSX_PSG_HZ per tick. Section 2.4 of b-media/msx.html records the datasheet
-period law (PSG_HZ/16); the test below records this renderer. Tone A period
-256, register 7 = 0x38, volume 15: 116 unipolar edges in one 735-frame block.
+8160, not silence. Volume 0 is silence. One generator tick is 8 PSG clocks,
+so the tone frequency is MSX_PSG_HZ / (16 * period), the noise shift rate is
+MSX_PSG_HZ / (16 * period), and a full envelope cycle is MSX_PSG_HZ / (256 *
+period). Tone A period 256, register 7 = 0x38, volume 15: about 15 unipolar
+edges in one 735-frame block, 437 Hz.
 
 SCC / SCC-I (scc.c) — memory mapped, not I/O. Ports 0x98–0x9F are the VDP.
 Plain SCC is active when the bank at 0x9000–0x97FF holds 0x3F in its low six
@@ -65,8 +66,12 @@ Period 0x100 is about 437 Hz: 14 signed zero-crossings per 735 frames.
 
 YM2413 OPLL (opll.c) — 0x7C address, 0x7D data, write-only. MSX and MSX2 route
 those ports as an FM-PAC. MSX2+ and turboR forward them from the engine latch.
-One object. Nine melodic channels. Register 0x0E bit 5 silences channels 6–8;
-rhythm voices are a later step, not melodic stand-ins. The fifteen built-in
+One object. Nine melodic channels. Register 0x0E bit 5 replaces channels
+6–8 with bass drum, snare, tom, top cymbal and hi-hat. Bits 4–0 are their
+keys. Volumes are 0x36 (bass drum), 0x37 (hi-hat / snare) and 0x38
+(tom / top cymbal), 0 loudest. A key bit that falls and rises before the
+next mix still attacks. The rhythm rows are original percussive sketches,
+not a Yamaha rhythm ROM. The fifteen built-in
 patches are original parameter sketches in the published instrument order.
 They are not a Yamaha instrument ROM image. Block 4, f-number 288, multiple 1
 (key register 0x19) produces 14 signed zero-crossings per 735 frames.
@@ -91,7 +96,7 @@ turboR calls t9769c_advance, so other machines contribute zeros.
 
 - No GPL sound core (emu2413, Nuked, MAME, fMSX Fmopl, blueMSX YM2413).
 - No Yamaha instrument ROM image.
-- OPLL rhythm voices and Y8950 ADPCM-B stay follow-ups on this same mixer.
+- Y8950 ADPCM-B stays a follow-up on this same mixer.
 - SCC deformation is latched, not applied.
 - lilcu64 Sound Shims are not driven from chip register writes.
 
@@ -102,8 +107,12 @@ turboR calls t9769c_advance, so other machines contribute zeros.
 assets/msx/Bad Apple (MDPC)[ASCII16].rom is Bad Apple MSX by MDPC, the 2 MiB
 ASCII16 image the file-hunter homebrew page loads (games/BadApple.zip). The
 File menu and the XMB Games band list every .rom in that folder, so the row
-appears with no extra menu table. It boots as MSX1: the size rule would
-otherwise pick turboR, and this demo writes the FM-PAC. Dynamite Go! Go!
+appears with no extra menu table. It boots as MSX2+ C-BIOS. The size rule
+would otherwise pick turboR. The file-hunter page leaves the machine blank,
+and WebMSX then selects MSX2+ with MSX-MUSIC. MGSDRV starts the YM2413
+track, including the opening, only after it reads APRLOPLL at $4018.
+cbios_music.rom is that signature; no Panasonic or Yamaha BIOS is loaded.
+Dynamite Go! Go!
 is assets/msx/Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM, the
 32 KiB cartridge the same site loads as games/DynamiteGoGo.zip on an MSX2
 Japanese machine. It boots as MSX2 C-BIOS JP; the size rule would otherwise

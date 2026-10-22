@@ -125,7 +125,11 @@ static inline uint32_t cpu_addr(const v9938_t *v)
 static inline void cpu_step(v9938_t *v)
 {
     v->vram_ptr = (uint16_t)((v->vram_ptr + 1u) & 0x3FFFu);
-    if (v->vram_ptr == 0u) {
+    /* SCREEN 0-3 keep the TMS 16 KiB wrap: a carry out of A13 does not
+     * touch R#14. Bitmap modes (M4 or M5) carry into R#14 and walk the
+     * full VRAM. A SCREEN 2 copy that ends on the 16 KiB boundary must
+     * leave R#14 alone, or the next write lands a page too high. */
+    if (v->vram_ptr == 0u && (v9938_mode(v) & 0x18u)) {
         v->regs[14] = (uint8_t)((v->regs[14] + 1u) & 0x0Fu);
     }
 }

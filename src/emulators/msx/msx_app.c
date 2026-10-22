@@ -111,13 +111,17 @@ static void msx_host_pump_audio(int queue)
 }
 
 /* MegaROM homebrew in this drawer boots on turboR. Two file-hunter carts
- * name their own machine: Bad Apple is an MSX1 ASCII16 image (its 2 MiB
- * size would otherwise pick turboR) and writes the FM-PAC; Dynamite Go! Go!
- * is the 32 KiB MSX2J demo, which the size rule would boot as MSX1. */
+ * name their own machine. Bad Apple is a 2 MiB ASCII16 image, so the size
+ * rule would pick turboR. The file-hunter page leaves the machine blank and
+ * WebMSX then picks MSX2+, whose preset inserts MSX-MUSIC. MGSDRV only
+ * starts the YM2413 track after it reads APRLOPLL at $4018 in that ROM.
+ * C-BIOS cbios_music.rom is that signature, mapped on MSX2+ and turboR.
+ * Dynamite Go! Go! is the 32 KiB MSX2J demo, which the size rule would
+ * boot as MSX1. */
 static uint16_t msx_machine_for(const char *name, size_t size)
 {
     if (name && strstr(name, "Bad Apple"))
-        return BMSX_MACHINE_MSX;
+        return BMSX_MACHINE_MSX2P_CBIOS;
     if (name && strstr(name, "Dynamite"))
         return BMSX_MACHINE_MSX2_CBIOS_JP;
     if (size > 65536u ||

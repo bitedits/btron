@@ -166,11 +166,11 @@ int main(void)
     psg_reg(7, 0x38);
     psg_reg(8, 15);
     psg_reg(0, 0x00);
-    psg_reg(1, 0x01);                 /* period 256: ~116 output edges / frame */
+    psg_reg(1, 0x01);                 /* period 256: 437 Hz, ~15 edges / frame */
     msx_audio_render(buf, FRAMES);
     n = edges(buf, FRAMES);
     printf("     PSG edges %u\n", n);
-    expect(n >= 100u && n <= 130u, "PSG period 256 lands in band");
+    expect(n >= 12u && n <= 18u, "PSG period 256 lands in band");
 
     quiet();
     scc_square(0x100);                /* 3579545/(32*256) ≈ 437 Hz, ~15 crossings */
@@ -217,6 +217,27 @@ int main(void)
     n = crossings(buf, FRAMES);
     printf("     OPLL crossings %u\n", n);
     expect(n >= 12u && n <= 18u, "OPLL fnum 288 block 4 lands in band");
+
+    quiet();
+    opll_reg(0x16, 0x20);
+    opll_reg(0x26, 0x05);
+    opll_reg(0x36, 0x00);
+    opll_reg(0x0E, 0x20);             /* rhythm on, bass drum key up */
+    msx_audio_render(buf, FRAMES);
+    expect(all_zero(buf, FRAMES), "OPLL rhythm with keys up is silent");
+    opll_reg(0x0E, 0x30);
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    expect(hi > 1000, "OPLL bass drum is audible");
+    {
+        int k;
+        for (k = 0; k < 24; k++) msx_audio_render(buf, FRAMES);
+    }
+    opll_reg(0x0E, 0x20);
+    opll_reg(0x0E, 0x30);             /* rise before the next mix */
+    msx_audio_render(buf, FRAMES);
+    peak(buf, FRAMES, &lo, &hi);
+    expect(hi > 1000, "OPLL bass drum retriggers when the key bit rises");
 
     quiet();
     y8950_sine();

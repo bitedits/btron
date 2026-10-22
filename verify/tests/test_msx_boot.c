@@ -91,7 +91,7 @@ int main(int argc, char **argv)
     } else {
         /* Same choice as msx_machine_for() in msx_app.c. */
         if (strstr(rom_path, "Bad Apple"))
-            cfg.machine = BMSX_MACHINE_MSX;
+            cfg.machine = BMSX_MACHINE_MSX2P_CBIOS;
         else if (strstr(rom_path, "Dynamite"))
             cfg.machine = BMSX_MACHINE_MSX2_CBIOS_JP;
         else if (rom_len > 65536u || strstr(rom_path, "BULLRUSH") || strstr(rom_path, "NEON") || strstr(rom_path, "NIGHT"))

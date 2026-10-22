@@ -3,8 +3,9 @@
  *
  * Register file, from the YM2413 application manual:
  *   #00–#07  user instrument (modulator, then carrier)
- *   #0E      rhythm enable is bit 5; when set, channels 6–8 are silent
- *            (rhythm voices are a later step, not melodic stand-ins)
+ *   #0E      bit 5 selects rhythm. Bits 4–0 key bass drum, snare, tom,
+ *            top cymbal and hi-hat. Channels 6–8 then stop being melodic.
+ *            #36–#38 hold the five rhythm volumes (0 = loudest).
  *   #10–#18  f-number low
  *   #20–#28  sustain / key / block / f-number bit 8
  *   #30–#38  instrument nibble and volume nibble (0 = loudest)
@@ -26,6 +27,7 @@ static uint8_t s_addr;
 static uint8_t s_regs[64];
 static FmOp    s_op[18];
 static int32_t s_fb[9];
+static uint32_t s_noise = 1u;
 
 /* Instrument order: violin, guitar, piano, flute, clarinet, oboe, trumpet,
  * organ, horn, synthesizer, harpsichord, vibraphone, synthesizer bass,
@@ -63,6 +65,7 @@ void opll_reset(void)
     memset(s_op, 0, sizeof(s_op));
     memset(s_fb, 0, sizeof(s_fb));
     s_addr = 0u;
+    s_noise = 1u;
     for (i = 0; i < 18; i++) { s_op[i].eg = 511u; s_op[i].stage = 3u; }
 }
 
@@ -73,7 +76,102 @@ void opll_address(uint8_t value)
 
 void opll_data(uint8_t value)
 {
+    /* A rhythm key that falls and rises again before the next mix must
+     * still attack. The mixer only sees the register file at the end of
+     * the frame, so the rising write clears the key latch now. */
+    if (s_addr == 0x0Eu) {
+        uint8_t rise = (uint8_t)(value & (uint8_t)~s_regs[0x0E]);
+        if (rise & 0x10u) { s_op[12].key = 0u; s_op[13].key = 0u; }
+        if (rise & 0x08u) s_op[15].key = 0u;
+        if (rise & 0x04u) s_op[16].key = 0u;
+        if (rise & 0x02u) s_op[17].key = 0u;
+        if (rise & 0x01u) s_op[14].key = 0u;
+    }
     s_regs[s_addr] = value;
+}
+
+/* Bass drum is a 2-operator hit on channel 6. Hi-hat and snare share
+ * channel 7, tom and top cymbal share channel 8. The rows are original
+ * percussive sketches (EG-TYPE clear), not Yamaha rhythm-ROM bytes. */
+static const uint8_t s_bd[8] = {
+    0x00, 0x01, 0x04, 0x00, 0xF8, 0xF7, 0x45, 0x56
+};
+
+static uint16_t ch_fnum(int ch, uint8_t *block)
+{
+    uint16_t fnum = (uint16_t)(s_regs[0x10 + ch] |
+                    ((uint16_t)(s_regs[0x20 + ch] & 0x01u) << 8));
+    *block = (uint8_t)((s_regs[0x20 + ch] >> 1) & 0x07u);
+    return fnum;
+}
+
+static int32_t hit(FmOp *o, int key, uint32_t inc, int noise, uint16_t tl)
+{
+    int32_t s;
+    uint32_t spins;
+    fm_op_key(o, key, 15u);
+    fm_op_env(o, 15u, noise ? 9u : 6u, noise ? 1u : 4u, 7u, 1);
+    if (noise) {
+        spins = 1u + (inc >> 23);
+        if (spins > 6u) spins = 6u;
+        s = 0;
+        while (spins--) {
+            uint32_t fb = (s_noise ^ (s_noise >> 2) ^ (s_noise >> 3) ^
+                           (s_noise >> 5)) & 1u;
+            s_noise = (s_noise >> 1) | (fb << 16);
+            if (s_noise == 0u) s_noise = 1u;
+            s = fb ? 12000 : -12000;
+        }
+    } else {
+        s = fm_sin(o->phase);
+    }
+    o->phase += inc;
+    return fm_amp(s, o->eg, tl) >> 2;
+}
+
+static int32_t bass_drum(int key, uint16_t vol)
+{
+    const uint8_t *pat = s_bd;
+    uint8_t block;
+    uint16_t fnum = ch_fnum(6, &block);
+    uint32_t inc_m = fm_phase_inc(fnum, block, fm_mul_x2[pat[0] & 15u]);
+    uint32_t inc_c = fm_phase_inc(fnum, block, fm_mul_x2[pat[1] & 15u]);
+    int32_t mod;
+    int32_t car;
+    fm_op_key(&s_op[12], key, (uint8_t)(pat[4] >> 4));
+    fm_op_key(&s_op[13], key, (uint8_t)(pat[5] >> 4));
+    fm_op_env(&s_op[12], (uint8_t)(pat[4] >> 4), (uint8_t)(pat[4] & 15u),
+              (uint8_t)(pat[6] >> 4), (uint8_t)(pat[6] & 15u), 1);
+    fm_op_env(&s_op[13], (uint8_t)(pat[5] >> 4), (uint8_t)(pat[5] & 15u),
+              (uint8_t)(pat[7] >> 4), (uint8_t)(pat[7] & 15u), 1);
+    mod = fm_amp(fm_sin(s_op[12].phase), s_op[12].eg,
+                 (uint16_t)((pat[2] & 0x3Fu) << 3));
+    car = fm_amp(fm_sin(s_op[13].phase + (((uint32_t)mod) << 14)),
+                 s_op[13].eg, (uint16_t)(vol << 5));
+    s_op[12].phase += inc_m;
+    s_op[13].phase += inc_c;
+    return car >> 2;
+}
+
+static int32_t rhythm_sample(void)
+{
+    uint8_t rhy = s_regs[0x0E];
+    uint8_t block7, block8;
+    uint16_t f7 = ch_fnum(7, &block7);
+    uint16_t f8 = ch_fnum(8, &block8);
+    uint32_t inc7 = fm_phase_inc(f7, block7, 8u);
+    uint32_t inc8 = fm_phase_inc(f8, block8, 4u);
+    int32_t sum = 0;
+    sum += bass_drum((rhy & 0x10u) != 0u, (uint16_t)(s_regs[0x36] & 0x0Fu));
+    sum += hit(&s_op[14], (rhy & 0x01u) != 0u, inc7 << 1, 1,
+               (uint16_t)((s_regs[0x37] >> 4) << 5));          /* hi-hat */
+    sum += hit(&s_op[15], (rhy & 0x08u) != 0u, inc7, 1,
+               (uint16_t)((s_regs[0x37] & 0x0Fu) << 5));       /* snare */
+    sum += hit(&s_op[16], (rhy & 0x04u) != 0u, inc8, 0,
+               (uint16_t)((s_regs[0x38] >> 4) << 5));          /* tom */
+    sum += hit(&s_op[17], (rhy & 0x02u) != 0u, inc8 << 2, 1,
+               (uint16_t)((s_regs[0x38] & 0x0Fu) << 5));       /* top cymbal */
+    return sum;
 }
 
 void opll_mix(int32_t *acc, uint32_t frames)
@@ -95,7 +193,7 @@ void opll_mix(int32_t *acc, uint32_t frames)
             int opm, opc;
             uint16_t tl;
 
-            if (rhythm && ch >= 6) continue;
+            if (rhythm && ch >= 6) continue; /* replaced by rhythm_sample */
             inst = (uint8_t)(s_regs[0x30 + ch] >> 4);
             vol  = (uint8_t)(s_regs[0x30 + ch] & 0x0Fu);
             fnum = (uint16_t)(s_regs[0x10 + ch] |
@@ -131,6 +229,7 @@ void opll_mix(int32_t *acc, uint32_t frames)
             s_op[opc].phase += inc_c;
             sum += car >> 2;
         }
+        if (rhythm) sum += rhythm_sample();
         acc[i * 2u]      += sum;
         acc[i * 2u + 1u] += sum;
     }

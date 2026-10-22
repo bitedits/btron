@@ -7,14 +7,19 @@
  * the only pseudo-random source is the noise shift register, which starts at
  * 0x0ACE and is the state AV-5 compares against a reference sequence.
  *
- * Clock law: one PSG tick is two Z80 T-states, so a frame of 59,664 T is
- * 29,832 ticks; 735 PCM frames at 44,100 Hz consume 40.5844 ticks each and
- * the remainder stays in the fraction (D1: no host clock, only T).
+ * The PSG input clock is MSX_PSG_HZ (one PSG clock is two Z80 T-states).
+ * The generators run at one tick per 8 PSG clocks, so 735 PCM frames consume
+ * PSG_HZ/(8*44100) ticks each and the remainder stays in the fraction
+ * (D1: no host clock, only T).
  *
- * Generator laws, as in the AY-3-8910 data book:
- *   tone   : output toggles every N ticks,  N = max(1, R1<<8 | R0)
- *   noise  : register shifts every N ticks, N = max(1, R6), output is bit 0
- *   envelope: one of 32 steps every N ticks, N = max(1, R12<<8 | R11)
+ * Generator laws, AY-3-8910 / YM2149 data book:
+ *   tone   : output toggles every TP ticks, TP = max(1, R1<<8 | R0),
+ *            f = PSG_HZ / (16 * TP)
+ *   noise  : register shifts every 2*NP ticks, NP = max(1, R6),
+ *            f = PSG_HZ / (16 * NP), output is bit 0
+ *   envelope: one of 32 steps every EP ticks, EP = max(1, R12<<8 | R11),
+ *            so a full cycle is PSG_HZ / (256 * EP). Each amplitude level
+ *            lasts two steps (YM2149's 32-step envelope).
  *   mixer  : a channel sounds when (tone disabled or tone) and (noise
  *            disabled or noise), volumes are the 16-entry table below
  * The enable bits in R7 are inverted, as they are on the chip.
@@ -26,8 +31,9 @@
 
 #define PSG_NR_REGS     16u
 
-/* 32.32 step of PSG ticks per PCM frame: MSX_PSG_HZ / MSX_PCM_HZ. */
-#define PSG_STEP      (((uint64_t)MSX_PSG_HZ << 32) / (uint64_t)MSX_PCM_HZ)
+/* 32.32 step of generator ticks per PCM frame. One tick is 8 PSG clocks,
+ * which is the period the tone counter counts (f = PSG_HZ / (16 * TP)). */
+#define PSG_STEP      ((((uint64_t)MSX_PSG_HZ << 32) / 8ull) / (uint64_t)MSX_PCM_HZ)
 #define PSG_STEP_HI   ((uint32_t)(PSG_STEP >> 32))
 #define PSG_STEP_LO   ((uint32_t)(PSG_STEP & 0xFFFFFFFFu))
 
@@ -71,8 +77,9 @@ static void tone_period(uint8_t ch)
 
 static void noise_period(void)
 {
+    /* The /8 tick is twice the noise shift clock, so the counter runs to 2*NP. */
     uint32_t v = (uint32_t)(s_reg[6] & 0x1Fu);
-    s_noise_p = (v == 0u) ? 1u : v;
+    s_noise_p = ((v == 0u) ? 1u : v) * 2u;
 }
 
 static void env_period(void)
@@ -252,7 +259,7 @@ void psg_reset(void)
     s_pa_out = 0u;
     s_pb_out = 0u;
     for (c = 0u; c < 3u; c++) { s_tone_c[c] = 0u; s_tone_p[c] = 1u; s_tone_o[c] = 0u; }
-    s_noise_c = 0u;  s_noise_p = 1u;  s_noise_o = 0u;
+    s_noise_c = 0u;  s_noise_p = 2u;  s_noise_o = 0u;
     s_lfsr = 0x0ACEu;
     s_env_c = 0u;    s_env_p = 1u;    s_env_pos = 0u;
     s_env_dec = 0u;  s_env_done = 0u; s_env_vol = 0u;

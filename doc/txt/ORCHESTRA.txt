@@ -219,9 +219,9 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   doc/pdf/btron-sound.tex і doc/txt/SOUND.txt забороняють класти WAV, OGG,
   AIFF і SF2 у репозиторій. Нуль байт активів є властивістю цього дерева.
 
-  Публічне ядро GStreamer, gst/*.c, у дереві, з якого для цієї статті
+  Публічне ядро GStreamer, media/*.c, у дереві, з якого для цієї статті
   рахувались лише заголовки, має 113528 рядків і тягне GLib, GObject, потоки
-  GstTask і алокації. src/nus/nus_gst.c є Linux MCU для WebRTC і json-glib,
+  GstTask і алокації. src/media/gst_rtc.c є Linux MCU для WebRTC і json-glib,
   не звуковим трактом Orchestra. Жодне з цих тіл не копіювалось. Жоден
   репозиторій читача SMF для цієї статті не відкривався. Норма SMF — текст
   Standard MIDI Files 1.0 асоціації MMA.
@@ -416,8 +416,8 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 ------------
 
   Слова цього підрозділу — контракт пайплайна для RTOS класу NuttX і BTRON.
-  Вони покривають механізм, не дерево gst/*.c з §2.4. Тіла звідти і з
-  nus_gst.c не входять у шар медіа.
+  Вони покривають механізм, не дерево media/*.c з §2.4. Тіла звідти і з
+  gst_rtc.c не входять у шар медіа.
 
   Елемент, пад і ланка. Один GstPipeline тримає не більше 16 елементів.
   Реєстр типів рівно з десяти імен: midisrc, queue, midiroute, shimsynth,
@@ -482,7 +482,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Поза контрактом, і тому в шар медіа не входить: GObject, GLib, gst-launch,
   завантажувач .so, ghost pad, вкладений bin, request pad з алокацією,
-  відео, теги, TOC, RTP, WebRTC, кодеки. src/nus/nus_gst.c у цей список не
+  відео, теги, TOC, RTP, WebRTC, кодеки. src/media/gst_rtc.c у цей список не
   переноситься.
 
 
@@ -1953,7 +1953,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
     include/media/gst_rt.h, orchestra.c, Makefile. gst_rt.c не включає
     wnd.h, app_menu.h, dp.h. orchestra.c не викликає virtio_sound_*. Білий
     список — десять імен §3.4. Концертний граф — дев'ять слотів. fluidsynth
-    дає NULL. wc -l медіа не більше 2000. nus_gst.c не лінкується.
+    дає NULL. wc -l медіа не більше 2000. gst_rtc.c не лінкується.
   * PR 2, сесія і шаблони. Залежить від PR 1. Файли: orchestra.c, новий
     orchestra_session.c у трьох списках, lilcu64_score.c і його заголовок
     лише для lc_shim_note і lc_set_score_base, Makefile для

@@ -280,6 +280,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/audio_player.c  \
               src/apps/b_drivesetup.c  \
               src/apps/orchestra.c     \
+              src/apps/orchestra_session.c \
+              src/media/gst_rt.c       \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
               src/emulators/msx/msx_app.c       \
@@ -352,8 +354,16 @@ DEMO_SRCS = \
     src/demo/lilcu64_wa.c \
     src/demo/lilcu64_score.c \
     src/demo/lilcu64_synth.c \
+    src/demo/lilcu64_insert.c \
     src/demo/lilcu64_demo.c \
     src/drivers/ps2/ps2_vu0_kernel.c
+
+# Targets that already pull DEMO_SRCS must not list this again.
+LILCU64_ENGINE_SRCS = \
+    src/demo/lilcu64_wa.c \
+    src/demo/lilcu64_score.c \
+    src/demo/lilcu64_synth.c \
+    src/demo/lilcu64_insert.c
 
 VIRGL_SRCS = \
     src/gl/gl_dispatch.c \
@@ -444,7 +454,8 @@ PC98_SRCS    = $(PC98_STARTUP)          \
                src/drivers/pc98/input/pc98_mouse.c \
                src/drivers/pc98/input/pc98_kbd.c \
                src/drivers/uefi/ps2_mouse.c \
-               $(COMMON_NO_SDL_SRCS)
+               $(COMMON_NO_SDL_SRCS) \
+               $(LILCU64_ENGINE_SRCS)
 
 # ── BCM283x (Pi 2B) bare-metal arch sources ───────────────────────
 ARCH_BCM_SRCS = src/drivers/bcm283x/cpu/cache.c      \
@@ -548,6 +559,8 @@ COMMON_NO_SDL_SRCS = \
     src/apps/t_editor.c    \
     src/apps/audio_player.c \
     src/apps/orchestra.c   \
+    src/apps/orchestra_session.c \
+    src/media/gst_rt.c     \
     src/apps/chat.c        \
     src/apps/chat_xml.c    \
     src/settings/control_panel.c \
@@ -572,8 +585,8 @@ COMMON_NO_SDL_SRCS = \
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
-ARM32_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_yoko.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS)
-ARM64_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_arm64.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM64_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS)
+ARM32_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_yoko.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS) $(LILCU64_ENGINE_SRCS)
+ARM64_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_arm64.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM64_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS) $(LILCU64_ENGINE_SRCS)
 
 # ── Object lists ─────────────────────────────────────────────────
 POSIX_OBJS   = $(POSIX_SRCS:.c=.posix.o)
@@ -1023,7 +1036,8 @@ M68K_STARTUP    = src/cores/core_m68k.c
 M68K_SRCS       = $(M68K_STARTUP)          \
                   src/cores/core_init.c   \
                   src/kernel/libstr.c      \
-                  $(COMMON_NO_SDL_SRCS)
+                  $(COMMON_NO_SDL_SRCS)    \
+                  $(LILCU64_ENGINE_SRCS)
 M68K_OBJS       = src/drivers/m68k/boot_m68k.m68k.o $(M68K_SRCS:.c=.m68k.o)
 
 %.m68k.o: %.s
@@ -3376,6 +3390,8 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/gterm.c \
                        src/apps/audio_player.c \
                        src/apps/orchestra.c \
+                       src/apps/orchestra_session.c \
+                       src/media/gst_rt.c \
                        src/apps/chat.c \
                        src/apps/chat_xml.c \
                        src/tip/tip_ife.c \
@@ -3423,6 +3439,7 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/demo/lilcu64_wa.c \
                        src/demo/lilcu64_score.c \
                        src/demo/lilcu64_synth.c \
+                       src/demo/lilcu64_insert.c \
                        src/demo/lilcu64_demo.c \
                        src/drivers/ps2/ps2_vu0_kernel.c
 

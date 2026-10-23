@@ -29,6 +29,22 @@
 #define ORCH_PATH_MID  "/SYS/orchestra.mid"
 #define ORCH_PATH_WAV  "/SYS/orchestra.wav"
 
+enum {
+    ORCH_UNDO_EVENT = 1,
+    ORCH_UNDO_NAME = 2,
+    ORCH_UNDO_TRACK_U8 = 3,
+    ORCH_UNDO_INSERT = 4
+};
+
+enum {
+    ORCH_F_VOL = 0,
+    ORCH_F_PAN = 1,
+    ORCH_F_MUTE = 2,
+    ORCH_F_SOLO = 3,
+    ORCH_F_SEND = 4,
+    ORCH_F_PROGRAM = 5
+};
+
 void orchestra_ui_tick(void);
 void orch_boot_desk(void);
 void orch_shutdown_desk(void);

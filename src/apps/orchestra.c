@@ -263,8 +263,8 @@ static void draw_beveled_box(GDEV *dev, const RECT *r, COLOR fill_col, COLOR hi,
     (void)lo;
 }
 
-/* Dispatch Real-time MIDI Event with <1ms Deterministic Latency */
-ER orchestra_dispatch_midi_event(int in_port, uint8_t status, uint8_t d1, uint8_t d2) {
+/* Stub dispatch. The linked symbol lives in src/media/gst_rt.c. */
+static ER orchestra_dispatch_midi_event(int in_port, uint8_t status, uint8_t d1, uint8_t d2) {
     if (in_port < 0 || in_port >= g_orchestra.port_count) return E_PAR;
     g_orchestra.ports[in_port].message_count++;
 

@@ -72,9 +72,13 @@ int     slots_set_dsk(const uint8_t *img, uint32_t size);
 void    slots_ram_store(uint16_t addr, uint8_t value);
 /* Secondary slot of main RAM on this machine (2 on MSX2, 0 on turboR). */
 uint8_t slots_ram_ssec(void);
-/* Page 0, 2 and 3 show main RAM. Page 1 stays the disk ROM, so the
- * interrupt trampoline at $44E0 still runs. */
+/* All four pages of slot 3 show main RAM, which is the DOS TPA.
+ * A COM samples the page-1 slot and asks the BIOS to enter its
+ * vblank handler there. */
 void    slots_map_com_pages(void);
+/* Page 0 stays the BIOS. Pages 1-3 show main RAM. A Disk BASIC BLOAD
+ * image calls the BIOS directly and is not a TPA program. */
+void    slots_map_bios_ram(void);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
 uint8_t *slots_rom_ptr(uint32_t *cap);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */

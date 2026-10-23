@@ -2,11 +2,13 @@
  * Headless disk harness for the B-MSX loader in msx_app.c.
  * Every raw .dsk under MSX_ROM_CATALOGUE (assets/msx) is mounted the way
  * msx_load() does: machine from the file name, msx_init, slots_set_dsk,
- * msx_reset. Each image must leave its boot sector at $C000. A disk whose
- * root holds MSXDOS.SYS must also leave that file's first 16 bytes at $0100.
- * The frame is blitted, the same shot the window would paint, and it has to
- * contain ink. The first disk is then mounted again, which is the File menu
- * returning to another image. Build: make msx-dsk
+ * msx_reset. The frame loop is the same one the window runs. Once C-BIOS
+ * has a text screen, the root menu takes it. The shot is that menu. On the
+ * Bad Apple disk, Enter loads DMAPPLE.COM at $0100. On any other disk whose
+ * cursor is a .COM, Enter loads that file: a BSAVE image ($FE) at its start
+ * address, anything else at $0100. The first disk is then mounted again,
+ * which is the File menu returning to another image.
+ * Build: make msx-dsk
  */
 #include <emulators/tronmsx.h>
 #include "../../src/emulators/msx/msx_int.h"
@@ -95,11 +97,7 @@ static int file_head(const uint8_t *d, uint32_t n, const char *name11,
 #define SCREEN_H 212u
 #define DSK_CAP  32
 #define NAME_CAP 128
-/* Emulator menu fast-forward in msx_app.c: 300 frames, then pump audio with
- * queue 0 so the block is rendered and dropped. msx_app_fast_forward() is that
- * loop. The headless harness runs the same step until the disk paints. */
-#define FF_FRAMES 300
-#define FF_LIMIT  10
+/* Same audio step as the emulator fast-forward: render the block, drop it. */
 #define PCM_FRAME 735
 
 /* Same choice as msx_machine_for() in msx_app.c. A disk is decided before
@@ -208,6 +206,22 @@ static uint32_t fb_hash(const uint16_t *fb)
     return h;
 }
 
+static int ends_with_com(const char *row)
+{
+    size_t n = strlen(row);
+    return n >= 4 && strcmp(row + n - 4, ".COM") == 0;
+}
+
+/* "FADE.COM" -> "FADE    COM", the 11-byte directory key. */
+static void fat_name11(const char *row, char out[11])
+{
+    int i = 0, j;
+    memset(out, ' ', 11);
+    for (j = 0; row[i] && row[i] != '.' && j < 8; i++, j++) out[j] = row[i];
+    if (row[i] == '.') i++;
+    for (j = 8; row[i] && j < 11; i++, j++) out[j] = row[i];
+}
+
 static void shot_path(char *out, size_t cap, const char *name)
 {
     size_t i, o = 0;
@@ -223,36 +237,31 @@ static void shot_path(char *out, size_t cap, const char *name)
     out[o] = '\0';
 }
 
-/* One menu selection: init the FDD machine, mount, then fast-forward until
- * the picture is no longer the C-BIOS firmware text. */
+/* Mount one image the way the File menu does, then wait until the root
+ * menu is the picture. */
 static int boot_disk(const char *name)
 {
     char path[512];
     char ppm[512];
+    char row[16];
     uint8_t *img;
     uint32_t len = 0;
     msx_cfg_t cfg;
     uint16_t machine;
     int rc;
-    int step;
     long frame;
-    int saw_boot = 0;
-    int want_dos;
-    int drew = 0;
-    uint8_t expect[16];
-    uint8_t b0, b1, b2;
-    int i;
+    int i, rows, cur;
     static uint16_t fb[SCREEN_W * SCREEN_H];
-    uint32_t painted;
-    uint32_t banner = 0;
-    int have_banner = 0;
+    uint32_t painted, h1, h2;
 
     snprintf(path, sizeof(path), "%s/%s", MSX_ROM_CATALOGUE, name);
     img = read_file(path, &len);
     if (!img) { fprintf(stderr, "cannot read %s\n", path); return 1; }
-    if (len < 3u) { fprintf(stderr, "FAIL %s: image shorter than a boot jump\n", name); free(img); return 1; }
-    b0 = img[0]; b1 = img[1]; b2 = img[2];
-    want_dos = file_head(img, len, "MSXDOS  SYS", expect, 16);
+    if (len < 3u) {
+        fprintf(stderr, "FAIL %s: image shorter than a boot jump\n", name);
+        free(img);
+        return 1;
+    }
 
     machine = machine_for(name);
     memset(&cfg, 0, sizeof(cfg));
@@ -271,84 +280,136 @@ static int boot_disk(const char *name)
     msx_reset();
 
     frame = 0;
-    /* One frame at a time until the sector lands. The picture on the frame
-     * before that is still C-BIOS. The disk's own code paints afterwards. */
-    while (frame < 900) {
-        uint32_t h;
+    while (frame < 900 && !dsk_menu_active()) {
         bmsx_fast_forward(1);
         frame++;
-        msx_blit_rgb565(fb);
-        h = fb_hash(fb);
-        if (slots_read(0xC000) == b0 && slots_read(0xC001) == b1 &&
-            slots_read(0xC002) == b2) {
-            saw_boot = 1;
-            break;
-        }
-        banner = h;
-        have_banner = 1;
     }
-    if (saw_boot) {
-        uint32_t seen = 0;
-        int holds = 0;
-        printf("  frame %ld C-BIOS hash=%08X pc=%04X\n", frame, banner, msx_get_pc());
-        for (step = 0; step < FF_LIMIT && !drew; step++) {
-            uint32_t h;
-            bmsx_fast_forward(FF_FRAMES);
-            frame += FF_FRAMES;
-            if (slots_read(0xC000) != b0 || slots_read(0xC001) != b1 ||
-                slots_read(0xC002) != b2) break;
-            msx_blit_rgb565(fb);
-            h = fb_hash(fb);
-            painted = ink(fb);
-            /* A cleared frame is the program starting, not the picture it holds. */
-            if (!have_banner || h == banner || painted < 200u) {
-                holds = 0;
-                seen = 0;
-                continue;
-            }
-            if (h == seen) holds++;
-            else { seen = h; holds = 1; }
-            if (holds >= 2) {
-                drew = 1;
-                printf("  frame %ld disk picture pc=%04X C000=%02X%02X%02X 0100=%02X%02X%02X%02X hash=%08X\n",
-                       frame, msx_get_pc(),
-                       slots_read(0xC000), slots_read(0xC001), slots_read(0xC002),
-                       slots_read(0x0100), slots_read(0x0101),
-                       slots_read(0x0102), slots_read(0x0103), h);
-            }
-        }
-    }
-
-    if (!drew || !saw_boot ||
-        slots_read(0xC000) != b0 || slots_read(0xC001) != b1 || slots_read(0xC002) != b2) {
-        fprintf(stderr, "FAIL %s: fast-forward %ld frames, pc=%04X, disk picture never replaced the C-BIOS screen\n",
+    if (!dsk_menu_active()) {
+        fprintf(stderr, "FAIL %s: no disk menu after %ld frames, pc=%04X\n",
                 name, frame, msx_get_pc());
         free(img);
         return 1;
     }
-    printf("  boot sector at $C000\n");
-    if (want_dos) {
+
+    msx_blit_rgb565(fb);
+    painted = ink(fb);
+    h1 = fb_hash(fb);
+    bmsx_fast_forward(1);
+    msx_blit_rgb565(fb);
+    h2 = fb_hash(fb);
+    if (painted < 200u || h1 != h2) {
+        fprintf(stderr, "FAIL %s: menu ink %u hash %08X/%08X\n",
+                name, painted, h1, h2);
+        free(img);
+        return 1;
+    }
+
+    rows = dsk_menu_rows();
+    cur = dsk_menu_cursor();
+    printf("  frame %ld menu rows=%d cursor=%d\n", frame, rows, cur);
+    for (i = 0; i < rows; i++) {
+        if (!dsk_menu_row(i, row, sizeof(row))) continue;
+        printf("  %c %s\n", (i == cur) ? '>' : ' ', row);
+    }
+    shot_path(ppm, sizeof(ppm), name);
+    write_ppm(ppm, fb);
+    printf("  screenshot %s (%u ink)\n", ppm, painted);
+
+    if (strstr(name, "Bad Apple")) {
+        uint8_t expect[16];
+        if (!dsk_menu_row(cur, row, sizeof(row)) || strcmp(row, "DMAPPLE.COM") != 0) {
+            fprintf(stderr, "FAIL %s: cursor is '%s', AUTOEXEC names DMAPPLE.COM\n",
+                    name, row);
+            free(img);
+            return 1;
+        }
+        if (!file_head(img, len, "DMAPPLE COM", expect, 16)) {
+            fprintf(stderr, "FAIL %s: DMAPPLE.COM is not in the root\n", name);
+            free(img);
+            return 1;
+        }
+        dsk_menu_key(2);
+        if (dsk_menu_active()) {
+            fprintf(stderr, "FAIL %s: Enter left the menu up\n", name);
+            free(img);
+            return 1;
+        }
         for (i = 0; i < 16; i++) {
             if (slots_read((uint16_t)(0x0100 + i)) != expect[i]) {
-                fprintf(stderr, "FAIL %s: $%04X is %02X, MSXDOS.SYS says %02X\n",
+                fprintf(stderr, "FAIL %s: $%04X is %02X, DMAPPLE.COM says %02X\n",
                         name, 0x0100 + i, slots_read((uint16_t)(0x0100 + i)), expect[i]);
                 free(img);
                 return 1;
             }
         }
-        printf("  MSXDOS.SYS at $0100\n");
+        printf("  DMAPPLE.COM at $0100\n");
+        bmsx_fast_forward(600);
+        msx_blit_rgb565(fb);
+        write_ppm("/tmp/msx_dsk_shots/BadApple_run.ppm", fb);
+        printf("  run pc=%04X flag=%02X tick=%02X hook=%02X:%02X r1=%02X ink=%u\n",
+               msx_get_pc(), slots_read(0x018D), slots_read(0x018E),
+               slots_read(0xFD9F), slots_read(0xFDA0),
+               vdp_debug_reg(1), ink(fb));
+        if (ink(fb) < 200u) {
+            fprintf(stderr, "FAIL %s: DMAPPLE left a blank screen, pc=%04X\n",
+                    name, msx_get_pc());
+            free(img);
+            return 1;
+        }
+    } else if (dsk_menu_row(cur, row, sizeof(row)) && ends_with_com(row) &&
+               strcmp(row, "COMMAND.COM") != 0) {
+        char name11[11];
+        char runppm[512];
+        uint8_t head[16];
+        uint16_t load;
+        uint8_t expect;
+        fat_name11(row, name11);
+        if (!file_head(img, len, name11, head, 16)) {
+            fprintf(stderr, "FAIL %s: %s is not in the root\n", name, row);
+            free(img);
+            return 1;
+        }
+        dsk_menu_key(2);
+        if (dsk_menu_active()) {
+            fprintf(stderr, "FAIL %s: Enter left the menu up\n", name);
+            free(img);
+            return 1;
+        }
+        if (head[0] == 0xFEu) {
+            load = (uint16_t)(head[1] | (head[2] << 8));
+            expect = head[7];
+        } else {
+            load = 0x0100u;
+            expect = head[0];
+        }
+        if (slots_read(load) != expect) {
+            fprintf(stderr, "FAIL %s: $%04X is %02X, %s says %02X\n",
+                    name, load, slots_read(load), row, expect);
+            free(img);
+            return 1;
+        }
+        printf("  %s at $%04X\n", row, load);
+        bmsx_fast_forward(300);
+        msx_blit_rgb565(fb);
+        snprintf(runppm, sizeof(runppm), "/tmp/msx_dsk_shots/%s", row);
+        {
+            size_t k = strlen(runppm);
+            if (k + 8 < sizeof(runppm)) {
+                memcpy(runppm + k, "_run.ppm", 9);
+            }
+        }
+        write_ppm(runppm, fb);
+        printf("  run pc=%04X r0=%02X r1=%02X ink=%u byte=%02X %s\n",
+               msx_get_pc(), vdp_debug_reg(0), vdp_debug_reg(1), ink(fb),
+               slots_read(load), runppm);
+        if (msx_get_pc() == 0 || slots_read(load) != expect) {
+            fprintf(stderr, "FAIL %s: %s did not stay running, pc=%04X\n",
+                    name, row, msx_get_pc());
+            free(img);
+            return 1;
+        }
     }
 
-    msx_blit_rgb565(fb);
-    painted = ink(fb);
-    shot_path(ppm, sizeof(ppm), name);
-    write_ppm(ppm, fb);
-    if (painted < 200u) {
-        fprintf(stderr, "FAIL %s: screenshot has %u ink pixels (%s)\n", name, painted, ppm);
-        free(img);
-        return 1;
-    }
-    printf("  screenshot %s (%u ink)\n", ppm, painted);
     free(img);
     return 0;
 }

@@ -7,9 +7,14 @@
  * of #C0+ch selects FM (0) or additive (1). Key is bit 5 of #B0+ch.
  *
  * ADPCM-B registers written through #C0/#C1 sit in the register file and are
- * not rendered. The #C2/#C3 data ports are accepted and discarded. A read of
- * #C0 returns 0: no IRQ, not busy. Playback of ADPCM samples is a later step
- * on this same mix.
+ * not rendered. The #C2/#C3 data ports are accepted and discarded. Playback
+ * of ADPCM samples is a later step on this same mix.
+ *
+ * A read of #C0 is the status port. Bits 1 and 2 are tied high, so an idle
+ * read is 0x06 and software can tell the chip is present. Bit 7 is the IRQ
+ * flag. A data byte written to register 0x0F is accepted when register 0x04
+ * bit 7 resets the flag, and the flag is raised again at once. Bit 4 (end
+ * of the sample) stays clear, so a transfer copies every byte.
  */
 
 #include "msx_int.h"
@@ -19,6 +24,8 @@
 
 static uint8_t s_addr;
 static uint8_t s_regs[256];
+static uint8_t s_irq;       /* status bit 7 */
+static uint8_t s_adpcm;     /* register 0x0F was written since the last reset */
 static FmOp    s_op[18];
 static int32_t s_fb[9];
 
@@ -45,12 +52,14 @@ void y8950_reset(void)
     memset(s_op, 0, sizeof(s_op));
     memset(s_fb, 0, sizeof(s_fb));
     s_addr = 0u;
+    s_irq = 0u;
+    s_adpcm = 0u;
     for (i = 0; i < 18; i++) { s_op[i].eg = 511u; s_op[i].stage = 3u; }
 }
 
 uint8_t y8950_read(uint8_t port)
 {
-    if ((port & 0x03u) == 0u) return 0u;          /* status: idle */
+    if ((port & 0x03u) == 0u) return (uint8_t)(0x06u | s_irq);
     return 0xFFu;
 }
 
@@ -58,7 +67,14 @@ void y8950_write(uint8_t port, uint8_t value)
 {
     switch (port & 0x03u) {
     case 0u: s_addr = value; break;
-    case 1u: s_regs[s_addr] = value; break;
+    case 1u:
+        s_regs[s_addr] = value;
+        if (s_addr == 0x0Fu) s_adpcm = 1u;
+        if (s_addr == 0x04u && (value & 0x80u)) {
+            s_irq = s_adpcm ? 0x80u : 0u;
+            s_adpcm = 0u;
+        }
+        break;
     default: break;                               /* #C2/#C3 ADPCM data, stored by a later step */
     }
 }

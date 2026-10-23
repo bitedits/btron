@@ -514,7 +514,8 @@ static void msx_sync_menu_state(MsxViewer *st)
 
     if (st->running)
         snprintf(buf, sizeof(buf), "%s | %s",
-                 msx_basename(st->path), st->paused ? "停止" : "実行");
+                 msx_basename(st->path),
+                 dsk_menu_active() ? "ディスク" : (st->paused ? "停止" : "実行"));
     else
         snprintf(buf, sizeof(buf), "ROM 無し (%d 本)", st->rom_count);
     app_menu_set_right_text(&st->menu_bar, buf);
@@ -610,7 +611,11 @@ static void msx_draw_status(const MsxViewer *st, GDEV *dev)
     drw_lin(dev, 0, (H)(dev->height - MSX_STATUS_H), dev->width,
             (H)(dev->height - MSX_STATUS_H));
 
-    if (st->running)
+    if (st->running && dsk_menu_active())
+        snprintf(msg, sizeof(msg),
+                 "B-MSX | %s | ディスク | Up Down Enter",
+                 msx_basename(st->path));
+    else if (st->running)
         snprintf(msg, sizeof(msg),
                  "B-MSX | %s | T=%llu T-states | %s | 矢印=ジョイスティックA"
                  "  Z=ボタンA  X=ボタンB",
@@ -766,6 +771,14 @@ static const MsxKeyMap s_keymap[] = {
 static void msx_key(MsxViewer *st, UW key, BOOL down)
 {
     uint8_t row, col;
+
+    /* The disk panel owns Up, Down and Enter until a file is started.
+     * The menu bar still sees its keys first, in msx_handle_event. */
+    if (down && dsk_menu_active()) {
+        if (key == BTRON_KEY_UP) { dsk_menu_key(0); return; }
+        if (key == BTRON_KEY_DOWN) { dsk_menu_key(1); return; }
+        if (key == BTRON_KEY_RETURN) { dsk_menu_key(2); return; }
+    }
 
     /* F2 belongs to the menu bar (app_menu_handle_key), so the MSX F2 cell is
      * not reachable and stays out of the table. */

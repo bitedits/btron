@@ -559,6 +559,12 @@ uint8_t v9938_read(v9938_t *v, uint8_t port)
             v->irq_pending = 0;
         } else if (sreg == 1) {
             v->stat[1] &= 0xFEu; /* clear line interrupt flag */
+        } else if (sreg == 2) {
+            /* HR is the beam, not a latch. The blank is the tail of the
+             * 228-cycle line, so a palette write can wait for it. */
+            if (v->t_line >= 168u) v->stat[2] |= ST_HR;
+            else v->stat[2] &= (uint8_t)~ST_HR;
+            ret = v->stat[2];
         }
         return ret;
     }
@@ -666,12 +672,14 @@ void v9938_advance(v9938_t *v, uint32_t t_states)
         v->t_line -= MSX_T_PER_LINE;
         v->line = (uint16_t)((v->line + 1u) % MSX_LINES);
 
-        /* Line interrupt (R19 / IE1) */
-        if (v->regs[0] & R0_IE1) {
+        /* FH (status 1 bit 0) follows R#19 even when the line interrupt
+         * is masked. IE1 only raises the IRQ. A poll of that bit must
+         * see it, or a raster wait never finishes. */
+        {
             uint16_t int_line = (uint16_t)((v->regs[19] + (v->regs[23] & 0xFF)) % 256u);
             if (v->line == int_line) {
                 v->stat[1] |= 0x01u;
-                v->irq_pending = 1;
+                if (v->regs[0] & R0_IE1) v->irq_pending = 1;
             }
         }
 

@@ -571,9 +571,21 @@ uint8_t slots_ram_ssec(void)
 void slots_map_com_pages(void)
 {
     uint8_t ram = slots_ram_ssec();
-    /* Two bits per page: RAM, disk, RAM, RAM. Disk stays in page 1. */
-    sub[3] = (uint8_t)(ram | (3u << 2) | (ram << 4) | (ram << 6));
+    /* Same secondary on every page. Page 1 must be this RAM: the COM
+     * reads that slot id and the vblank hook calls back through it. */
+    sub[3] = (uint8_t)(ram | (ram << 2) | (ram << 4) | (ram << 6));
     ppi_a = 0xFFu;
+    remap();
+}
+
+void slots_map_bios_ram(void)
+{
+    uint8_t ram = slots_ram_ssec();
+    /* Page 0 stays the main BIOS, so RST $30 and CALL $0024 are the real
+     * entries. Pages 1-3 are the mapper: a BLOAD image lives at $8000 or
+     * above and banks page 2 through port $FE. */
+    sub[3] = (uint8_t)(ram | (ram << 2) | (ram << 4) | (ram << 6));
+    ppi_a = 0xFCu;
     remap();
 }
 

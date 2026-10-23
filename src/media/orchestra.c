@@ -549,26 +549,6 @@ void orch_cmd_latency_text(void)
     right_ms(ms);
 }
 
-int orch_cmd_smf_load(void)
-{
-    OrchView *v = gst_view();
-    orch_check(v != 0, __LINE__);
-    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
-    if (!v) return 0;
-    orch_status_hold("smf");
-    return 0;
-}
-
-int orch_cmd_smf_save(void)
-{
-    OrchView *v = gst_view();
-    orch_check(v != 0, __LINE__);
-    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
-    if (!v) return 0;
-    orch_status_hold("smf");
-    return 0;
-}
-
 int orch_cmd_wav(void)
 {
     OrchView *v = gst_view();

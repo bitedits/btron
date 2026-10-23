@@ -288,6 +288,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/media/orchestra_insert.c \
               src/media/orchestra_about.c \
               src/media/orchestra_session.c \
+              src/media/orchestra_smf.c \
               src/media/gst_rt.c       \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
@@ -574,6 +575,7 @@ COMMON_NO_SDL_SRCS = \
     src/media/orchestra_insert.c \
     src/media/orchestra_about.c \
     src/media/orchestra_session.c \
+    src/media/orchestra_smf.c \
     src/media/gst_rt.c     \
     src/apps/chat.c        \
     src/apps/chat_xml.c    \
@@ -3412,6 +3414,7 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/media/orchestra_insert.c \
                        src/media/orchestra_about.c \
                        src/media/orchestra_session.c \
+                       src/media/orchestra_smf.c \
                        src/media/gst_rt.c \
                        src/apps/chat.c \
                        src/apps/chat_xml.c \

@@ -173,8 +173,10 @@ device queue  ── SDL_QueueAudio (QEMU/POSIX host-backed)
           period (2–4 periods is the comfortable band on the host backend). This is the audio-side twin of
           B-Core's counted-drop discipline: an unpaced writer does not corrupt the stream, it just grows the
           latency, and telemetry makes that visible. The Control Panel's real-time target is a 128-sample
-          low-latency buffer (2.6 ms at 48 kHz); the DAW requirement in <code>doc/md/DAW.md</code> is a
-          round-trip of ≤ 5–8 ms with 44.1/48/96 kHz at 16/24/32-bit, direct (bypass) VirtIO-Sound access.
+          low-latency buffer (2.6 ms at 48 kHz). Orchestra
+          (<code>doc/txt/ORCHESTRA.txt</code>) measures acoustic latency from the
+          queue; a 5–8 ms round trip is not a property of the 1024-frame host
+          period, and the wire format is S16 at 44100 or 48000 Hz.
         </p>
       </section>
 

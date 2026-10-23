@@ -62,6 +62,8 @@ typedef struct {
     float  am_freq;
     float  am_phase;
     float  am_depth;
+    uint8_t bus;
+    uint8_t note_key;
 } SynthVoice;
 
 static SynthVoice s_voices[MAX_VOICES];
@@ -72,6 +74,7 @@ static float      s_track_time = 0.0f;
 static float      s_next_step_time = 0.0f;
 static int        s_track_step = 0;
 static bool       s_virtio_opened = false;
+static int        s_audio_owner = 0;
 
 /* Timeline (1:1 index.html) track state. The UI thread only bumps
  * s_track_gen; the audio thread applies it in timeline_tick(). */
@@ -167,9 +170,12 @@ void lilcu64_shim_pulse_bell(float vol_mul, float pitch_mul) {
     v->freq = 440.0f * pitch_mul;
     v->phase_inc = (float)(2.0 * M_PI * v->freq / (double)s_sample_rate);
     v->fm_ratio = 2.76f;
-    v->fm_index = 2.2f;
+    v->fm_index = 1.8f;
     v->amp = 0.20f * vol_mul;
     v->decay_rate = 1.0f / (1.8f * (float)s_sample_rate);
+    v->pan = 0.0f;
+    v->bus = wa_current_bus();
+    v->note_key = wa_current_key();
 }
 
 void lilcu64_shim_waddle(float pitch, float vol_mul) {
@@ -321,20 +327,6 @@ static void timeline_tick(void) {
 
 #define RENDER_BLOCK 32
 
-static inline float master_soft_clamp(float x) {
-    if (x > 1.25f) return 1.0f;
-    if (x < -1.25f) return -1.0f;
-    if (x > 0.85f) {
-        float d = x - 0.85f;
-        return 0.85f + d / (1.0f + d * 2.5f);
-    }
-    if (x < -0.85f) {
-        float d = -x - 0.85f;
-        return -(0.85f + d / (1.0f + d * 2.5f));
-    }
-    return x;
-}
-
 static void render_block(int16_t *out_pcm, size_t frames) {
     float wa_mix[RENDER_BLOCK];
     memset(wa_mix, 0, sizeof(wa_mix));
@@ -352,7 +344,7 @@ static void render_block(int16_t *out_pcm, size_t frames) {
 
         for (int i = 0; i < MAX_VOICES; i++) {
             SynthVoice *v = &s_voices[i];
-            if (!v->active) continue;
+            if (!v->active || v->bus != 0) continue;
 
             float raw = 0.0f;
 
@@ -442,6 +434,7 @@ static void render_block(int16_t *out_pcm, size_t frames) {
 }
 
 void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
+    if (s_audio_owner) return;
     if (!out_pcm || frames == 0) return;
     size_t off = 0;
     while (off < frames) {
@@ -456,6 +449,7 @@ void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames) {
 
 int lilcu64_synth_pump_virtio(size_t frames) {
     static volatile int s_pumping = 0;
+    if (s_audio_owner) return 0;
     if (s_pumping) {
         return 0; /* Already pumping */
     }
@@ -505,7 +499,13 @@ int lilcu64_synth_pump_virtio(size_t frames) {
 
 /* ── Lifecycle & Controls ─────────────────────────────────────────── */
 
+void lilcu64_set_audio_owner(int owner)
+{
+    s_audio_owner = owner ? 1 : 0;
+}
+
 int lilcu64_synth_init(uint32_t sample_rate) {
+    if (s_audio_owner) return 0;
     s_sample_rate = sample_rate ? sample_rate : LILCU64_AUDIO_RATE;
     memset(s_voices, 0, sizeof(s_voices));
     s_active_track = 0;
@@ -527,6 +527,7 @@ int lilcu64_synth_init(uint32_t sample_rate) {
 }
 
 void lilcu64_synth_close(void) {
+    if (s_audio_owner) return;
     s_active_track = 0;
     memset(s_voices, 0, sizeof(s_voices));
     if (s_virtio_opened) {
@@ -598,4 +599,49 @@ float lilcu64_synth_get_track_time(void) {
         return (float)t;
     }
     return s_track_time;
+}
+
+static float voice_step(SynthVoice *v)
+{
+    float raw = 0.0f;
+    float mono;
+    if (!v || !v->active) return 0.0f;
+    if (v->wave_type == VOICE_WAVE_FM_BELL) {
+        raw = sinf(v->phase + sinf(v->fm_phase) * v->fm_index);
+        v->fm_phase += v->phase_inc * v->fm_ratio;
+        if (v->fm_phase >= (float)(2.0 * M_PI)) v->fm_phase -= (float)(2.0 * M_PI);
+    } else if (v->wave_type == VOICE_WAVE_SINE) {
+        raw = sinf(v->phase);
+    } else {
+        raw = 0.0f;
+    }
+    mono = raw * v->amp;
+    v->phase += v->phase_inc;
+    if (v->phase >= (float)(2.0 * M_PI)) v->phase -= (float)(2.0 * M_PI);
+    v->amp -= v->decay_rate;
+    if (v->amp <= 0.0001f) v->active = false;
+    return mono;
+}
+
+void lilcu64_voice_mix_float(uint8_t bus, float *mono, size_t frames)
+{
+    int i;
+    if (!mono || frames == 0 || frames > RENDER_BLOCK) return;
+    for (i = 0; i < MAX_VOICES; i++) {
+        size_t n;
+        if (!s_voices[i].active || s_voices[i].bus != bus) continue;
+        for (n = 0; n < frames; n++) mono[n] += voice_step(&s_voices[i]);
+    }
+}
+
+void lilcu64_voice_release(uint8_t bus, uint8_t key)
+{
+    int i;
+    for (i = 0; i < MAX_VOICES; i++) {
+        if (!s_voices[i].active) continue;
+        if (s_voices[i].bus == bus && s_voices[i].note_key == key) {
+            s_voices[i].amp = 0.0f;
+            s_voices[i].active = false;
+        }
+    }
 }

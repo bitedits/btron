@@ -63,8 +63,21 @@ void    wa_set_reverb(int enabled, float room_size, float damping, float feedbac
 /* Stereo rendering with optional deep reverb and spatial feedback delay */
 void    wa_render_stereo(float *out_l, float *out_r, size_t frames);
 
-/* Adds `frames` mono samples of all scheduled nodes into `mono` and advances the clock. */
+/* Adds `frames` mono samples of bus 0 into `mono` and advances the clock. */
 void    wa_render(float *mono, size_t frames);
+
+/* Planes are contiguous: plane b starts at mono + b * frames. No reverb. */
+void    wa_render_buses(const uint8_t *buses, int nb, float *mono, size_t frames);
+int64_t wa_clock_samples(void);
+void    wa_set_clock_samples(int64_t samples);
+void    wa_set_node_bus(uint8_t bus);
+void    wa_set_note_key(uint8_t key);
+uint8_t wa_current_bus(void);
+uint8_t wa_current_key(void);
+void    wa_release_bus_key(uint8_t bus, uint8_t key);
+void    wa_reverb_process(const float *dry, float *out_l, float *out_r, size_t n);
+void    wa_reverb_save(void);
+void    wa_reverb_restore(void);
 
 #ifdef __cplusplus
 }

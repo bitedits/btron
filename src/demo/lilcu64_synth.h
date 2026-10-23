@@ -14,6 +14,22 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Moved unchanged from lilcu64_synth.c so the desk and the demo share one body. */
+static inline float master_soft_clamp(float x)
+{
+    if (x > 1.25f) return 1.0f;
+    if (x < -1.25f) return -1.0f;
+    if (x > 0.85f) {
+        float d = x - 0.85f;
+        return 0.85f + d / (1.0f + d * 2.5f);
+    }
+    if (x < -0.85f) {
+        float d = -x - 0.85f;
+        return -(0.85f + d / (1.0f + d * 2.5f));
+    }
+    return x;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -52,6 +68,13 @@ void lilcu64_synth_render_frames(int16_t *out_pcm, size_t frames);
 
 /* Pumps rendered audio buffer into virtio_sound_write() if available */
 int  lilcu64_synth_pump_virtio(size_t frames);
+
+/* Orchestra owns the device. init, pump, close and render then return. */
+void lilcu64_set_audio_owner(int owner);
+
+/* Mono sum of one bus. No 30000/32767 and no int16. Advances those voices. */
+void lilcu64_voice_mix_float(uint8_t bus, float *mono, size_t frames);
+void lilcu64_voice_release(uint8_t bus, uint8_t key);
 
 #ifdef __cplusplus
 }

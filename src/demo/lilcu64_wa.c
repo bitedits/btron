@@ -36,6 +36,8 @@ typedef struct {
 
 struct WaNode {
     uint8_t used;
+    uint8_t bus;
+    uint8_t midi_key;
     uint8_t type;
     uint8_t ftype;
     uint8_t ngev, nfev, nqev;
@@ -53,6 +55,14 @@ struct WaNode {
 static WaNode   s_nodes[WA_MAX_NODES];
 static uint32_t s_sr = 44100;
 static int64_t  s_clock = 0;
+static uint8_t  s_cur_bus = 0;
+static uint8_t  s_cur_key = 0;
+static int      s_list_mode = 0;
+static const uint8_t *s_bus_list = 0;
+static int      s_bus_n = 0;
+static float   *s_plane_base = 0;
+static size_t   s_plane_stride = 0;
+static size_t   s_plane_off = 0;
 
 /* Shared 2-second white noise buffer (getNoiseBuffer() in index.html) */
 #define WA_NOISE_LEN (44100 * 2)
@@ -93,8 +103,10 @@ WaNode *wa_osc(int type, double t_start, double t_stop) {
         WaNode *n = &s_nodes[i];
         if (n->used) continue;
         memset(n, 0, sizeof(*n));
-        n->used    = 1;
-        n->type    = (uint8_t)type;
+        n->used     = 1;
+        n->bus      = s_cur_bus;
+        n->midi_key = s_cur_key;
+        n->type     = (uint8_t)type;
         n->t_start = t_start;
         n->s_start = (int64_t)llround(t_start * (double)s_sr);
         n->s_stop  = (int64_t)llround(t_stop * (double)s_sr);
@@ -371,6 +383,19 @@ static inline void reverb_process(const float *dry, float *out_l, float *out_r, 
     }
 }
 
+static int bus_plane(uint8_t bus)
+{
+    int i;
+    int n;
+    if (!s_bus_list || s_bus_n <= 0) return -1;
+    n = s_bus_n;
+    if (n > 66) n = 66;
+    for (i = 0; i < n; i++) {
+        if (s_bus_list[i] == bus) return i;
+    }
+    return -1;
+}
+
 static void render_block(float *out, size_t n) {
     const int64_t b0 = s_clock, b1 = s_clock + (int64_t)n;
     const double  sr = (double)s_sr;
@@ -378,6 +403,11 @@ static void render_block(float *out, size_t n) {
     for (int k = 0; k < WA_MAX_NODES; k++) {
         WaNode *nd = &s_nodes[k];
         if (!nd->used) continue;
+        if (s_list_mode) {
+            if (bus_plane(nd->bus) < 0) continue;
+        } else if (nd->bus != 0) {
+            continue;
+        }
         if (nd->s_stop <= b0) { nd->used = 0; continue; }
         if (nd->s_start >= b1) continue;
 
@@ -418,7 +448,15 @@ static void render_block(float *out, size_t n) {
                 nd->z2 = nd->b2 * x - nd->a2 * y;
                 x = y;
             }
-            out[i] += x * g;
+            if (!s_list_mode) {
+                out[i] += x * g;
+            } else {
+                int p = bus_plane(nd->bus);
+                if (p >= 0 && s_plane_base) {
+                    float *dst = s_plane_base + (size_t)p * s_plane_stride + s_plane_off;
+                    dst[i] += x * g;
+                }
+            }
             g += dg;
             f += df;
         }
@@ -465,4 +503,75 @@ void wa_render(float *mono, size_t frames) {
         }
         off += n;
     }
+}
+
+int64_t wa_clock_samples(void)
+{
+    return s_clock;
+}
+
+void wa_set_clock_samples(int64_t samples)
+{
+    if (samples < 0) samples = 0;
+    s_clock = samples;
+}
+
+void wa_set_node_bus(uint8_t bus) { s_cur_bus = bus; }
+void wa_set_note_key(uint8_t key) { s_cur_key = key; }
+uint8_t wa_current_bus(void) { return s_cur_bus; }
+uint8_t wa_current_key(void) { return s_cur_key; }
+
+void wa_release_bus_key(uint8_t bus, uint8_t key)
+{
+    int i;
+    for (i = 0; i < WA_MAX_NODES; i++) {
+        if (s_nodes[i].used && s_nodes[i].bus == bus && s_nodes[i].midi_key == key) {
+            s_nodes[i].used = 0;
+        }
+    }
+}
+
+void wa_reverb_process(const float *dry, float *out_l, float *out_r, size_t n)
+{
+    if (!dry || !out_l || !out_r || n == 0) return;
+    reverb_process(dry, out_l, out_r, n);
+}
+
+static WaReverb s_reverb_snap;
+static int s_reverb_have = 0;
+
+void wa_reverb_save(void)
+{
+    s_reverb_snap = s_reverb;
+    s_reverb_have = 1;
+}
+
+void wa_reverb_restore(void)
+{
+    if (!s_reverb_have) return;
+    s_reverb = s_reverb_snap;
+}
+
+void wa_render_buses(const uint8_t *buses, int nb, float *mono, size_t frames)
+{
+    size_t off = 0;
+    if (!buses || nb <= 0 || !mono || frames == 0) return;
+    if (nb > 66) nb = 66;
+    if (frames > 8192) frames = 8192;
+    s_list_mode = 1;
+    s_bus_list = buses;
+    s_bus_n = nb;
+    s_plane_base = mono;
+    s_plane_stride = frames;
+    while (off < frames) {
+        size_t n = frames - off;
+        if (n > WA_CTRL) n = WA_CTRL;
+        s_plane_off = off;
+        render_block(mono, n);
+        s_clock += (int64_t)n;
+        off += n;
+    }
+    s_list_mode = 0;
+    s_bus_list = 0;
+    s_bus_n = 0;
 }

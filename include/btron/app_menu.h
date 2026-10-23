@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define APP_MENU_MAX_HEADERS     8
-#define APP_MENU_MAX_ITEMS       16
+#define APP_MENU_MAX_ITEMS       20
 #define APP_MENU_BAR_HEIGHT      21
 #define APP_MENU_ROW_HEIGHT      22
 #define APP_MENU_DROPDOWN_WIDTH  340

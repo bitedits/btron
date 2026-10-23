@@ -43,6 +43,9 @@
 #include <btron/fs/vol_api.h>
 #include <libstr.h>
 
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
+
 #include "ps2_gs.h"
 #include "ps2_gif_ring.h"
 #include "ps2_paint_worker.h"   /* Application paint budget policy and slicing */
@@ -15199,6 +15202,9 @@ static void ps2_gui_pass(GDEV *screen)
             ps2_cycle_why(PS2_CYCLE_WHY_EVENT);
         }
     }
+
+    orchestra_ui_tick();
+    cassette_service();
 
 #if BTRON_HID_TRACE
     ps2_log_usb_state('G');

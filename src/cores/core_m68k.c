@@ -34,6 +34,9 @@
 #include <btron/apps.h>
 #include <libstr.h>
 
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Macintosh Quadra 800 Hardware Memory Map
  * ═══════════════════════════════════════════════════════════════════ */
@@ -737,6 +740,9 @@ void m68k_kernel_main(void) {
             workbench_process_event(screen, &ev);
             need_redraw = 1;
         }
+
+        orchestra_ui_tick();
+        cassette_service();
 
         /* D. Redraw when state changed or periodic clock update */
         if (s_system_ticks - last_clock_tick >= 60) {

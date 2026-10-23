@@ -279,8 +279,15 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/clarity_export.c \
               src/apps/audio_player.c  \
               src/apps/b_drivesetup.c  \
-              src/apps/orchestra.c     \
-              src/apps/orchestra_session.c \
+              src/media/orchestra.c     \
+              src/media/orchestra_stage.c \
+              src/media/orchestra_arrange.c \
+              src/media/orchestra_piano.c \
+              src/media/orchestra_score.c \
+              src/media/orchestra_mix.c \
+              src/media/orchestra_insert.c \
+              src/media/orchestra_about.c \
+              src/media/orchestra_session.c \
               src/media/gst_rt.c       \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
@@ -558,8 +565,15 @@ COMMON_NO_SDL_SRCS = \
     src/apps/gterm.c       \
     src/apps/t_editor.c    \
     src/apps/audio_player.c \
-    src/apps/orchestra.c   \
-    src/apps/orchestra_session.c \
+    src/media/orchestra.c   \
+    src/media/orchestra_stage.c \
+    src/media/orchestra_arrange.c \
+    src/media/orchestra_piano.c \
+    src/media/orchestra_score.c \
+    src/media/orchestra_mix.c \
+    src/media/orchestra_insert.c \
+    src/media/orchestra_about.c \
+    src/media/orchestra_session.c \
     src/media/gst_rt.c     \
     src/apps/chat.c        \
     src/apps/chat_xml.c    \
@@ -803,7 +817,7 @@ test-termios: $(TEST_TERMIOS_BIN) btron_sys.vol btron_anders.vol
 
 # ── Clarity DTP Frame & Control tests ────────────────────────────────
 TEST_CLARITY_BIN = ./.build/test_clarity_frames
-$(TEST_CLARITY_BIN): verify/tests/test_clarity_frames.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
+$(TEST_CLARITY_BIN): verify/tests/test_clarity_frames.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/media/orchestra.posix.o src/media/orchestra_stage.posix.o src/media/orchestra_arrange.posix.o src/media/orchestra_piano.posix.o src/media/orchestra_score.posix.o src/media/orchestra_mix.posix.o src/media/orchestra_insert.posix.o src/media/orchestra_about.posix.o src/media/orchestra_session.posix.o src/media/gst_rt.posix.o src/demo/lilcu64_wa.posix.o src/demo/lilcu64_score.posix.o src/demo/lilcu64_synth.posix.o src/demo/lilcu64_insert.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
 	$(CC) $(CFLAGS) -Isrc $^ -o $@ $(LDFLAGS) $(SDL_LIBS)
 
 test-clarity: $(TEST_CLARITY_BIN)
@@ -812,7 +826,7 @@ test-clarity: $(TEST_CLARITY_BIN)
 
 # ── Clarity Hypermedia & DND tests ──────────────────────────────────
 TEST_CLARITY_HYPERMEDIA_BIN = ./.build/test_clarity_hypermedia
-$(TEST_CLARITY_HYPERMEDIA_BIN): verify/tests/test_clarity_hypermedia.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/apps/orchestra.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
+$(TEST_CLARITY_HYPERMEDIA_BIN): verify/tests/test_clarity_hypermedia.c src/graphics/image_decode.posix.o src/window/dnd.posix.o src/apps/clarity.posix.o src/apps/clarity_layout.posix.o src/apps/clarity_render.posix.o src/apps/clarity_export.posix.o src/window/wnd.posix.o src/window/app_menu.posix.o src/window/event.posix.o src/graphics/dp_core.posix.o src/graphics/icons_bundle.posix.o src/font/troncode.posix.o src/font/jis_fonts.posix.o src/font/tibetan_fonts.posix.o src/font/font_mgr.posix.o src/cores/core_posix.posix.o src/cores/core_init.posix.o src/drivers/virtio/virtio.posix.o src/vobject/vobj.posix.o src/desktop/desktop.posix.o src/desktop/workbench.posix.o src/desktop/tracker.posix.o src/desktop/about.posix.o src/desktop/global_menu.posix.o src/apps/vobj_manager.posix.o src/apps/tad_browser.posix.o src/apps/gterm.posix.o src/apps/t_editor.posix.o src/apps/audio_player.posix.o src/apps/b_drivesetup.posix.o src/media/orchestra.posix.o src/media/orchestra_stage.posix.o src/media/orchestra_arrange.posix.o src/media/orchestra_piano.posix.o src/media/orchestra_score.posix.o src/media/orchestra_mix.posix.o src/media/orchestra_insert.posix.o src/media/orchestra_about.posix.o src/media/orchestra_session.posix.o src/media/gst_rt.posix.o src/demo/lilcu64_wa.posix.o src/demo/lilcu64_score.posix.o src/demo/lilcu64_synth.posix.o src/demo/lilcu64_insert.posix.o src/apps/chat.posix.o src/apps/chat_xml.posix.o src/settings/language.posix.o src/settings/control_panel.posix.o src/settings/appearance.posix.o src/settings/desktop.posix.o src/settings/display.posix.o src/settings/input.posix.o src/settings/sound.posix.o src/settings/network.posix.o src/settings/media.posix.o src/settings/security.posix.o src/settings/system.posix.o src/settings/terminal.posix.o src/hmi/hmi_core.posix.o src/hmi/hmi_switch.posix.o src/hmi/hmi_selector.posix.o src/hmi/hmi_volume.posix.o src/hmi/hmi_meter.posix.o src/hmi/hmi_controller.posix.o src/hmi/hmi_panel.posix.o src/tip/mozc_kkc.posix.o src/tip/tip_ife.posix.o src/tip/tip_task.posix.o src/tip/tip_vobj.posix.o src/tip/wylie.posix.o src/tip/tibetan_dict.posix.o src/fs/blk_mem.posix.o src/fs/blk_file.posix.o src/fs/blk_qcow2.posix.o src/fs/blk_part.posix.o src/fs/vol.posix.o src/fs/file.posix.o $(CLU_APPS_POSIX_OBJS) src/clu/clu.posix.o
 	$(CC) $(CFLAGS) -Iinclude -Isrc $^ -o $@ $(LDFLAGS) $(SDL_LIBS)
 
 test-clarity-hypermedia: $(TEST_CLARITY_HYPERMEDIA_BIN)
@@ -3389,8 +3403,15 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/paint.c \
                        src/apps/gterm.c \
                        src/apps/audio_player.c \
-                       src/apps/orchestra.c \
-                       src/apps/orchestra_session.c \
+                       src/media/orchestra.c \
+                       src/media/orchestra_stage.c \
+                       src/media/orchestra_arrange.c \
+                       src/media/orchestra_piano.c \
+                       src/media/orchestra_score.c \
+                       src/media/orchestra_mix.c \
+                       src/media/orchestra_insert.c \
+                       src/media/orchestra_about.c \
+                       src/media/orchestra_session.c \
                        src/media/gst_rt.c \
                        src/apps/chat.c \
                        src/apps/chat_xml.c \

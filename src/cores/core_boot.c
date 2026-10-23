@@ -19,6 +19,9 @@
 #include <drivers/pc98_mouse.h>
 #include <btron/libc_shim.h>
 
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
+
 #define MULTIBOOT_HEADER_MAGIC 0x1BADB002
 #define MULTIBOOT_HEADER_FLAGS 0x00000003
 
@@ -506,6 +509,9 @@ static void launch_vesa_desktop_session(int active_cores) {
             workbench_process_event(dt->screen, &ev);
             need_redraw = 1;
         }
+
+        orchestra_ui_tick();
+        cassette_service();
 
 #if defined(BTRON_UEFI_TARGET)
         /* Dispatch tasks in the UEFI scheduler (Local APIC timer driven) */

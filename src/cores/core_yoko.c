@@ -36,6 +36,9 @@
 #include <libstr.h>
 #include <dwc2.h>
 
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Raspberry Pi 2B (BCM2836 ARMv7) Hardware Memory Map
  * ═══════════════════════════════════════════════════════════════════ */
@@ -537,6 +540,9 @@ void btron_main(void) {
             workbench_process_event(screen, &ev);
             need_redraw = 1;
         }
+
+        orchestra_ui_tick();
+        cassette_service();
 
         /* D. Redraw when state changed or periodic clock update (1 Hz) */
         if (s_system_ticks - last_clock_tick >= 60) {

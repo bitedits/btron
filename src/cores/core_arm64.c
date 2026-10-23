@@ -44,6 +44,9 @@
 #include <pcie.h>
 #include <xhci.h>
 
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Dynamic Hardware Memory Map (Pi 3B: 0x3F000000, Pi 4B: 0xFE000000)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -1870,6 +1873,9 @@ static void launch_pi4_desktop_session(uint32_t *gpu_fb)
                     s_present_fast_key_update = 1;
             }
         }
+
+        orchestra_ui_tick();
+        cassette_service();
 
         if (wnd_mgr_flush_resize()) {
             /* The resize lands here, not in the dispatch, and rsz_wnd re-opened

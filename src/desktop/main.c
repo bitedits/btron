@@ -24,6 +24,8 @@ extern WND* open_audio_player_window(void);
 extern WND* launch_beos_chat(void);
 extern WND* open_glgears_window(void);
 __attribute__((weak)) extern WND* open_lilcu64_demo_window(void);
+extern void orchestra_ui_tick(void);
+extern void cassette_service(void);
 
 extern BOOL init_sdl_backend(H width, H height, const char *title);
 extern void flush_gdev_to_sdl(GDEV *dev);
@@ -257,6 +259,9 @@ int main(int argc, char **argv) {
                 }
             }
         }
+
+        orchestra_ui_tick();
+        cassette_service();
 
         if (about_is_animating()) {
             WND *aw = about_get_wnd();

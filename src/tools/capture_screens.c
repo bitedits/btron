@@ -26,6 +26,12 @@
 #include <btron/tip.h>
 #include <btron/t_editor.h>
 #include <device/virtio.h>
+/* The desk's own private header: it declares the seven window openers, the
+ * shared painters' helpers and orch_inval_all(), and it pulls in
+ * <apps/orchestra.h> -> <media/gst_rt.h> for OrchView.  Declaring the openers
+ * again here would be a second copy of a signature that orchestra_*.c already
+ * owns, which is how the desk drifts. */
+#include "../media/orchestra_desk.h"
 
 /* Forward declarations for Settings applet window openers */
 extern WND* open_control_panel_window(void);
@@ -305,6 +311,122 @@ static WND* open_isolated_chat_roster(void) {
     return open_chat_main_window(client);
 }
 
+/* ── Orchestra: the whole stage desk shown as one composition ──────────────
+ *
+ * Every Orchestra window below is captured with the desk album's first track
+ * loaded: SYS/bells.orch, which is "鐘のキャロル (Carol of the Bells)",
+ * 168 BPM, 3/4 — src/tools/album_encode.c names it piece 1 and then copies the
+ * file onto SYS/orchestra.orch, so orch_cmd_open_at(1) loads exactly what the
+ * desk boots with.  Opening reads through the host filesystem, and pick_host()
+ * falls back from /SYS to SYS/, so `make screenshots` has to run at the repo
+ * root; if it cannot read the 73408-byte session the load is refused and
+ * v->refuse_session says so.
+ *
+ * The playhead needs the transport to read as playing.  Piano, Arrange and
+ * Score chase it in time_follow(), which returns early unless v->state is
+ * ORCH_GST_PLAYING — parked at the middle of the piece with the view scrolled
+ * to the start would paint no yellow bar and no notes from the middle of the
+ * song.  This link has no audio backend (virtio_sound_open() is a stub above
+ * and virtio_sound_is_ready() is false), which is why gst_rt_set_state() would
+ * refuse PLAYING here; the state is therefore written directly, inside the same
+ * seqlock pair the desk uses for every other mutation of the view.  Nothing
+ * starts rendering — only the position moves, which is the whole picture.
+ *
+ * Piano and Score show one part at a time — the selected one.  At the exact
+ * midpoint of this arrangement every chime voice is holding a single long note,
+ * so those two windows are captured with the voice that is actually moving
+ * there: track 13, "Crystal step", the waddle bass (E2–B2–E3), one of the four
+ * signature shims of the piece.  The other windows stay on the session default,
+ * track 0, because the Arrange window centres its lane list on the selected
+ * track and the eight "Crystal chime" canon lanes are the picture to show.
+ * The part each shot uses is the third column of the table in
+ * capture_orchestra_desk(), which is where the selection is applied. */
+static int orchestra_load_carol(void) {
+    OrchView *v;
+    uint32_t half;
+
+    if (!open_orchestra_window()) return 0;   /* boots gst_rt, builds the menu, opens the stage */
+    if (!orch_cmd_open_at(1)) {
+        fprintf(stderr, "[ORCHESTRA] bells.orch refused (cwd is not the repo root?)\n");
+        return 0;
+    }
+    v = gst_view();
+    if (!v) return 0;
+    orchestra_ui_tick();                      /* publishes loop_tick = span of the last note */
+    half = v->loop_tick / 2u;
+    gst_seq_begin();
+    v->npos = gst_sample_of_tick(half, v->sample_rate, v->tempo, v->den);
+    v->state = ORCH_GST_PLAYING;
+    gst_seq_end();
+    /* The stage's status line is a snapshot of the view, so it has to be
+     * republished after the state write or the transport button and the text
+     * under it disagree.  orch_publish_idle() is the desk's own formatter. */
+    orch_publish_idle();
+    orch_inval_all();
+    printf("[ORCHESTRA] Carol of the Bells: %u tracks, %u events, playhead tick %u of %u\n",
+           (unsigned)v->track_count, (unsigned)v->event_count, half, (unsigned)v->loop_tick);
+    return 1;
+}
+
+static void capture_orchestra_desk(GDEV *dev) {
+    typedef WND *(*OrchOpener)(void);
+
+    /* The window, the file it lands in, and the part the desk is left on for
+     * that shot.  Piano and Score paint the selected part and nothing else, so
+     * they take track 13 — the waddle bass, the voice still moving at the
+     * midpoint of the piece.  The rest keep track 0: it is the session default,
+     * and row_reveal() in orchestra_arrange.c only re-centres the lane list when
+     * the selection leaves the visible window, so track 0 is what keeps the
+     * eight "Crystal chime" canon lanes on screen. */
+    static const struct {
+        OrchOpener open;
+        const char *name;
+        int part;
+    } shot[] = {
+        { orch_open_stage,   "Orchestra_Application",  0 },
+        { orch_open_arrange, "Orchestra_Arrange",      0 },
+        { orch_open_piano,   "Orchestra_Piano",       13 },
+        { orch_open_score,   "Orchestra_Score",       13 },
+        { orch_open_mix,     "Orchestra_Mix",          0 },
+        { orch_open_insert,  "Orchestra_Insert",       0 }
+    };
+    enum { ORCH_SHOTS = 6 };
+    OrchView *v;
+
+    if (!orchestra_load_carol()) return;
+    v = gst_view();
+    if (!v) return;
+
+    for (int i = 0; i < ORCH_SHOTS; i++) {
+        char path[96];
+        WND *w;
+
+        /* One window per canvas.  dump_window_rect() crops the framebuffer, and
+         * the desk windows cascade over each other, so two of them in the same
+         * shot would overwrite.  The stage is the exception: it is already open
+         * and registered by orchestra_load_carol(), and reset_isolation_state()
+         * clears the registry without running on_destroy, which would leave a
+         * later orch_open_stage() returning that stale, unregistered window
+         * instead of building a paintable one.  So each module is opened exactly
+         * once for the whole run, and only the windows after the stage get a
+         * fresh canvas.  The About box is captured with the other About dialogs. */
+        if (i > 0) reset_isolation_state(dev);
+        if (v->selected != shot[i].part) {
+            orch_desk_sel(shot[i].part);
+            orch_inval_all();
+        }
+        w = shot[i].open();
+        if (!w) {
+            fprintf(stderr, "[ORCHESTRA] %s did not open\n", shot[i].name);
+            continue;
+        }
+        redraw_all_windows();
+        snprintf(path, sizeof(path), "/tmp/btron_raw_screens/%s.raw", shot[i].name);
+        printf("[ORCHESTRA] %s: part %d\n", shot[i].name, (int)v->selected);
+        dump_window_rect(dev, w, path);
+    }
+}
+
 /* Cartridges the B-MSX gallery shows. The first row also writes the bare
  * application shot and the opened file menu. Frames are the title card or
  * the first readable scene; one paint after fast-forward does not move them.
@@ -532,13 +654,11 @@ int main(int argc, char **argv) {
             dump_window_rect(dev, w_cas, "/tmp/btron_raw_screens/Cassette_Application.raw");
         }
 
-        /* Orchestra Application Window (Live Stage DAW / MIDI Server) */
+        /* Orchestra stage desk (Live DAW / MIDI server): six windows captured one
+         * at a time, each on the album's first composition with the playhead
+         * parked mid-piece. */
         reset_isolation_state(dev);
-        WND *w_orch = open_orchestra_window();
-        if (w_orch) {
-            redraw_all_windows();
-            dump_window_rect(dev, w_orch, "/tmp/btron_raw_screens/Orchestra_Application.raw");
-        }
+        capture_orchestra_desk(dev);
 
         /* Cross Media Bar (XMB) OpenGL Application Window */
         reset_isolation_state(dev);

@@ -191,12 +191,37 @@ APPS_MAP = {
     "Orchestra.html": [
         {
             "screen": "../img/screens/Orchestra_Application.png",
-            "caption": "実機描画フレームバッファより自動抽出された管弦楽・MIDIオーケストラ演奏画面 (Live Stage MIDI Server & Workstation)",
-            "alt": "管弦楽 (Orchestra Application)"
+            "caption": "実機描画フレームバッファより自動抽出された管弦楽・MIDIオーケストラ演奏画面。アルバム第一曲『Carol of the Bells』を読み込んだ状態のステージ窓 (780×520)。",
+            "alt": "管弦楽 ステージ (Orchestra Stage)"
+        },
+        {
+            "screen": "../img/screens/Orchestra_Arrange.png",
+            "caption": "実機描画フレームバッファより自動抽出されたアレンジ窓 (760×420)。17トラックのイベント線が小節格子に並ぶ。",
+            "alt": "管弦楽 アレンジ (Orchestra Arrange)"
+        },
+        {
+            "screen": "../img/screens/Orchestra_Piano.png",
+            "caption": "実機描画フレームバッファより自動抽出されたピアノ窓 (760×480)。鍵盤・グリッド・ツール行・Undo ボタン。",
+            "alt": "管弦楽 ピアノロール (Orchestra Piano Roll)"
+        },
+        {
+            "screen": "../img/screens/Orchestra_Score.png",
+            "caption": "実機描画フレームバッファより自動抽出されたスコア窓 (720×320)。選択トラックの一段ノートを高位記号つきで描く。",
+            "alt": "管弦楽 スコア (Orchestra Score)"
+        },
+        {
+            "screen": "../img/screens/Orchestra_Mix.png",
+            "caption": "実機描画フレームバッファより自動抽出されたミキサー窓 (780×460)。トラックストリップとマスター列。",
+            "alt": "管弦楽 ミキサー (Orchestra Mixer)"
+        },
+        {
+            "screen": "../img/screens/Orchestra_Insert.png",
+            "caption": "実機描画フレームバッファより自動抽出されたインサート窓 (420×460)。二つのスロットと P1〜P4 のノブ。",
+            "alt": "管弦楽 インサート (Orchestra Insert)"
         },
         {
             "screen": "../img/screens/Orchestra_About.png",
-            "caption": "実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Orchestra)",
+            "caption": "実機描画フレームバッファより自動抽出された透過バージョン情報窓 (520×270)。リサイズ不可の唯一の窓。",
             "alt": "管弦楽 バージョン情報 (About Orchestra)"
         }
     ],
@@ -375,6 +400,20 @@ def strip_screen_section(content):
         count=1,
         flags=re.DOTALL)
 
+def insert_block_at(content, pos, block):
+    """Insert block as its own line before pos, reusing the indent already there.
+
+    The indent is read back from the file instead of being added, so a second run
+    rebuilds byte-identical text and the unmapped pages stop drifting.
+    """
+    line_start = content.rfind("\n", 0, pos) + 1
+    indent = content[line_start:pos]
+    if indent.strip():  # pos sits mid-line; fall back to column zero
+        indent = ""
+    body = "\n".join(indent + ln if ln.strip() else ln
+                     for ln in block.rstrip("\n").split("\n"))
+    return content[:line_start] + body + "\n\n" + content[line_start:]
+
 def remove_screen_section_if_not_mapped(dir_path, mapped_dict):
     for f in os.listdir(dir_path):
         if f.endswith(".html") and f not in mapped_dict:
@@ -425,21 +464,17 @@ def inject_screen_section(filepath, items):
         content = original[:start] + img_block + original[anchor_line:]
     else:
         content = strip_screen_section(original)
-        padded = "    " + img_block
         if OVERVIEW_ANCHOR in content:
-            content = content.replace(OVERVIEW_ANCHOR, padded + "    " + OVERVIEW_ANCHOR, 1)
+            content = insert_block_at(content, content.find(OVERVIEW_ANCHOR), img_block)
         elif "<h2>概要" in content:
             idx = content.find("<h2>概要")
             sec_idx = content.rfind('<div class="section">', 0, idx)
-            if sec_idx != -1:
-                content = content[:sec_idx] + padded + content[sec_idx:]
-            else:
-                content = content.replace("<h2>概要", padded + "<h2>概要", 1)
+            content = insert_block_at(content, sec_idx if sec_idx != -1 else idx, img_block)
         else:
             idx = content.find('class="tagline-card"')
             if idx != -1:
-                end_card = content.find('</div>', idx) + 6
-                content = content[:end_card] + "\n\n" + padded + content[end_card:]
+                end_card = content.find('</div>', idx) + len('</div>')
+                content = content[:end_card] + "\n\n" + img_block.rstrip("\n") + "\n\n" + content[end_card:]
 
     if content != original:
         with open(filepath, "w", encoding="utf-8") as f:

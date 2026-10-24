@@ -3,15 +3,18 @@ ORCHESTRA.txt -- Stage DAW for BTRON
 
 B-System / BTRON 3.20
 Author:  Namdak Tonpa
-Date:    23 October 2026
-Status:  Normative.  The only DAW specification.
+Date:    24 October 2026
+Status:  Normative.  The only DAW specification.  The desk is built.
 Form:    Manuscript of a forthcoming article.
 Related: SOUND.txt, ASYNC.txt, IO.txt,
          doc/pdf/btron-sound.tex,
          doc/md/GST-SYNC-RTP.md,
          b-media/index.html, b-media/audio.html,
          b-media/sound.html,
-         src/apps/orchestra.c,
+         src/media/orchestra.c, src/media/gst_rt.c,
+         src/media/orchestra_session.c, src/media/orchestra_smf.c,
+         include/media/gst_rt.h, include/apps/orchestra.h,
+         include/apps/orch_chk.h,
          include/device/virtio.h.
 
 
@@ -30,13 +33,19 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   фіксованої довжини. Латентність звуку є довжиною черги пристрою. Час, за
   який процесор встигає блок, цієї довжини не замінює.
 
+  Тіло описує зібраний пульт: десять файлів у src/media, одне ядро gst_rt.c і
+  файл сесії, який читається з реального дерева. Стан дерева до цього
+  контракту і план робіт PR 1–11, виконаний повністю, винесені в розділ 18;
+  розділ 18 не є нормативним. Там само лежать імена, які зникли з дерев:
+  src/apps/orchestra.c і рядок фабрики fluidsynth.
+
 Зміст
 -----
 
   1.  Вступ
   2.  Підстава
       2.1  Пристрій
-      2.2  Оболонка
+      2.2  Пульт, який уже є
       2.3  Синтез, який уже є
       2.4  Площини, меню, джерела
   3.  Означення
@@ -50,6 +59,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   6.  Інсерти
   7.  Сесія
       7.1  Файл
+      7.2  Альбом
   8.  Шаблони
       8.1  Rock
       8.2  Classic
@@ -71,8 +81,11 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
  13.  Місце серед DAW
  14.  Межі довіри
  15.  Ризики і перевірка
- 16.  План робіт
+ 16.  Виконаний план
  17.  Джерела
+ 18.  Історія
+      18.1  Оболонка до контракту
+      18.2  План робіт PR 1–11
 
 
 1. Вступ
@@ -86,10 +99,18 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Router, Recorder, Monitor і Scene Manager нею не задаються. Діагностика
   самого Orchestra є текстом на пульті, не окремим продуктом.
 
-  Публічний опис і наявна оболонка розходяться з драйвером і з уже написаним
-  синтезом. Розбіжність не виправляється новим рушієм. Наступний розділ лише
-  називає те, що вже лежить у дереві. Контракт будується на цих іменах і ні
-  на чому раніше не названому.
+  Публічний опис і оболонка, описані в першому читанні цієї статті,
+  розходилися з драйвером і з уже написаним синтезом. Розрив закритий:
+  src/apps/orchestra.c у дереві більше немає, концертний граф і файл сесії
+  зібрані, а b-system/apps/Orchestra.html говорить мовою розділів 2–12. Той
+  стан, якого вже не існує, і план, який його прибрав, винесені в розділ 18 і
+  нормативними не є. Наступний розділ називає те, що лежить у дереві зараз.
+  Контракт будується на цих іменах і ні на чому раніше не названому.
+
+  Заяв поза цим деревом лишається дві, і жодна з них не є властивістю
+  Orchestra. b-media/audio.html називає ціль Control Panel у 128 кадрів;
+  період драйвера з §2.1 — 1024. b-media/sound.html не має companion-моделі, і
+  §2.3 це фіксує.
 
   Правило читання. Анотація підсумовує результат і не є посилкою для тіла. У
   тілі кожне твердження використовує лише імена, формули й межі, вже введені
@@ -124,30 +145,35 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Гц ті самі 1024 кадри тривають 23.2 мс, два періоди — 46.4 мс.
 
 
-2.2 Оболонка
-------------
+2.2 Пульт, який уже є
+---------------------
 
-  src/apps/orchestra.c малює сцену і не веде її звук. У файлі близько 950
-  рядків. Уже оголошені стани GST NULL, READY, PAUSED і PLAYING, масив
-  GstBuffer data з 512 байт, стеля 16 елементів, ORCHESTRA_MAX_PORTS 32, 64
-  доріжки, 16 сцен, вікно 780 на 520 і палітра імен ORCH_COL_*. Поруч із
-  data лежать size, pts, dts і duration. У data кладеться MIDI, не PCM.
+  Пульт лежить у src/media десятьома файлами. Рядки C99, без заголовків.
 
-  Рядок фабрики fluidsynth є іменем у gst_element_factory_make, не
-  бібліотекою. Меню і нижній рядок малюють PTP, MTC Master, буфер 64 семпли,
-  напис 0.8 ms, RTP і ланцюг FluidSynth. Палітра вже містить літерали на
-  кшталт 0xFF0D5F38. Окремий paint малює акорд Cmaj7, Leslie і DMX-cue; це
-  малюнок, не масив нот.
+      orchestra.c            957   меню, тік, команди, layout
+      orchestra_stage.c      409   W_STAGE
+      orchestra_arrange.c   1037   W_ARRANGE
+      orchestra_piano.c      697   W_PIANO
+      orchestra_score.c      924   W_SCORE
+      orchestra_mix.c        295   W_MIX
+      orchestra_insert.c     236   W_INSERT
+      orchestra_about.c       79   W_ABOUT
+      orchestra_session.c   1761   файл сесії, undo, відкриті шляхи
+      orchestra_smf.c       1317   SMF
 
-  Той самий розрив повторено публічно. b-system/apps/Orchestra.html обіцяє
-  GM Level 2 і SoundFont, 96 кГц, RTP-MIDI з IEEE 1588 PTP, субмілісекундний
-  DMA, буфер 64–128 семплів, DMX і SMPTE. b-media/audio.html називає ціль
-  Control Panel у 128 кадрів. Жодна з цих цифр не є властивістю драйвера з
-  §2.1.
+  Разом 7712 рядків. Медіа — src/media/gst_rt.c, 1761 рядок, разом із
+  include/media/gst_rt.h, 239; разом рівно 2000 і в пультовий лічильник не
+  входять. Спільний заголовок src/media/orchestra_desk.h, 56 рядків, тримає
+  шви малюнка і три положення layout. include/apps/orchestra.h тримає
+  кольори ORCH_COL_*, три шляхи й ідентифікатори команд. include/apps/
+  orch_chk.h, 15 рядків, тримає orch_check: перевірка без side-ефекту,
+  відмова записує рядок і повертає керування викликацькому, не робить abort,
+  не алокує і не друкує (правило JPL 5).
 
-  Фабрика сьогодні приймає довільний рядок типу. orchestra_switch_scene у
-  orchestra.c біля рядка 303 копіює лише tempo_bpm і шле program change на
-  всі 16 каналів, включно з байтом 255.
+  Файла src/apps/orchestra.c у дереві немає. Пульт малює, тримає меню і
+  викликає лише те, що опубліковано в gst_rt.h. orchestra_session.c і
+  orchestra_smf.c не включають wnd.h і app_menu.h; gst_rt.c не включає wnd.h,
+  app_menu.h і dp.h. Про шари — §3.1.
 
 
 2.3 Синтез, який уже є
@@ -159,12 +185,14 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   який забирає голос із найменшою амплітудою. RENDER_BLOCK дорівнює 32.
   master_soft_clamp вже написаний. Множник 30000/32767 живе лише всередині
   render_block. lilcu64_shim_pulse_bell є двохоператорним FM; літерал
-  v->fm_index = 2.2f стоїть у lilcu64_synth.c біля рядка 170.
-  lilcu64_synth_init біля рядка 508 закриває живий пристрій власним open і
-  скидає частоту дискретизації.
+  v->fm_index = 1.8f стоїть у lilcu64_synth.c рядок 173, як вимагає §5, і
+  літерала 2.2f там більше немає. lilcu64_synth_init (рядок 513),
+  lilcu64_synth_close і lilcu64_synth_pump_virtio повертаються одразу, коли
+  lilcu64_set_audio_owner тримає власника 1; без цього прапорця init
+  відкриває пристрій власною частотою. Прапорець і шов власника — §3.2.
 
-  lilcu64_wa.c має WA_MAX_NODES 4096, а за ознаки BTRON_PS2_TARGET — 512,
-  біля рядка 19. wa_time є часткою s_clock / s_sr, рядок 80. Ревербератор
+  lilcu64_wa.c має WA_MAX_NODES 4096, а за ознаки BTRON_PS2_TARGET — 512
+  (рядки 20 і 23). wa_time є часткою s_clock / s_sr, рядок 90. Ревербератор
   має WA_REVERB_COMBS 4 і WA_REVERB_APS 4 на канал, плюс лінії 93 BPM.
   wa_set_reverb і reverb_process уже є. WaNode має один біквад. wa_filter не
   має peaking: biquad_coeffs цього типу не задає. WA_MAX_FEV дорівнює 8. Для
@@ -172,12 +200,16 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   для BP добротність лінійна, біля рядка 163. reverb_process додає сухий
   сигнал до мокрого, а при вимкненому ревербераторі додає лише сухий.
 
-  lilcu64_score.c містить статичні шими до shimPedalSwoosh включно. Демо
-  лишається на LILCU64_AUDIO_RATE 44100. У b-media/index.html оголошені 25
-  функцій shim*, рядки 3373–4390. doc/pdf/btron-sound.tex і
-  doc/txt/SOUND.txt нумерують їх 1A–1C і 2–23. У C бракує трьох тіл:
-  shimViolin біля index.html:4227, shimCello біля 4337, shimTimpani біля
-  4390.
+  lilcu64_score.c містить тіла всіх шимів 1–23, включно з shimViolin (рядок
+  1844), shimCello (1895) і shimTimpani (1954); тіла 40, 41, 42, 43, 46, 47,
+  52, 56–60, 68, 70–73 з карти §5 саме звідти. Диспетчер lc_shim_note приймає
+  номери 1..12 і 13..23 двома гілками (рядки 2088–2089) і рахує відмову
+  поза ними; лічильник читає lc_shim_refusals. Номери тримає enum LC_SHIM у
+  lilcu64_score.h: 1 є squash, 21 — violin, 22 — cello, 23 — timpani; 24 і 25
+  є лише ідентифікаторами захоплення, hammer і swoosh, і диспетчеру не їдуть.
+  Демо лишається на LILCU64_AUDIO_RATE 44100. У b-media/index.html оголошені
+  25 функцій shim*, рядки 3373–4390. doc/pdf/btron-sound.tex і
+  doc/txt/SOUND.txt нумерують їх 1A–1C і 2–23.
 
   Сигнатури, які далі лише викликаються, вже такі. shimSaxFlute не приймає
   множник шуму. shimSnare, shimHiHat і shimIndustrialKick не приймають
@@ -226,17 +258,24 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   репозиторій читача SMF для цієї статті не відкривався. Норма SMF — текст
   Standard MIDI Files 1.0 асоціації MMA.
 
-  Makefile, як його прочитано для цієї статті, вже збирає рушій так.
-  DEMO_SRCS біля рядка 351 містить файли lilcu64 без демо-сцени як окремого
-  питання лінковки. COMMON_NO_SDL_SRCS біля 525 містить orchestra.c біля
-  550. GL_SRCS біля 423 тягне DEMO_SRCS, і те саме робить PS2_GL_SRCS біля
-  1185. CAPTURE_SCREENS_SRCS згаданий біля 3424. UEFI і PS2 таким чином уже
-  містять три файли рушія. FOMA_SRCS Orchestra не містить:
-  src/desktop/main_mobile.c його не лінкує.
+  Makefile збирає пульт і рушій списками; імена списків і є посиланнями,
+  номери рядків — ні. DEMO_SRCS містить чотири файли lilcu64 разом із
+  lilcu64_demo.c. LILCU64_ENGINE_SRCS — wa, score, synth і insert без
+  демо-сцени; коментар біля нього каже, що ціль, яка вже тягне DEMO_SRCS,
+  повторно цей список не лінкує. GL_SRCS тягне DEMO_SRCS, і те саме робить
+  PS2_GL_SRCS. COMMON_SRCS і COMMON_NO_SDL_SRCS містять десять файлів пульта
+  з §2.2 і gst_rt.c. LILCU64_ENGINE_SRCS додається лише там, де COMMON уже є,
+  а DEMO_SRCS немає: у PC98_SRCS, ARM32_BAREMETAL_SRCS,
+  ARM64_BAREMETAL_SRCS і M68K_SRCS. FOMA_SRCS Orchestra не містить:
+  src/desktop/main_mobile.c його не лінкує. Host-ціль album_encode лінкує
+  album_encode.c з orchestra_session.c, orchestra_smf.c, gst_rt.c і рушієм
+  lilcu64 (wa, score, insert) на бібліотеці C; в образ вона не входить. Вона
+  пише SYS/*.orch і SYS/*.mid альбому §7.2.
 
   Цикл інтерфейсу на SDL — while (running) у src/desktop/main.c, перед
-  get_evt. Той самий прохід UI є в core_arm64.c біля next_ui_us і біля
-  get_evt у core_yoko.c, core_ps2.c, core_m68k.c і core_boot.c.
+  get_evt. Той самий прохід UI є в core_arm64.c, core_yoko.c, core_ps2.c,
+  core_m68k.c і core_boot.c. У шести проходах orchestra_ui_tick стоїть
+  безпосередньо перед cassette_service, який і качає аудіоактор — §9.2.
 
   doc/md/GST-SYNC-RTP.md у §4 описує атрибути реального часу потоку
   NuStream: стелю часу, нуль алокацій на гарячому шляху, статичну топологію,
@@ -261,7 +300,16 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Три шари. Стрілка залежності веде лише вниз.
 
       Пульт і сесія
-      orchestra.c, orchestra_session.c, orchestra_smf.c
+      src/media/orchestra.c            (меню, тік, команди)
+      src/media/orchestra_stage.c      W_STAGE
+      src/media/orchestra_arrange.c    W_ARRANGE
+      src/media/orchestra_piano.c      W_PIANO
+      src/media/orchestra_score.c      W_SCORE
+      src/media/orchestra_mix.c        W_MIX
+      src/media/orchestra_insert.c     W_INSERT
+      src/media/orchestra_about.c      W_ABOUT
+      src/media/orchestra_session.c    файл сесії, undo
+      src/media/orchestra_smf.c        SMF
                  |
                  v
       Медіа
@@ -275,30 +323,44 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   зміна стану, публікація знімка і читання телеметрії. Пульт не викликає
   virtio_sound_write і не містить тіл chain. Сесія тримає знімок подій, файл
   і SMF. Сесія не включає wnd.h, не малює і не пише в пристрій. Медіа
-  включає п'ять викликів virtio.h, шими, інсерти і періоди з async_rt.h.
-  Медіа не включає wnd.h, app_menu.h і dp.h. Система не бачить меню і не
-  знає імен Rock, Classic, Orchestra.
+  включає п'ять викликів virtio.h — open, write, close, is_ready,
+  get_queued_bytes — шими, інсерти і періоди з async_rt.h. Медіа не включає
+  wnd.h, app_menu.h і dp.h. Система не бачить меню і не знає імен Rock,
+  Classic, Orchestra.
 
-  Типи Gst* живуть у include/media/gst_rt.h. В orchestra.c їхніх тіл немає.
-  orchestra_dispatch_midi_event живе в медіа: його викликає доставка MIDI
-  системи, не paint. Команда меню доходить до медіа функцією з заголовка, не
-  записом у поле GstElement.
+  Типи Orch* живуть у include/media/gst_rt.h: OrchView, OrchTrack, OrchScene,
+  OrchEvent, OrchPort. Тіла ланцюга — render_graph, sound_on, chase_on,
+  ring_apply — статичні в gst_rt.c і з заголовка не видні.
+  orchestra_dispatch_midi_event живе в медіа: його має кликати доставка MIDI
+  системи, не paint. Живого викликацького у дереві поки немає: драйвера
+  MIDI-входу в цій збірці немає, port 0 існує описом (§7), і ця функція
+  лишається опублікованою, але невикликаною. Команда меню доходить до
+  медіа функцією з заголовка — gst_rt_set_state, gst_rt_boot,
+  gst_rt_shutdown, gst_rt_panic, orch_cmd_* — не записом у поле структури.
 
-  Стелі рядків. Три файли пульта, orchestra.c, orchestra_session.c і
-  orchestra_smf.c, разом не довші за 5000 рядків C99. Таблиці шаблонів
-  входять у цю стелю. gst_rt.c разом із заголовком не довший за 2000 рядків
-  і в ті 5000 не входить. Окремий файл lilcu64_insert.c лежить у шарі
-  синтезу з §2.3. Він не є двадцять четвертим шимом і не входить у жодну з
-  двох стель.
+  Стелі рядків, у трьох лічильниках. Вісім віконних і командних файлів
+  пульта — orchestra.c, stage, arrange, piano, score, mix, insert, about —
+  разом не довші за 4000 рядків C99. Правило зараз порушене: вісімка рахує
+  4634, тобто на 634 рядки більше за стелю, і вада лежить у трьох
+  редакторах — orchestra_arrange.c 1037, orchestra_score.c 924 і
+  orchestra_piano.c 697. Стелю можна підняти свідомим рішенням або різати
+  редактори; розрив тримає §15, ризик 14. orchestra_session.c — не
+  довший за 1800; тепер 1761. orchestra_smf.c — не довший за 1400; тепер
+  1317. gst_rt.c разом із заголовком не довший за 2000 і в ці три лічильники
+  не входить; тепер рівно 2000. Таблиці шаблонів і альбому входять у стелю
+  сесії. Окремий файл lilcu64_insert.c лежить у шарі синтезу з §2.3, не є
+  двадцять четвертим шимом і в жодну зі стель не входить. Ріжемося на
+  стелі так, як і раніше: paint і коментарі, не алгоритми і не таблиці.
 
   Лінковка спирається на списки Makefile з §2.4 і не дублює їх.
-  LILCU64_ENGINE_SRCS складається з lilcu64_wa.c, lilcu64_score.c і
-  lilcu64_synth.c. lilcu64_demo.c туди не входить. У COMMON_NO_SDL_SRCS цей
-  список не додається, бо UEFI і PS2 уже тягнуть DEMO_SRCS. Список додається
-  лише в ARM32_BAREMETAL_SRCS, ARM64_BAREMETAL_SRCS, PC98_SRCS і M68K_SRCS,
-  де orchestra.c вже є, а DEMO_SRCS немає. lilcu64_insert.c входить у той
-  самий ENGINE, у DEMO_SRCS і в CAPTURE_SCREENS_SRCS, кожного списку один
-  раз. FOMA_SRCS Orchestra не отримує.
+  LILCU64_ENGINE_SRCS складається з lilcu64_wa.c, lilcu64_score.c,
+  lilcu64_synth.c і lilcu64_insert.c; lilcu64_demo.c туди не входить. У
+  COMMON_NO_SDL_SRCS цей список не додається, бо UEFI і PS2 уже тягнуть
+  DEMO_SRCS. Список додається лише в ARM32_BAREMETAL_SRCS,
+  ARM64_BAREMETAL_SRCS, PC98_SRCS і M68K_SRCS, де пульт уже є, а DEMO_SRCS
+  немає. lilcu64_insert.c входить у той самий ENGINE, у DEMO_SRCS і в
+  CAPTURE_SCREENS_SRCS, кожного списку один раз. FOMA_SRCS Orchestra не
+  отримує.
 
 
 3.2 Частота і годинники
@@ -315,18 +377,20 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
       (1)  wa_time = s_clock / s_sr
 
   wa_init(session_rate) викликається один раз, у мить, коли Orchestra бере
-  пристрій. Тоді ж фіксуються s_sr і довжини гребінців ревербератора,
-  масштабом s_sr/44100, як уже робить reverb_init. Масив delay_buf_*
-  лишається довжини 44100 і не росте. На 48000 обидва такти 93 BPM
-  вміщаються в цю довжину: 0.16129*48000 = 7742 і 0.24194*48000 = 11613.
-  Демо з §2.3 на 48000 не переводиться. Після відпускання пристрою наступний
-  lilcu64_synth_init сам викликає wa_init(44100).
+  пристрій: gst_rt_boot ставить wa_init(sample_rate) і слідом
+  lilcu64_synth_set_rate(sample_rate). Тоді ж фіксуються s_sr і довжини
+  гребінців ревербератора, масштабом s_sr/44100, як уже робить reverb_init.
+  Масиви delay_buf_l і delay_buf_r лишаються довжини 44100 і не ростуть. На
+  48000 обидва такти 93 BPM вміщаються в цю довжину: 0.16129*48000 = 7742 і
+  0.24194*48000 = 11613. Демо з §2.3 на 48000 не переводиться.
 
   Власник. Поки пайплайн Orchestra не в NULL, lilcu64_set_audio_owner(1)
   змушує lilcu64_synth_pump_virtio, lilcu64_synth_init і lilcu64_synth_close
   повернутися, не торкаючись virtio_sound_open, virtio_sound_close і
-  wa_init. Інакше init із §2.3 закрив би живий пристрій. Відпускання
-  власника — virtio_sound_close з пульта і прапорець 0.
+  wa_init. Інакше init із §2.3 закрив би живий пристрій. Відпускання —
+  gst_rt_shutdown: virtio_sound_close, відпущені слоти, прапорець 0, а тоді
+  wa_init(44100) і lilcu64_synth_set_rate(44100), щоб демо знов тримало свій
+  бік пари чисел.
 
   Поки власник — Orchestra, s_clock зрушує лише wa_render_buses, рівно на
   число кадрів блока. wa_set_clock_samples ставить значення і кадрів не
@@ -406,7 +470,8 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   MIDI-годинник лишається 24 імпульси на чверть, навіть коли доля не є
   чвертю. Інтервал — 40 тіків, той самий крок, що в контрольній четвірці.
   Байт 0xF8 нікуди не виводиться: ні в UART, ні в DIN, ні в RTP, ні в порт.
-  Лічильник імпульсів називається orch_midi_clock. У 6/8 на долю припадає 12
+  Лічильник імпульсів — поле OrchView midi_clock, яке росте через
+  orch_count_sat (gst_rt.c:1126 і 1142). У 6/8 на долю припадає 12
   таких імпульсів, на чверть — 24. Фаза від такту 0: перший імпульс на тіку
   0. Імпульс додається до лічильника, коли tick(N)/40 зростає, і один раз на
   переході в PLAYING, якщо tick(N) ділиться на 40, включно з тіком 0.
@@ -419,19 +484,30 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Вони покривають механізм, не дерево media/*.c з §2.4. Тіла звідти і з
   gst_rtc.c не входять у шар медіа.
 
-  Елемент, пад і ланка. Один GstPipeline тримає не більше 16 елементів.
-  Реєстр типів рівно з десяти імен: midisrc, queue, midiroute, shimsynth,
-  audioconvert, tee, audiomixer, volume, identity, virtiosndsink. Будь-який
-  інший рядок, включно з fluidsynth із §2.2, дає NULL і збільшує лічильник
-  відмови фабрики. У tee рівно два вихідні пади. audiomixer тримає не більше
-  16 входів усередині одного елемента. identity є в реєстрі для тесту
-  проходу і в концертний граф не ставиться.
+  Елемент, пад і ланка. Граф — статичний s_kind[16] медіа-шару з лічильником
+  s_made_n; лічильник публікується як OrchView.element_count і читається
+  пунктом Діагностика з §12.2. Стеля 16 стоїть на числі імен, не на тілах:
+  тіло в кожного одне й лежить у render_graph. Реєстр типів рівно з десяти
+  імен: midisrc, queue, midiroute, shimsynth, audioconvert, tee, audiomixer,
+  volume, identity, virtiosndsink. gst_factory_make порівнює рядок цілком —
+  factory_id, до 16 символів — і кладає в граф лише знайдений id. Будь-який
+  інший рядок, включно з fluidsynth із §18.1, збільшує refuse_factory,
+  повертає 0 і попередній граф не руйнує. У tee рівно два шляхи: сухий мікс
+  і send доріжки, поле з §7; обидва рахуються в одному проході sum_tracks
+  (941–971), де s_L і s_R беруть фейдер і панораму доріжки, а s_send — суму
+  L + R, помножену на send / 127. Мікшер підсумовує не більше 66 шин —
+  s_buses[66] і s_plane[66*Q] — але перелік складається лише з номерів
+  доріжок (шина доріжки i є i + 1, тобто 1..64) та шини 65 кліка, коли click
+  увімкнений: build_buses (820–838) нульової шини не додає, а порожню сесію
+  рятує одним записом номер 1. Шина 0 звукового слота не має і живе лише в
+  демо wa_render з §2.2. identity є в реєстрі для тесту проходу і в
+  концертний граф не ставиться.
 
   Концертний граф займає дев'ять слотів: midisrc, queue, midiroute,
-  shimsynth, audioconvert, tee, audiomixer, volume, virtiosndsink. Інсерт не
-  є елементом: інакше 64 доріжки з §2.2 пробили б стелю 16. На доріжці не
-  більше двох інсертів. Слово «інсерт» тут лише місце в тракті: алгоритм
-  цього місця цим підрозділом не вибирається.
+  shimsynth, audioconvert, tee, audiomixer, volume, virtiosndsink; их ставить
+  статична concert, яка бере id 0..7 і 9. Інсерт не є елементом: інакше 64
+  доріжки з §7 пробили б стелю 16. На доріжці не більше двох інсертів. Слово
+  «інсерт» тут лише місце в тракті: алгоритм цього місця вибирає розділ 6.
 
     static const char *const ORCH_FACTORY[] = {
         "midisrc", "queue", "midiroute", "shimsynth",
@@ -451,34 +527,57 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
                                    virtiosndsink
                                 virtio_sound_write
 
-  Стан пайплайна — NULL, READY, PAUSED або PLAYING, уже названі в §2.4.
-  VOID_PENDING лишається словом B-Media і в цей автомат не входить. Відмова
-  переходу не змінює попередній стан. ASYNC означає таку відмову, не
-  очікування годинника. На старті NULL, далі READY, далі PAUSED. Закриття
-  веде в NULL. Окремої причини, чому PLAYING можна відмовити, цей підрозділ
-  не додає: достатньо того, що відмова інертна.
+  Стан пайплайна — NULL, READY, PAUSED або PLAYING; enum лежить у gst_rt.h, і
+  він же годує рядок показу з §12.4. VOID_PENDING лишається словом B-Media і в
+  цей автомат не входить. Відмова переходу не змінює попередній стан. ASYNC
+  означає таку відмову, не очікування годинника. gst_rt_boot лишає сесію в
+  READY, gst_rt_shutdown веде в NULL. Причин відмови PLAYING цей підрозділ
+  тепер називає дві: gst_rt_set_state відмовляє, коли virtio_sound_is_ready()
+  не істинне, і коли сума WCET з §9.1 більша за період сесії. Обидві відмови
+  пишуть текст пульта (orch_status_hold) і лишають стан як був. Третя відмова
+  — частота, якої сесія не має, на вході в boot.
 
-  chain є єдиною живою схемою планування. Він повертає OK, DROP або REFUSE.
-  getrange є чистою функцією по пулу MIDI для офлайн-читання і потоку не
-  створює. GstTask заборонений. Очікування годинника в sink заборонене.
+  Живу схему планування виконує orchestra_audio_tick: chase, інсерти
+  звучних доріжок, сума з панорамою, зал і обмежник, перетворення і
+  device_out. Код ланки — OK, DROP або REFUSE; chain_result рахує його в
+  чотири поля з §3.5. Публічного getrange немає: офлайн-читання — парсери
+  §7.1, §11.1 і офлайн-рендер §11.2 у статичних буферах, без потоку і без
+  аллокації. GstTask заборонений. Очікування годинника в sink заборонене:
+  device_out відхиляє квант, а не чекає.
 
   Нехай Q = 32 кадри. Це RENDER_BLOCK із §2.3, не період хоста. Caps мають
   три значення: MIDI; F32 на Q кадрах, 1 або 2 канали, частота з §3.2; S16
   того самого розміру. Перетин caps — рівність. Парсера рядків немає.
 
-  Події передаються значенням: EOS, FLUSH_START, FLUSH_STOP, SEGMENT, CAPS,
-  STREAM_START, GAP, QOS, SEEK. SEEK дозволений лише в PAUSED і лише з rate
-  1; інакше REFUSE. Запити: LATENCY, POSITION, DURATION, CAPS.
+  Словника подій у медіа-шарі немає, і стаття його не вводить: EOS,
+  FLUSH_START, FLUSH_STOP, SEGMENT, CAPS, STREAM_START, GAP і SEEK нічим не
+  представлені. Перехід стану — присвоєння з відмовою, а не повідомлення.
+  Позиція — поле npos; running_time рахується з нього, як нижче. Довжина —
+  поле loop_tick, його пише орхід тік пульта (span_tick). Глибина черги —
+  функція gst_rt_queued_ms. Черги запитів немає.
 
-  Bus — кільце 16 повідомлень: EOS, ERROR, STATE_CHANGED, QOS, LATENCY.
-  Переповнення рахується. Пул — 8 MIDI-буферів по 3 байти і 8 аудіоблоків
-  довжини Q, по два float на кадр. Refcount дорівнює 1 або 2, друге лише для
-  tee. Нуль повертає слот у пул. У data[512] із §2.2 лежить лише MIDI на 3
-  байти. PCM у цей масив не кладеться.
+  Bus — кільце 16 байт-кодів (s_bus[16], s_bus_n), переповнення рахує
+  s_bus_ovf. У цій збірці в нього кладуть два коди: 3 на зміну стану і 4 на
+  qos-промах з §9.1. Решта слів автоматом не подані, і кільце ніхто не читає
+  — це телеметрія для майбутнього діагностичного пункту, не канал подій.
+  Статичні пули медіа-шару такі: s_midi_used[8] — вісім трибайтових
+  MIDI-токенів, які midi_take і midi_rel видають по одному на подію;
+  s_rec[64] — кільце записаних подій (RecEv: op, track, key, vel, tick);
+  s_slot[48] — слоти з §5, плюс знімок s_slot_snap[48] і окремі
+  s_xslot із s_xlive, на яких грає експорт §11.2; s_plane[66*Q] — площина
+  міксу, по одному float на кадр шини; s_buses[66] — перелік шин блока;
+  s_tmp, s_L, s_R, s_send, s_wl, s_wr — шість робочих рядків float[Q];
+  s_pcm[Q*2] — int16 на дріт; s_dline[64][2] і s_cline[64][2] з власниками
+  s_downer[8] і s_cowner[8] — видача восьми ліній дилея і восьми ліній
+  хорусу з §6 доріжкам. У data[512] з історичної оболонки (§18.1) лежало
+  лише MIDI; PCM-масиву такої довжини в дереві немає.
 
-  Queue має дисципліну leaky downstream і місткість 64 подій MIDI. Повна
-  черга дає DROP. Годинник медіа: running_time = N * GST_SECOND / f_s.
-  base_time фіксується на вході в PLAYING. gst_clock_id_wait немає.
+  Кільце запису має дисципліну leaky downstream і місткість 64 подій:
+  ring_push на повному кільці повертає 0, і викличений рахує це як
+  chain_drop. Годинник медіа: running_time = npos * GST_SECOND_NS / f_s,
+  GST_SECOND_NS дорівнює 10^9. Окремого base_time у стані немає; вхід у
+  PLAYING присвоює s_clock = npos функцією wa_set_clock_samples, і саме тому
+  рівняння 1 збігається з npos/f_s. gst_clock_id_wait немає.
 
   Поза контрактом, і тому в шар медіа не входить: GObject, GLib, gst-launch,
   завантажувач .so, ghost pad, вкладений bin, request pad з алокацією,
@@ -489,12 +588,16 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 3.5 Облік
 ---------
 
-  Лічильники — u32 із насиченням на UINT32_MAX. Імена такі: orch_drop_audio,
-  orch_steal_voice, orch_refuse_smf, orch_refuse_session,
-  orch_refuse_program, orch_refuse_insert, orch_refuse_note_cap,
-  orch_refuse_factory, orch_refuse_tempo, orch_midi_clock,
-  MidiPort.dropped_packets, qos_drops. Поки подія не названа, лічильник
-  лишається нулем.
+  Лічильники — u32 із насиченням на UINT32_MAX, і збільшує їх тільки
+  orch_count_sat. Всі вони є полями OrchView з §7: drop_audio, steal_voice,
+  refuse_smf, refuse_session, refuse_program, refuse_insert,
+  refuse_note_cap, refuse_factory, refuse_tempo, midi_clock, qos_drops.
+  Ланцюг рахує чотири поля: chain_accept на кожен виклик chain_result, і
+  поверх нього рівно один із chain_deliver, chain_drop або chain_refuse.
+  Порт рахує message_count на кожен прийнятий статус і dropped_packets на
+  відмову порту. Переповнення шини рахує s_bus_ovf, який полем не є. Відмови
+  диспетчера шимів рахує окремий лічильник движія, який читає
+  lc_shim_refusals. Поки подія не названа, лічильник лишається нулем.
 
 
 4. Сигнал
@@ -557,10 +660,23 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
       (10)  C(x) = ((3+k)*x*(20*pi/180)) / (pi + k*|x|)
            x in [-1, 1]
 
-  Крива рівняння 10 рахується один раз на площині UI в статичний float
-  orch_curve[1024], коли змінюється k. Рендер лише читає таблицю. JS-зразок
-  на 44100 точок є тим самим виразом; тут він дискретизований у 1024 точки,
-  щоб BSS не ріс на кожен інсерт.
+  Крива рівняння 10 живе в OrchView як float curve[1024] з сусіднім int16
+  curve_k (include/media/gst_rt.h:195–196). Тіло lc_curve_build у
+  src/demo/lilcu64_insert.c:84–97 бере k з обмежувачем 0..100 і ставить
+  x = -1 + 2i/1023 для i = 0..1023; воно не аллокує і не пише нікуди крім
+  dst. gst_rt_boot викликає lc_curve_build(g.curve, 25) і присвоює
+  g.curve_k = 25 (src/media/gst_rt.c:1387–1388), тобто таблиця не буває
+  незакритою навіть до першого тіка. Дальше її перераховує orch_build_curve
+  (src/media/orchestra_session.c:1745–1761), яку orchestra_ui_tick кличе
+  перед gst_seq_begin: функція обходить доріжки 0..track_count, бере k з P0
+  або P1 кожного інсерта SAT залежно від слота — переможцем стає останній
+  знайдений, — обмежує його 0..100 і повертається, не торкаючись таблиці,
+  якщо k збігся з curve_k. Рендер лише читає:
+  lc_insert_apply дістає g.curve як аргумент (src/media/gst_rt.c:927), а
+  apply_sat через lc_curve_read (lilcu64_insert.c:100–113) клампить x у
+  [-1, 1], рахує i = (int)((x+1)*511.5) і бере одне значення без
+  інтерполяції. JS-зразок на 44100 точок є тим самим виразом; тут він
+  дискретизований у 1024 точки, щоб BSS не ріс на кожен інсерт.
 
   Панорама, p в [-1, +1], SOUND.txt §8.1. Із CC10: p = (cc-64)/64. CC 127
   дає 63/64, не +1. Формулу під цю одиницю не підганяють.
@@ -569,7 +685,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
            G_R = sin(pi/4 * (p+1))
 
   Швидкість натиску. u = v_m/127, v_m ціле 0..127. Діапазон 0.08..0.45. Поле
-  velocity_curve має значення 0, 1 або 2.
+  vel_curve має значення 0, 1 або 2.
 
       (12)  v0 = 0.08 + (0.45-0.08)*u
            v1 = 0.08 + (0.45-0.08)*sqrt(u)
@@ -678,63 +794,151 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 --------------------
 
   Програма є рядком виклику шима з §2.3. Нових C-функцій інструмента немає.
-  Імен shim* у index.html — 25. Шим номер 24 не існує. Поки тіла 21–23
-  немає, lc_shim_note для цих номерів збільшує відмову і шим не змінює.
-  Після переносу відмова для них зникає.
+  Імен shim* в index.html — 25, і всі 25 мають тіло в дереві, але окремий
+  номер у диспетчері беруть лише 23 з них. Нумерація — enum LC_SHIM_* у
+  src/demo/lilcu64_score.h:26–49, від LC_SHIM_SQUASH = 1 до
+  LC_SHIM_TIMPANI = 23; номера 24 не існує. Двоє без власного номера,
+  shimPianoHammer і shimPedalSwoosh, — допоміжні тіла, які інші шими кличуть
+  напряму, і з диспетчера вони не викликаються. Розкладка — lc_shim_note у
+  lilcu64_score.c:2084–2091: номери 1..12 ідуть у note_1_12, номери 13..23 у
+  note_13_23, будь-який інший номер збільшує s_shim_refuse, а лічильник
+  віддає lc_shim_refusals(). Тіла 21–23 — shimViolin, shimCello й
+  shimTimpani — у дереві вже є, тому відмови для цих трьох не рахуються;
+  чинний шлях у медіа-шарі стороннього номера не породжує, бо sound_on дістає
+  shim лише з рядка таблиці PROG.
 
-  Висота на вході складається так: зона key split по вхідній ноті, далі
-  transpose доріжки, далі transpose програми, далі затискання в 0..127, далі
-  рівняння 5. Зона split має три положення: 0..127, 0..59, 60..127.
+  Висоту на вході складає sound_on (src/media/gst_rt.c:552–575). Спершу
+  зона key split фільтрує вхідну ноту: key поза [lo, hi] дає -2, і нота не
+  звучить; пара lo = 0, hi = 0 читається як 0..127. Далі йде transpose
+  доріжки — LatTrk.tr з OrchTrack.transpose (gst_rt.c:395), — далі transpose
+  програми ProgRow.tr, далі затискання в 0..127, і лише потім рівняння 5,
+  причому не powf на кожен виклик, а таблиця s_pitch[128] (gst_rt.c:99), яку
+  один раз заповнює pitch_build на gst_rt.c:250–258. Зона split має три
+  положення: 0..127, 0..59, 60..127; їх перемикає orch_cmd_split
+  (src/media/orchestra_session.c:1169–1191) циклом за mod 3. Іншого розкладу
+  пари таблиця не бачить, а рядка сесії, який зберіг би її інакше, немає:
+  key_lo і key_hi йдуть байтами 51 і 52.
 
-  Слот DAW — одна MIDI-нота, не часткова шима. Масив слотів має довжину
-  MAX_VOICES, тобто 48. Вільний слот береться першим. Якщо вільних немає,
-  береться слот із найменшим проксі gain * exp(-(N-start)/f_s) при tau = 1
-  с. gain тут — гучність, записана в слот на note-on, не поле
-  SynthVoice.amp. Крадіжка збільшує orch_steal_voice. alloc_voice із §2.3 як
-  і раніше краде найменший amp; ця крадіжка в orch_steal_voice не додається
-  і саме alloc_voice не переписується. Звільнений слот викликає
-  wa_release_bus_key(bus, key) і, якщо шим був FM-дзвоном,
-  lilcu64_voice_release(bus, key).
+  Слот DAW — одна MIDI-нота, не часткова шима. Пул — static OrchSlot
+  s_slot[48] на gst_rt.c:105, і межа 48 в обходах записана літералом
+  (slot_count_tr, gst_rt.c:482–489). Окремо, у самому синтезаторі, є
+  MAX_VOICES 48 (src/demo/lilcu64_synth.c:36) з власним масивом s_voices;
+  два числа збігаються, але це різні пули, і посилатися на MAX_VOICES як на
+  довжину слотів медіа-шар не має права.
+
+  Порядок видачі — slot_pick (gst_rt.c:521–535), і він не «вільний слот
+  спершу». Спершу рахується зайнятість доріжки (slot_count_tr). Якщо вона
+  вже не менша за poly, найменш чутний слот цієї ж доріжки забирається
+  (slot_quiet з track >= 0) і крадіжка позначена. Якщо ні — береться перший
+  вільний (slot_free_idx, индекси зростають від 0), а коли вільних немає,
+  крадеться найменш чутний слот узагалі (slot_quiet з track = -1). Проксі —
+  slot_proxy (gst_rt.c:498–505): gain * expf(-(npos - t0)/f_s), тобто tau = 1
+  с, а gain — гучність, записана в слот на note-on (gst_rt.c:605), не поле
+  SynthVoice.amp. Крадіжка збільшує g.steal_voice лише поза експортом
+  (gst_rt.c:609); експортний прохід рахує ті самі крадіжки мовчки, щоб
+  вимір не залежав від того, хто слухає. alloc_voice із §2.3 як і раніше
+  краде найменший amp; ця крадіжка в g.steal_voice не додається і саме
+  alloc_voice не переписується.
+
+  Відібраний слот замовкає через slot_silence (gst_rt.c:537–543):
+  wa_release_bus_key(slots[idx].bus, key) і, якщо слот був FM-дзвоном,
+  lilcu64_voice_release(bus, key). Той самий slot_silence стоїть в обході
+  release_all_slots (gst_rt.c:1277–1285), яку кличе єдиний вихід із PLAYING
+  у set_state (1446–1451) — і в PAUSED, і в READY, — і gst_rt_panic
+  (1296–1310), куди приходить orchestra_session.c:1736 і де слот клацання
+  метрона обходиться. gst_rt_stop_voices (1311–1315) теж викликає
+  release_all_slots, але в збірці її ніхто не кличе: опублікована,
+  невикористана. Після виклику шима sound_on перевіряє, чи щось з'явилось:
+  shim_landed (gst_rt.c:544–550) для дзвона дивиться, чи не ріс
+  lc_shim_refusals, а для решти — чи збільшився
+  wa_active_count; якщо ні, слот повертається у пул і нота рахується
+  відмовою. Це єдиний випадок, коли відмова синтезатора повертає слот, а не
+  лишає його висіти.
 
   poly_max є стелею слотів однієї доріжки. Сімейство може лише знизити її,
-  не підняти. ROCK ставить 1 навіть на програму 0. ORCHESTRA ставить 1 на
-  всіх своїх доріжках. CLASSIC лишає 6 лише фортепіано.
+  не підняти: gst_resolve_track (gst_rt.c:352–374) бере r->poly, робить 1 для
+  ROCK і ORCHESTRA, для CLASSIC робить 1 на всіх рядках, крім програми 0, і
+  наприкінці ще раз обмежує значенням r->poly. Перед видачею слота poly
+  нижче 1 піднімається до 1 (gst_rt.c:579), а slot_pick перевіряє, що стеля не
+  більша за 48. Число 6 у рядка 0 — це стеля фортепіано, а не пулу.
 
-  Жива нота не знає тривалості. One-shot шими викликаються зі своєю наявною
-  тривалістю і ігнорують note-off: shimKick через shimKickD 0.16 с,
-  shimSnare, shimHiHat, shimIndustrialKick, shimDing, shimTimpani,
-  shimGlitchZap, адитивний shimPulseBell зі score, shimDance,
-  shimPulseSquash. Решта отримує тривалість події, а живий note-on — 8.0 с
-  із обрізанням на note-off. Note-on із velocity 0 є note-off, як у MIDI
-  1.0.
+  One-shot — це дев'ять рядків таблиці з shot = 1: 47 Timpani, 80 Pulse,
+  102 Dance, 103 Zap, 112 Chime, 116 Kick, 117 Snare, 118 Hat і 119 Ind.Kick.
+  Тривалість їм дає не політика рядка, а pick_dur (gst_rt.c:456–468), який
+  для shot повертає fixed = dur10 / 100: 1.2 с литаврам, 2.4 с пульсу, 0.85 с
+  танцю, 0.12 с запу, 0.70 с дзвіночку, 0.16 с керу, 0.15 с снару і 0.22 с
+  промисловому керу. Hat має dur10 = 0 і відловлюється раніше за решту:
+  0.28 с при velocity не менше 100, інакше 0.055 с. Програма 98 Bell не є
+  one-shot у цьому змісті: її shot = 0, а sound_on веде її окремою гілкою до
+  lilcu64_shim_pulse_bell, не до lc_shim_note. Адитивний shimPulseBell із
+  score до пулу подій не дійшов і програмою не є. One-shot не слухає
+  note-off: slot_drop_key (gst_rt.c:626–637) пропускає слоти з oneshot = 1, і
+  вони знімаються лише строком у slots_expire (612–625). Решта отримує
+  тривалість події, а живий note-on — 8.0 с із обрізанням на note-off.
+  Виняток — зброєний прохід: mode = 2 з evsec > 0.02 повертає evsec ще до
+  перевірки shot, тож після пошуку one-shot звучить тривалість події, а не
+  свою фіксовану довжину. Note-on із velocity 0 є note-off, як у MIDI 1.0
+  (gst_rt.c:1554), а sound_on відхиляє vel <= 0 на вході (562).
 
-  shimSnare: velocity не менше 110 дає isRimshot = 1, інакше 0. shimHiHat:
-  velocity не менше 100 дає open = 1, інакше 0. Висота MIDI для snare, hat і
-  industrial kick ігнорується: сигнатура її не приймає, параметр не
-  додається. shimKick отримує f(n) як pitch у герцах.
+  Живий шлях — note_on_tracks і note_off_tracks (gst_rt.c:1478–1535) — у
+  дереві є, але викликається лише з orchestra_dispatch_midi_event (1536), а
+  її в збірці ніхто не кличе: драйвера MIDI-in тут немає. Тому mode = 1 із
+  8.0-секундним note-on і обрізанням по note-off у робочому пульті поки що
+  нечутий; чутні mode 0 і mode 2 із chase_on.
+
+  Ударні три номери несуть velocity в полі частоти. sound_on для kind =
+  SNARE, HAT і INDKICK замінює play_hz на (float)vel (gst_rt.c:577–578), і
+  диспетчер порівнює вже його: shimSnare(t, vol, hz >= 110.0f) дає
+  isRimshot = 1 при velocity не менше 110, shimHiHat(t, hz >= 100.0f, vol)
+  дає open = 1 при velocity не менше 100 (lilcu64_score.c:2050–2051).
+  Висота MIDI для цих трьох справді ігнорується — її підміняє velocity, а
+  сигнатура шима другого аргумента не має. shimIndustrialKick(t, vol)
+  частоти не бере взагалі. shimKick отримує f(n) як pitch у герцах: kind =
+  KICK у заміну не входить.
 
   Фразові шими shimGuitar, shimSaxFlute, shimCyberLead, shimViolin і
-  shimCello отримують один Note на стеку: {f, d, v, t = 0, slide = 0}. Це не
-  новий шим.
+  shimCello отримують один Note на стеку (lilcu64_score.c:2035, 2059),
+  заповнений fill_note (1975–1984): {f = hz, d = max(dur, 0.02), v = vol,
+  t = 0, slide = 0}, і викликаються як (t, &n, 1, 1.0f) — один нотний
+  елемент, без акорду. shimCello дістає п'ятий аргумент 0, тобто isPizz = 0.
+  Це не новий шим. Обидві гілки диспетчера мають власний рядок refusal:
+  номер у діапазоні, якого в гілці немає, теж збільшує s_shim_refuse, хоч
+  таких номерів у діапазонах 1..12 і 13..23 не залишилось.
 
-  Карта program change має 128 індексів. Визначені рівно 32. Інший індекс
-  збільшує orch_refuse_program, і шим, що вже звучить, не змінюється. Індекс
-  збігається з номером GM там, де роль збігається. Де назва MMA інша,
-  звучить назва рядка, а назва MMA не заявляється. Три ударні програми не є
-  картою каналу 10.
+  карти з 128 індексів у дереві немає. Є static const ProgRow PROG[32]
+  (gst_rt.c:54–85), впорядкована за gm, і prog_by_gm (336–345) — лінійний
+  пошук по 32 рядках, який або повертає рядок, або 0. Рядок — це і є
+  визначена програма; решта 96 номерів GM не визначені, і кожен з них
+  збільшує refuse_program: у gst_resolve_track (352–363), де старі shim,
+  clef, tr, kind, shot і poly_max доріжки лишаються як були; в
+  orch_cmd_set_field для поля ORCH_F_PROGRAM (orchestra_session.c:1426–1430),
+  де відмова ще й тримає статус рядком "program"; у сцені-програмі
+  (orchestra_session.c:974–977), де 255 у комірці сцени означає «не чіпати»;
+  і в SMF-шляху set_program (orchestra_smf.c:482–494). Номери рядків
+  збігаються з номером GM там, де роль збігається. Де назва MMA інша,
+  звучить назва рядка, а назва MMA не заявляється. Канала 10 як ударної
+  карти немає: жоден шлях не порівнює channel з 10, а 0xB0 з d1 = 10 — це
+  CC панорами, не програма.
 
   poly в таблиці — стеля після завантаження програми, ще до зниження
-  сімейством. tr — transpose програми в півтонах. Ключ — treble або bass.
-  Окремого альтового ключа немає. Колонка даних називає або число всередині
-  шима, або частоту інсерта EQ; у масив p[] сесії пишеться лише інсерт.
-  Нових аргументів C немає, крім тих, де сигнатура вже має duration, decay,
-  isPizz, isRimshot або open.
+  сімейством. tr — transpose програми в півтонах. Ключ — treble або bass,
+  тобто поле clef з 0 і 1; єдиний читач — orchestra_score.c:745 і 836, звідти
+  draw_clef (328) бере басовий ключ, а латч копіює clef (gst_rt.c:394) лише
+  щоб не втрачати поле — синтез його не читає. Окремого альтового ключа
+  немає. Колонка даних називає
+  або число всередині шима, або частоту інсерта EQ; у масив p[] сесії
+  пишеться лише інсерт. У ProgRow є ще три поля, яких у колонках нижче немає:
+  kind (ORCH_KIND_* — вибір гілки sound_on: тривалість, заміна play_hz,
+  дзвін), shot (one-shot) і dur10 (фіксована тривалість у центисекундах);
+  dur10 = 0 означає 8.0 с. Нових аргументів C немає, крім тих, де сигнатура
+  вже має duration, decay, isPizz, isRimshot або open.
 
   GM  Ім'я       Шим                   Ключ  p  tr
    0  Piano      shimGrandPiano        tr    6   0
       duration 1.2 с; молоток уже всередині шима
    4  Rhodes     shimFloat             tr    1   0
-      один виклик уже містить стос часткових
+      гілка диспетчера: tone_glass, або tone_dance при dur < 0.50 с;
+      акордний виклик shimFloat лишається в тілах score
   26  Guitar     shimGuitar            tr    1   0
       LP 2800 Гц, Q 1.0; sweep лишається в шимі
   32  Upright    shimWaddle            bs    1   0
@@ -802,19 +1006,35 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
       висота фіксована в шимі, 160 Гц до 42 Гц
 
   Рахунок рядків — 32. shimPianoHammer, shimPedalSwoosh, shimFrogCroak і
-  shimIndustrialSnare програмами не є. shimPianoHammer з диспетчера не
-  викликається: молоток уже в shimGrandPiano. Контрабас не займає
-  shimPedalBass, бо той зайнятий continuo.
+  shimIndustrialSnare програмами не є: перші дві не мають власного номера в
+  enum, дві інші мають номери 2 і 16, але жоден рядок PROG на них не вказує,
+  тож з пулу подій до них дійти не можна — вони живуть у тілах score.
+  shimPianoHammer з диспетчера не викликається: молоток уже в shimGrandPiano.
+  Контрабас не займає shimPedalBass, бо той зайнятий continuo.
 
-  Програма Bell викликає lilcu64_shim_pulse_bell(vol, f(n)/440), не
-  адитивний shimPulseBell. Відношення fm/fc = 2.76, індекс I = 1.8, за
-  рівнянням 9. Носій — поле VOICE_WAVE_FM_BELL уже відвантаженої SynthVoice.
-  Літерал 2.2f із §2.3 замінюється на 1.8f у тій самій функції. Параметр
-  decay у функцію не додається. Шим читає wa_current_bus і wa_current_key,
-  пише їх у SynthVoice.bus і SynthVoice.note_key і ставить pan = 0, щоб
-  панорама доріжки з рівняння 11 була єдиною. Без note-off голос догасає
-  наявним decay_rate 1.8 с. Rhodes — статичний shimFloat у lilcu64_score.c,
-  не lilcu64_shim_float.
+  Програма Bell викликає lilcu64_shim_pulse_bell(vol, f(n)/440) — рядок
+  lilcu64_synth.c:166–179, а не адитивний shimPulseBell. sound_on веде її
+  окремою гілкою (gst_rt.c:583–590) і ніколи не передає її номер у
+  lc_shim_note. Відношення fm/fc = 2.76 і індекс I = 1.8 за рівнянням 9:
+  v->fm_ratio = 2.76f, v->fm_index = 1.8f (lilcu64_synth.c:172–173); 2.2f
+  у цій функції немає. Носій — поле VOICE_WAVE_FM_BELL уже відвантаженої
+  SynthVoice, амплітуда 0.20 * vol. Параметр decay у функцію не додається:
+  сигнатура лишається (vol_mul, pitch_mul), а догасання ставить
+  decay_rate = 1/(1.8 * f_s), тобто 1.8 с без урахування note-off. Шим читає
+  wa_current_bus і wa_current_key, пише їх у SynthVoice.bus і
+  SynthVoice.note_key і ставить pan = 0, щоб панорама доріжки з рівняння 11
+  була єдиною. Дзвін не one-shot у сенсі §5 (shot = 0), але shim_landed для
+  нього дивиться на refusals, а не на wa_active_count, і звільнення голосу
+  при крадіжці йде через lilcu64_voice_release, бо SynthVoice живе поза
+  чергою wa_release_bus_key.
+
+  Rhodes, програма 4, у DAW-шляху shimFloat не викликає. Рядок PROG ставить
+  LC_SHIM_FLOAT = 5, а note_1_12 (lilcu64_score.c:2045–2046) для нього бере
+  captured-варіанти: tone_dance при dur < 0.50 с інакше tone_glass. Обидва —
+  один WA_SINE з lin-атакою і exp-згасанням; tone_glass ще робить pitch-dip
+  на 0.985 від hz з поверненням за 0.04 с. Акордний shimFloat (static, рядок
+  255) лишається в тілах score, а lilcu64_shim_float (lilcu64_synth.c:200) —
+  у demo-синтезі; медіа-шар не кличе ні того, ні другого.
 
   Голос, програма 52, є процедурним носієм на shimSaxFlute. filter_hz = 800
   є даними форманти, не другим осцилятором. Єдиний біквад EQ цього рядка
@@ -825,7 +1045,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Скрипка і альт. Норматив — скорочена секція, бо WaNode має один біквад і
   peaking у wa_filter немає. Шум: BP 3200 Гц, Q 3, тривалість 0.045 с. Два
   WA_SAWTOOTH на f і f*1.002. Один LOWPASS на 5000 Гц. LFO 5.8 Гц і обидва
-  peaking JS у шим не входять. JS не ставить Q lowpass, тож q_dB = 0. isSolo
+  peaking JS у шим не входять. JS не ставить Q lowpass, тож q_dB = 0. solo
   = 0 і для першої, і для другої скрипки. EQ доріжки, окремий від шима: peak
   520 Гц, Q 2.2, +3 дБ. Це один RBJ-інсерт, не тіло JS і не другий
   осцилятор. Peak JS +4 дБ на 520 Гц і +3 дБ на 2800 Гц у шим не
@@ -842,38 +1062,69 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Бюджет Tutti, ще до шаблону: 16 монофонічних слотів. Скорочена скрипка — 3
   вузли, альт так само, чело і контрабас по 2, литаври 3. Разом із рештою
-  розсадки це менше ніж 64 вузли WaNode. Стелі 512 і 4096 з §2.3 обидві це
-  вміщають. Фортепіано — не більше 6 слотів. wa_osc == NULL є порахованою
-  відмовою, не крадіжкою.
+  розсадки це менше ніж 64 вузли WaNode. Це бюджет index.html, а не сцена
+  дерев'яного пульта: окремий тіл сцени tutti у збірці немає. Медіа-шар має
+  дві стелі замість неї: пул із 48 слотів, про які йшлося вище, і
+  WA_MAX_NODES, 512 на емулюваних цілях і 4096 на залізі
+  (src/demo/lilcu64_wa.c:20 і 23). Фортепіано — не більше 6 слотів, бо poly
+  рядка 0 дорівнює 6. Коли пул вичерпано, osc_take повертає NULL, шим це
+  мовчки пропускає, wa_active_count не ріс — і shim_landed повертає слот у
+  пул, а sound_on дає -1. wa_osc == NULL є порахованою відмовою, не
+  крадіжкою, і в chase_on рахується лише відмова зони (sl == -2); -1
+  лишається нечутним для chain_drop.
 
-  Переповнення порту MIDI рахується в MidiPort.dropped_packets. Диспетчер
-  виконується на площині INPUT і повертається в межах її бюджету 500 мкс:
-  маршрут, слот, виклик шима. Виклик шима тут лише розкладає wa_osc, не
-  рендерить блок.
+  Переповнення порту MIDI рахується в MidiPort.dropped_packets. У збірці є
+  рівно один порт: port0 (gst_rt.c:1337–1350) ставить "Stage MIDI In" як
+  вхідний і активний, решта 31 лишається неактивною, і кожен пакет на них
+  іде в dropped_packets, а не в message_count. Диспетчер
+  orchestra_dispatch_midi_event виконується на площині INPUT і повертається в
+  межах її бюджету 500 мкс: маршрут, слот, виклик шима. Виклик шима тут лише
+  розкладає wa_osc, не рендерить блок. Площини INPUT у живому пульті поки що
+  немає: ніхто не кличе цей диспетчер, тож обидва лічильники порту нулі, а
+  orchestra.c:549–560 показує message_count єдиного активного порту в
+  статусному рядку.
 
 
 6. Інсерти
 ----------
 
   Інсерт є одним із алгоритмів розділу 4, не елементом пайплайна.
-  OrchInsertId має рівно ці імена: BYPASS, EQ, SATURATOR, DELAY, REVERB,
-  CHORUS, GATE, TREMOLO, LIMITER. Дев'ятого немає. Слот виконує ту роль, яку
-  в іншому DAW виконує слот VST; бінарний формат VST не реалізується і не
-  читається.
+  OrchInsertId (include/media/gst_rt.h:38–48) має рівно ці імена і рівно ці
+  значення: ORCH_INS_BYPASS = 0, EQ = 1, SAT = 2, DELAY = 3, REVERB = 4,
+  CHORUS = 5, GATE = 6, TREMOLO = 7, LIMITER = 8. Дев'ятий алгоритм —
+  обмежник; десятка немає. У таблиці нижче SATURATOR — це SAT: повне слово в
+  інтерфейсі, коротке в enum. Слот виконує ту роль, яку в іншому DAW виконує
+  слот VST; бінарний формат VST не реалізується і не читається.
 
-  На доріжці insert[2]. На мастері insert[1], і законні значення лише
-  LIMITER і BYPASS, як уже вимагає розділ 4. REVERB на доріжці не виділяє
-  ревербератор: P1 пише send доріжки. P2, P3 і P4 пишуть room, damping і wet
-  спільного залу і викликають wa_set_reverb. feedback не є P1..P4. Його
-  ставить шаблон і файл сесії. Останній запис room, damping і wet видимий
-  усім send.
+  На доріжці два слоти, ins0 і ins1. На мастері один, OrchView.master_lim, і
+  законні значення лише LIMITER і BYPASS: orch_master_cycle
+  (src/media/orchestra_session.c:1600–1618) на будь-чому іншому рахує
+  refuse_insert, тримає статус рядком "insert" і повертає 0, а вміст лишає.
+  Типово master_lim = ORCH_INS_LIMITER (gst_rt.c:1379). REVERB на доріжці не
+  виділяє ревербератор: reverb_knobs (gst_rt.c:876–910) бере P1 як send
+  доріжки і пише його в латч, а поза експортом — ще й у поле доріжки
+  OrchView. P2, P3 і P4 пишуть room, damping і wet спільного залу, і переможцем
+  у скані є останній знайдений REVERB; зал у OrchView оновлюється так само
+  лише поза експортом. wa_set_reverb викликається завжди, навіть коли жодного
+  REVERB на доріжці немає, — тоді з трьох полів залу, які несе сесія.
+  feedback не є P1..P4: його ставить лише g.feedback, яке пишуть шаблон і
+  файл сесії.
 
-  Порядок на доріжці: інсерт 0, інсерт 1, далі G_trk за рівнянням 13, далі
-  панорама за рівнянням 11, далі send = панорамний сигнал, помножений на
-  send/127. Зал входить у мастер до обмежника. Клік входить у ту саму суму,
-  з send 0 і pan 0; його тембр задає виконання, не цей каталог.
+  Порядок на доріжці — sum_tracks (gst_rt.c:941–971): s_tmp бере площину
+  доріжки, apply_pair проганяє інсерт 0 і інсерт 1, далі G_trk за рівнянням 13
+  через fader_of, далі панорама за рівнянням 11 через pan_of, далі
+  s_send += (L + R) * send/127. Мут і сольний режим дають G_trk = 0. Зал
+  входить у мастер до обмежника: master_pcm (gst_rt.c:1017–1056)
+  додає (s_wl - s_send), масштабує мастер-томом і лише потім крутить
+  master_soft_clamp, коли master_lim = LIMITER. Клік входить у ту саму суму, з
+  send 0 і pan 0 на окремій шині 65 (build_buses, gst_rt.c:829–832); його тембр
+  задає виконання, не цей каталог.
 
-  Невідомий алгоритм збільшує orch_refuse_insert і слот лишається BYPASS.
+  Невідомий алгоритм слот лишає без дії: apply_pair (gst_rt.c:911–931)
+  пропускає id = BYPASS і id > ORCH_INS_LIMITER, і лічильника тут немає.
+  refuse_insert росте з трьох інших причин: дев'ятий інсерт одного типу
+  (пул ліній, нижче), мастер-інсерт із незаконним значенням і затиснута
+  довжина дилея в рендері.
 
   BYPASS     параметрів немає
   EQ         P1  0 LP, 1 HP, 2 BP, 3 peak
@@ -914,69 +1165,146 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   LIMITER    параметрів немає
              тіло — master_soft_clamp
 
-  Чотири цілі параметри P1..P4 затискаються в межі таблиці вище до рендера.
-  Пули лежать у lilcu64_insert.c, статичний BSS, не в пульті. 8 моноліній
-  дилея і 8 ліній хорусу. На хості стеля дилея — min(f_s, 48000) семплів:
-  8*48000*4 = 1536000 байт. Хорус: 8*2400*4 = 76800 байт. На
-  BTRON_PS2_TARGET стеля дилея — 2048 семплів на лінію, 8*2048*4 = 65536
-  байт: образ PS2 уже рахує таблицю вузлів у RDRAM. Якщо L більше за стелю,
-  L затискається і росте orch_refuse_insert. Дев'ятий інсерт того самого
-  типу лишається BYPASS. Шаблони використовують щонайбільше два дилеї.
-  WA_MAX_NODES не змінюється.
+  Чотири цілі параметри P1..P4 затискаються в межі таблиці вище до рендера:
+  clamp_row (src/media/orchestra_session.c:1464–1521) робить це на кожному
+  редагуванні, а apply_* у lilcu64_insert.c ще раз обмежує clamp_i на
+  кожному кадрі,
+  тож рядок сесії поза межами не чути. Біквад при цьому перебирається не на
+  кожному кадрі, а лише коли mode, hz, qcent або gain відрізняються від
+  збережених (apply_eq, lilcu64_insert.c:141–151), тобто стан фільтра переживає
+  кадр.
+  Стан алгоритмів — static LcIns s_ins[LC_INS_MAX] з LC_INS_MAX = 128
+  (lilcu64_insert.h:7), індекс track * 2 + slot (gst_rt.c:926); це стан, не
+  черга подій.
+
+  Пули лежать у lilcu64_insert.c, статичний BSS, не в пульті. Вісім ліній
+  дилея і вісім ліній хорусу: LC_LINE_MAX = 8 (lilcu64_insert.h:8). На
+  BTRON_PS2_TARGET стеля дилея — LC_DELAY_MAX = 2048 семплів на лінію
+  (lilcu64_insert.c:10–11), тобто 8*2048*4 = 65536 байт: образ PS2 уже рахує
+  таблицю вузлів у RDRAM. На решті цілей LC_DELAY_MAX = 48000 (рядок 13), і
+  дійсна стеля у delay_len — min(f_s, 48000) (рядок 176), тобто 8*48000*4 =
+  1536000 байт. Хорус: LC_CHORUS_MAX = 2400 (рядок 15), 8*2400*4 = 76800
+  байт. Знімок подвоює кожну цифру: s_delay_snap і s_chorus_snap (рядки
+  30–33) лежать поруч, тож на PS2 2*(65536 + 76800) = 284672 байти, а на
+  хості 2*(1536000 + 76800) = 3225600. Якщо L більше за стелю, delay_len
+  затискає L, ставить *clamped, apply_delay повертає 0, apply_pair позначає
+  clamped — і sum_tracks збільшує refuse_insert лише тоді, коли хтось викликав
+  gst_insert_touch (1456–1460) і прохід не експортний; зброя гасне після
+  першого ж кадру поза експортом (gst_rt.c:969–970), тож одна правка дає
+  не більше однієї відмітки. Дев'ятим слотом того самого типу стає не відмова, а
+  ORCH_INS_BYPASS: orch_ins_cycle (src/media/orchestra_session.c:1544–1572)
+  бачить type_count >= 8, повертає слот у BYPASS, рахує refuse_insert і тримає
+  статус "insert". assign_lines (gst_rt.c:839–874) видає лінії за
+  owner-ключем і обнуляє лінію, коли власник змінився. Шаблони
+  використовують щонайбільше дві лінії дилея і одну хорусу. WA_MAX_NODES не
+  змінюється.
 
     void lc_insert_state_save(void);
     void lc_insert_state_restore(void);
 
-  Знімок ліній один, статичний, як і знімок ревербератора. Він не вводить
-  другого алгоритму.
+  Знімок ліній один, статичний, як і знімок ревербератора:
+  lc_insert_state_save (lilcu64_insert.c:64–72) копіює s_ins, s_delay, s_dpos,
+  s_chorus і s_cpos у s_*_snap і ставить s_have_snap, а
+  lc_insert_state_restore (74–83) повертає, якщо знімок є. Парний
+  wa_reverb_save/restore лежать у lilcu64_wa.c. Єдиний, хто їх кличе, —
+  експорт WAV: snap_save разом із memcpy(s_slot_snap, ...) (gst_rt.c:1749–1752)
+  перед прогою й snap_restore (1673–1690) після, щоб офлайн-рендер не лишив
+  хвостів дилея й хорусу в живому пульті. Знімок не вводить другого
+  алгоритму.
 
 
 7. Сесія
 --------
 
-  Сесія є значенням полів, не малюнком. Наявні поля лишаються.
-  OrchestraTrack: track_name[48], channel, in_port, out_port, key_split_low,
-  key_split_high, transpose, velocity_curve, is_muted, is_solo, volume, pan,
-  accent_col. ConcertScene: scene_name[32], tempo_bpm, time_sig_num,
-  time_sig_den, program_change[16], channel_volume[16], lighting_cue[32].
-  OrchestraServerState: is_running, is_recording, tempo_bpm, tc_format,
-  current_frame, active_scene_idx, лічильники, масиви, GstPipeline,
-  menu_bar.
+  Сесія є значенням полів, не малюнком. Три структури й один POD, усі в
+  include/media/gst_rt.h. OrchTrack (99–125): name[48], channel, in_port,
+  out_port, key_lo, key_hi, transpose int8_t, vel_curve, muted, solo,
+  volume, pan, send, program, ins0, ins1, clef, poly_max, p0[4] і p1[4]
+  int16_t, accent, shim, prog_tr int8_t, kind, oneshot. OrchScene
+  (127–135): name[32], tempo u16, num, den, program[16], volume[16],
+  lighting[32]. OrchPort (137–143): name[32], is_input, is_active,
+  message_count, dropped_packets. OrchestraTrack, ConcertScene і
+  OrchestraServerState з попередньої редакції не існують: імена полів
+  скорочені, current_frame і menu_bar зникли, стан тепер одне поле state.
 
-  tc_format зберігається і транспортом не читається. current_frame більше не
-  малює SMPTE. Музична позиція — N із §3.2. lighting_cue є char[32], який
-  пульт може надрукувати. На дріт, DMX чи MTC він не йде.
+  tc_format їде у файл байтом 21 і транспортом не читається; єдиний читач —
+  цикл форми часу (orchestra.c:445–461), який після зміни друкує tc_text у
+  статус. Поле current_frame не існує, SMPTE на екрані немає. Музична
+  позиція — npos із §3.2. lighting є char[32], який пульт може надрукувати.
+  На дріт, DMX чи MTC він не йде.
 
-  Нові поля, не всі їдуть у файл. sample_rate, family, click, master_vol,
-  master_lim, tool і snap — у сесії. send, program, insert[2], p[2][4] як
-  i16, clef і poly_max — на доріжку. clef повторює ключ програми, treble або
-  bass. N є u64 лише під час роботи. selected_track є i32 лише під час
-  роботи. confirm_family є i8, або −1, якщо підтвердження немає; це поле
-  пульта, не файлу. room, damping, feedback і wet — чотири u8 від 0 до 100,
-  на місці колишнього reserved. orch_curve[1024] — float під час роботи;
-  пише UI-тік, читає той самий тік. ev_live[4096] — u8 під час роботи, у
-  файл не пишеться. Слоти[48] тримають gain, start, bus і key. Стан біквада,
-  гейта, тремоло, хорусу і дилея живе в статичних пулах lilcu64_insert.c.
-  orch_midi_clock і лічильники відмов — як у §3.5.
+  На доріжку пишуться send, program, ins0, ins1, p0[4] і p1[4] як i16, clef
+  і poly_max; clef повторює ключ програми, treble або bass. Не пишуться
+  чотири похідні поля OrchTrack — shim, prog_tr, kind, oneshot: після
+  читання їх добудовує gst_resolve_track із program. Не пишуться seq,
+  state, meter_l, meter_r, rec, selected, confirm_family, npos, loop_tick,
+  home_gen, queued_ms, element_count, wcet_us, period_us, status,
+  status_hold, port, ev_live, curve і curve_k.
 
-  Undo — статичне кільце 16 записів лише на площині UI. Рендер його не
-  читає, і пам'ять під нього не виділяється. Кожен запис: kind, track,
-  index, before[48]. Види: ORCH_UNDO_EVENT на 16 байт події, ORCH_UNDO_NAME
-  на 48 байт імені, ORCH_UNDO_TRACK_U8 на один байт поля, ORCH_UNDO_INSERT
-  на два id і вісім i16, разом 18 байт. Транспорт і виклик сцени в кільце не
-  пишуться.
+  N є u64 лише під час роботи: OrchView тримає npos. selected є int8_t,
+  −1 означає, що вибору немає; після читання файлу він стає 0, якщо хоча б
+  одна доріжка є. confirm_family є int8_t, або −1, якщо підтвердження
+  немає; це поле пульта, не файлу. room, damping, feedback і wet — чотири
+  u8 від 0 до 100 у байтах 28..31 заголовка. curve[1024] — float під час
+  роботи; пише UI-тік через orch_build_curve, читає рендер, як у §4.
+  ev_live[4096] — u8 під час роботи: 1 означає, що подія i тримає живу
+  ноту; chase_on ставить, chase_off і slot_silence знімають. Слоти
+  s_slot[48] тримають used, click, bus, key, track, oneshot, bell, stole,
+  gain, t0, dur і ev (src/media/gst_rt.c:31–37). Стан біквада, гейта,
+  тремоло, хорусу і дилея живе в статичних пулах lilcu64_insert.c.
+  Лічильники — це поля OrchView: midi_clock, drop_audio, steal_voice,
+  refuse_smf, refuse_session, refuse_program, refuse_insert,
+  refuse_note_cap, refuse_factory, refuse_tempo, qos_drops і чотири
+  chain_*, як у §3.5.
 
-  Знімок OrchRtView є фіксованим POD, не файлом сесії. Seqlock: непарна
-  послідовність означає, що пульт пише; парна і стала — що актор має право
-  прочитати. Прийом той самий, що в media_smp із §2.3, але на цьому POD.
-  GstPipeline містить указники на пади і change_state і в файл не
-  серіалізується. Після завантаження фабрика збирає граф заново з реєстру
-  §3.4.
+  Undo — статичне кільце UNDO_CAP = 16 записів лише на площині UI
+  (orchestra_session.c:23 і 54–57). Рендер його не читає, і пам'ять під
+  нього динамічно не виділяється. Запис UndoSlot (40–47): kind, track,
+  index як u16, n, mode, before[48]. Види: ORCH_UNDO_EVENT на 16 байт
+  події, ORCH_UNDO_NAME на 48 байт імені, ORCH_UNDO_TRACK_U8 на один байт
+  поля, ORCH_UNDO_INSERT на два id і вісім i16, разом 18 байт
+  (include/apps/orchestra.h:33–36). Mode описує виправну дію над подією:
+  UNDO_OVER перезаписує подію на місці, UNDO_DROP_EV знімає хвіст,
+  UNDO_INSERT_EV вставляє подію назад і зсуває решту (1339–1368). Кільце
+  замінює найстаріший запис, коли повне; orch_undo_apply (1370–1393)
+  знімає лише свіжий запис, redo немає. Під час застосування стоїть
+  s_in_undo, щоб відновлене поле не штовхнуло в кільце новий запис.
+  Транспорт і виклик сцени в кільце не пишуться; подію не можна скасувати,
+  коли state є PLAYING.
 
-  Шляхи версії 1 — три літерали: /SYS/orchestra.orch, /SYS/orchestra.mid,
-  /SYS/orchestra.wav. Інший шлях є відмовою, файл не відкривається. Діалога
-  вибору немає. Порти: ORCHESTRA_MAX_PORTS 32. Після ініціалізації активний
-  лише port 0, ім'я Stage MIDI In, is_input істинне. Порти 1..31 неактивні.
+  Пульт — один POD OrchView (include/media/gst_rt.h:146–204), глобальний g
+  у gst_rt.c, доступний як gst_view(). Це знімок стану, не файл сесії.
+  Seqlock: gst_seq_begin і gst_seq_end (168–177) лише збільшують g.seq,
+  тому непарне значення означає, що пульт пише. Читач — latch_try (420–429):
+  три спроби, пропускає непарне, копіює в LatTrk s_lat[64] і приймає
+  знімок, тільки якщо g.seq лишився тим самим парним. Прийом той самий, що
+  в media_smp із §2.3, але на цьому POD. Жодного GstPipeline у структурі
+  немає: граф — це лічильник s_made_n і перелік s_kind[16] (94–95), які
+  наповнює один concert() (1330–1337) під час gst_rt_boot із таблиці
+  ORCH_FACTORY (13–17), дев'ять викликів без identity. s_made_n
+  публікується як element_count (284) і не перебудовується після
+  завантаження файлу: читання сесії заповнює лише поля
+  (orchestra_session.c:447–487). Завантаження не викликає фабрику й не
+  змінює element_count.
+
+  Шляхи версії 1 задані літералами, діалога вибору немає. Запис іде в один
+  ORCH_PATH_ORCH, тобто /SYS/orchestra.orch (include/apps/orchestra.h:28,
+  orch_cmd_save 748–766). Відкриття має п'ять літералів в open_lit
+  (682–694): orchestra, bells, caterpillar, rising і tron; у меню відкриття
+  рядок вибирає індекс (orchestra.c:792), а команда без підрядка бере
+  нульовий; решта індексів є відмовою. Хостовий десктоп монтує /SYS з
+  образу тому, тож pick_host (696–705) і resolve_orch_path (667–680) після
+  невдалого stat пробують той самий шлях без початкової косої риси, поруч
+  із бінарним файлом. На bare-metal другий запит не виникає: літерал або
+  знайдено з першого разу, або він не починяється з косої риси. Поле шляху
+  в файлі завжди одне й те саме: байти 32..127 містять
+  /SYS/orchestra.orch, бо path_field (240–251) звіряє саме цю константу, а
+  pack_view пише її з неї ж (618). Альбомні файли тому різняться вмістом,
+  не полем шляху. MIDI — ORCH_PATH_MID, тобто
+  /SYS/orchestra.mid, WAV — ORCH_PATH_WAV, тобто /SYS/orchestra.wav
+  (orchestra.h:29–30 і gst_rt.c:18). Порти: ORCH_MAX_PORTS 32. Після
+  ініціалізації активний лише port 0, ім'я Stage MIDI In, is_input істинне
+  (port0, gst_rt.c:1337–1351). Порти 1..31 неактивні.
 
 
 7.1 Файл
@@ -984,20 +1312,48 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Файл сесії має магію ORCH. Версія 1 — рівно 73408 байт, little-endian, без
   указників. Запис іде по полях, не fwrite структури: вирівнювання
-  компілятора не нормативне. Інший розмір, інша магія, інша версія або
-  хвіст, ненульовий поза event_count, збільшує orch_refuse_session, і стан у
-  пам'яті не змінюється. stat, більший або менший за 73408, відмовляє до
-  читання тіла понад статичний буфер.
+  компілятора не нормативне. Статичний буфер s_file (orchestra_session.c:51)
+  тримає рівно ORCH_FILE_BYTES, тому розмір звіряється до читання: read_orch
+  (707–726) робить stat, відмовляє, якщо розмір не 73408, і лише тоді
+  читає тіло. Відмова під час PLAYING теж можлива: відкриття й запис
+  пропускають лише зупинений стан. Кожна відмова — це refuse_session (212),
+  тобто orch_count_sat(&refuse_session) і статус-порча "session"; стан у
+  пам'яті лишається незмінним, бо accept_buf (507–516) спершу звіряє чотири
+  перевірки й лише потім викликає commit_buf (491–506).
+
+  Заголовок звіряє hdr_ok (253–280): магія, version рівно 1, tempo від 40 до
+  240, den лише 2, 4, 8 або 16, num від 1 до 12, sample_rate лише 44100 або
+  48000, і якщо конвеєр уже піднятий — збіг із g.sample_rate; family не
+  вище за ORCH_FAM_ORCHESTRA, тобто 2, click не вище 1, active_scene не
+  вище 15, track_count не вище 64, scene_count рівно 16, master_vol не вище
+  127, master_lim лише BYPASS або LIMITER, tool не вище ORCH_TOOL_ERASE,
+  snap не вище ORCH_SNAP_16TH, event_count не більше 4096, room, damping,
+  feedback і wet не більше 100, поле шляху — рівно /SYS/orchestra.orch.
+
+  Доріжки звіряють tracks_ok (315–331) з one_track_ok (281–298): канал від 1
+  до 16, in_port не вище 31, key_lo й key_hi не вище 127, причому key_lo не
+  більший за key_hi, vel_curve не вище 2, muted і solo не вище 1, volume,
+  pan і send не вище 127, program є у реєстрі §5, обидва інсерти не вище
+  LIMITER, байти 85..95 нульові. Перевіряються всі 64 слоти: після
+  track_count дозволений лише нуль. Додатково type_over (299–314) не
+  допускає більше восьми слотів одного алгоритму — та сама стеля, що в §6.
+
+  Сцени звіряє scenes_ok (332–352): в усіх 16 tempo, num і den у межах,
+  volume не вище 127, program дорівнює 255 або є відомим; 255
+  означає «без зміни». Події звіряє events_ok (353–377): event_count не
+  більше 4096, далі vel ненульовий, flags 0, track менчий за track_count,
+  key не вище 127 і reserved 0; поза event_count решта слотів мусить бути
+  нульовою.
 
   Заголовок, 128 байт.
 
   Зсув  Ширина  Поле
    0    4       байти O R C H
    4    u16     version = 1
-   6    u16     tempo_bpm
+   6    u16     tempo
    8    u32     sample_rate
-  12    u8      time_sig_num
-  13    u8      time_sig_den
+  12    u8      num
+  13    u8      den
   14    u8      family
   15    u8      click
   16    u8      active_scene
@@ -1024,22 +1380,22 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   48    u8      channel
   49    u8      in_port
   50    u8      out_port
-  51    u8      key_low
-  52    u8      key_high
+  51    u8      key_lo
+  52    u8      key_hi
   53    i8      transpose
-  54    u8      velocity_curve
+  54    u8      vel_curve
   55    u8      muted
   56    u8      solo
   57    u8      volume
   58    u8      pan
   59    u8      send
   60    u8      program
-  61    u8      insert0
-  62    u8      insert1
+  61    u8      ins0
+  62    u8      ins1
   63    u8      clef
   64    i16 x4  p0
   72    i16 x4  p1
-  80    u32     accent_col
+  80    u32     accent
   84    u8      poly_max
   85    11      нулі
 
@@ -1047,12 +1403,12 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Зсув  Ширина  Поле
    0    32      name
-  32    u16     tempo_bpm
-  34    u8      time_sig_num
-  35    u8      time_sig_den
-  36    16      program_change
-  52    16      channel_volume
-  68    32      lighting_cue
+  32    u16     tempo
+  34    u8      num
+  35    u8      den
+  36    16      program
+  52    16      volume
+  68    32      lighting
 
   Подія, 16 байт, рівно 4096 слотів, тобто 65536 байт. Перші event_count
   упаковані, решта — нулі.
@@ -1066,51 +1422,162 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
    8    u32     dur_tick
   12    u32     reserved 0
 
-  ev_live у ці 16 байт не входить: flags версії 1 лишаються 0. Закрита
-  записана подія має dur_tick не менше за квант snap. Розмір через це не
-  виріс. Колишні 4 байти reserved на зсуві 28 стали чотирма u8. Інсерт
-  REVERB пише send і байти 28, 29 і 31. Байт 30 пише шаблон і файл.
-  Перевірка довжини: 128 + 64*96 + 16*100 + 4096*16 = 128 + 6144 + 1600 +
-  65536 = 73408.
+  ev_live у ці 16 байт не входить: flags версії 1 лишаються нульовими, і
+  events_ok відмовляє, якщо вони ненульові. Подія, поставлена з пульта, має
+  dur_tick не менший за квант snap: orch_event_put (1647–1683) піднімає
+  тривалість до gst_snap_q(snap, num, den), якщо вона менша. Розмір запису
+  через це не виріс. Колишні чотири байти reserved на зсуві 28 — це room,
+  damping, feedback і wet. Інсерт REVERB пише send доріжки з P0 і байти 28,
+  29 і 31 з P1, P2 і P3 (gst_rt.c:876–908); байт 30, тобто feedback,
+  пишуть лише шаблон сімейства (orchestra_session.c:895–919) і читання
+  файлу. Перевірка довжини: 128 + 64*96 + 16*100 + 4096*16 = 128 + 6144 +
+  1600 + 65536 = 73408.
 
-  Читання йде в статичний буфер цього розміру на площині UI. Рендер буфер
-  файлу не читає. Завантаження викликає wa_set_reverb(1, ...) з байтів
-  28..31 і не переписує інсерти доріжок. Анотації в документній системі цією
-  статтею не задаються. include/ts/bpk.h має TS_TAPPL 0xFFAF; контейнером
-  сесії він не є.
+  Читання йде в статичний буфер цього розміру на площині UI, рендер його не
+  читає. commit_buf (491–506) під seqlock заповнює поля, потім викликає
+  wa_set_reverb(1, ...) з байтів 28..31, lc_insert_reset(),
+  gst_rt_return_zero() і gst_insert_touch(); інсерти доріжок лишаються ті,
+  що у файлі, а похідні OrchTrack — shim, prog_tr, kind і oneshot —
+  добудовує gst_resolve_track (gst_rt.c:352–374) із program. Анотації в
+  документній системі цією статтею не задаються; include/ts/bpk.h має
+  TS_TAPPL 0xFFAF (171), контейнером сесії він не є.
+
+
+7.2 Альбом
+----------
+
+  Чотири файли в SYS/ робить не пульт, а host-ціль album_encode
+  (Makefile:737–742). Її main (823–833) викликає piece() чотири рази:
+  piece(1, 168, 3, 4, "Carol of the Bells", "bells"), piece(2, 120, 4, 4,
+  "Green Caterpillar", "caterpillar"), piece(3, 125, 3, 4, "House of the
+  Rising Sun", "rising") і piece(4, 93, 4, 4, "TRON Init", "tron"), а
+  потім копіює bells у orchestra.orch і orchestra.mid, щоб пульт
+  стартував першою п'єсою.
+
+  Джерело партії — сам рушій. capture() (266) бере lc_score_schedule
+  (track, 0.0) і lc_cap_at, тобто ті самі шими й фрази з §5, а place_all
+  (380), assign_channels (406) і trim_keys (445) розкладають події по
+  доріжках і каналах. Файл сесії не пишеться рукописно: другий опис
+  тієї ж партії був би другою моделлю, тому його немає.
+
+  Заголовок в усіх чотирьох однаковий: 48000 Гц, family CLASSIC, click
+  0, active_scene 0, master_vol 100, master_lim LIMITER, snap 16TH,
+  room, damping, feedback і wet = 42, 55, 18 і 28, поле шляху — сталий
+  /SYS/orchestra.orch. Сцени побудовані однаково (630–655): нульова
+  носить заголовок п'єси, решта 15 беруть імена зі SCN_NAME (72–75),
+  гучність каналу множиться на SCN_SCALE (77–79), канал без доріжки
+  лишається з program 255 і volume 0, а lighting дорівнює stem, тобто
+  "bells".
+
+  Кодування саме себе й перевіряє: piece() після запису викликає
+  orch_session_load_buf (627) і вимагає, щоб відмови не було, потім
+  orch_cmd_smf_save, копіює orchestra.mid на <stem>.mid, робить
+  orch_cmd_smf_load і звіряє event_count до та після. Якщо assign_channels
+  повернув нуль, тобто каналів вистачило без ділення, лічби мусять
+  збігтися рівно.
+
+  Перший файл, bells.orch, — 17 доріжок і 325 подій, span 73535 тіків.
+  При 168 BPM у 3/4 це 76.6 чверті, тобто 27.36 секунди й 25.5 такту.
+
+   №  name                    ch  pr   aux  інсерт      под  клавіші  старт
+  --  ----------------------  --  ---  ---  ---------  ---  -------  -----
+   0  Crystal chime            1 112   24  EQ+REVERB   34  76..100      0
+   1  Crystal chime 2          2 112   24  —           34  76..100    960
+   2  Crystal chime 3          3 112   24  —           33  76..95    1440
+   3  Crystal chime 4          4 112   24  —           20  78..95    4320
+   4  Crystal chime 5          5 112   24  —           11  78..90    6720
+   5  Crystal chime 6          6 112   24  —            3  79..91    7200
+   6  Crystal chime 7          7 112   24  —            2  79..91    7200
+   7  Crystal chime 8          8 112   24  —            1  91..91   10080
+   8  Golden chi bell          9  98   25  EQ+REVERB    1  44..44       0
+   9  Hi-hat                  10 118   26  GATE        59  42..42    3840
+  10  Jazz kick               11 116   27  GATE        20  37..37    5760
+  11  Snare                   12 117   28  GATE        38  38..38    9600
+  12  Snare 2                 13 117   28  —            3  38..38   22320
+  13  Crystal step            14  32   29  EQ+CHORUS   56  35..52   10560
+  14  Singing harmonic triad  15  80   30  EQ+REVERB    3  31..32   23040
+  15  Crystalline cascade     16 102   31  EQ+REVERB    4  65..69   34560
+  16  Jazz woodwind            1  52   32  EQ+DELAY     3  84..91   46080
+
+  Вісім доріжок Crystal chime на каналах 1..8 утворюють канон: входи
+  стоять на 0, 960, 1440, 4320, 6720, 7200, 7200 і 10080 тіків, тобто
+  через чверть, потім через такт, і кожна наступна тримає менше подій,
+  поки сьома й восьма не лишаються по одному удару. Інсерт несуть лише
+  доріжка 0 і загальна шина, решта семи входів лишаються сухими. Золотий
+  дзвін на каналі 9, program 98, — один удар key 44 на нулі з
+  тривалістю 9408 тіків, найдовша подія файлу. Ритм тримають канали
+  10..13: Hi-hat 59 подій під гейтом, Jazz kick 20, Snare 38 і ще три
+  влучення Snare 2. Бас іде на каналі 14, program 32, через EQ і CHORUS
+  в межах 35..52; три довгі тони каналу 15 (program 80) і чотири
+  каскади каналу 16 (program 102) входять у середині. Jazz woodwind
+  ділить канал 1 з першим дзвоним, program 52, EQ і DELAY, і грає три
+  ноти 84..91 лише у хвості, з 46080 тіка.
+
+  Слотів на алгоритм менше стелі з §6: шість EQ, чотири REVERB, три GATE,
+  один DELAY і один CHORUS проти межі вісім. Кожен REVERB пише send
+  своєї доріжки, а до блоку доходять ручки останнього з обходу, тобто
+  канал 16. Байт feedback лишається 18, бо інсерт його не чіпає.
+
+  Розбіжність із суміжним документом лишається відкритою: SOUND.txt
+  (459) про ту саму п'єсу каже «~25.8 seconds (24 Measures)», а
+  зібраний bells.orch дає 27.36 секунди й 25.5 такту в 3/4. Нормативним
+  є файл, бо його читає пульт; SOUND.txt описує ігрову сцену, не
+  контейнер, і правка потрібна саме там.
 
 
 8. Шаблони
 ----------
 
   Шаблон є значенням сесії з розділу 7, зібраним із програм розділу 5 і
-  інсертів розділу 6. Завантаження сімейства замінює доріжки, сцени, темп і
-  метр, обнуляє події, event_count = 0, і лінії дилея. Це шаблон міксу, не
-  партія. Канали без доріжки мають program_change = 255 і не шлються. Байт 0
-  був би фортепіано, тому порожнім каналом він не ставиться.
+  інсертів розділу 6. Три таблиці рядків лежать у коді, не в файлі:
+  ROCK_ROW (orchestra_session.c:61–78), CLASSIC_ROW (91–104) і ORCH_ROW
+  (115–148), гучності сцен — ROCK_VOL (80–89) і CLASSIC_VOL (106–113).
+  Завантаження сімейства замінює доріжки й сцени, ставить темп,
+  метр і зал, обнуляє події та лінії інсертів: apply_fam (924–944) всередині
+  seqlock кличе blank_music (884–893), один із load_ (839–883) і
+  family_fields (895–923), а після seq — wa_set_reverb, lc_insert_reset,
+  gst_rt_return_zero і gst_insert_touch. Це шаблон міксу, не партія.
+  Канали без доріжки мають program 255 і volume 0; 255 означає «не слати»,
+  бо нуль був би фортепіано (scene_progs, 789–799).
 
-  Спільне для трьох сімейств. Мастер — LIMITER. master_vol — 100. Клік
-  вимкнений і в гучності сцени не входить. lighting_cue усіх сцен — порожній
-  рядок. accent_col береться лише з уже наявних ORCH_COL_*. Жоден шаблон не
-  ставить інсерт REVERB: send іде в той самий єдиний зал. У wa_set_reverb
-  байти 0..100 діляться на 100.
+  Спільне для трьох сімейств ставить family_fields (895–923): master_lim є
+  LIMITER, master_vol є 100, click вимкнений, метр 4/4, selected є 0,
+  confirm_family є −1. Темп і зал беруться з двох таблиць: 128 і 40, 40,
+  30, 25 для ROCK; 84 і 75, 35, 55, 45 для CLASSIC; 96 і 85, 40, 60, 40
+  для ORCHESTRA. Клік в гучність сцени не входить, бо він їде шиною 65 із
+  §6.
+
+  Сцени й доріжки мають спільну будову. lighting кожної сцени — порожній
+  рядок, бо обидва заповнювачі починають з memset (800–830). accent
+  береться лише з уже наявних ORCH_COL_*: у ROCK_ROW і CLASSIC_ROW він є,
+  в ORCH_ROW нульовий. Жоден шаблон не ставить інсерт REVERB: send іде в
+  той самий єдиний зал, а у wa_set_reverb байти 0..100 діляться на 100.
 
   Перший запит сімейства на непорожній сесії лише ставить confirm_family і
-  нічого не замінює. Другий запит того самого сімейства застосовує шаблон.
-  Нова порожня сесія ставить ROCK без підтвердження. Іменовані сцени: ROCK —
-  вісім, Count, Verse, Chorus, Solo, Bridge, Break, Outro, End, далі 9..16 з
-  іменем «—». ORCHESTRA — вісім, Tutti, Strings, Winds, Brass, Solo, Piano,
-  Silence, Bow, далі 9..16 «—». CLASSIC — шість, Aria, Verse, Chorus,
-  Cadenza, Recit, End, далі 7..16 «—». Кожна «—» музично збігається з тихою
-  сценою свого сімейства.
+  нічого не замінює (orch_cmd_family, 945–961); другий запит того самого
+  сімейства застосовує шаблон. Порожня сесія, тобто track_count і
+  event_count нульові, застосовує будь-яке сімейство відразу, тому
+  orch_cmd_new (1015–1030) ставить ROCK без підтвердження, і
+  orch_boot_desk (orchestra.c:398–413) робить те саме після boot(48000) і
+  переходу READY → PAUSED. Запит під час PLAYING є відмова refuse_tempo.
+
+  Іменовані сцени. ROCK — вісім: Count, Verse, Chorus, Solo, Bridge, Break,
+  Outro, End, далі 9..16 з іменем «—». ORCHESTRA — вісім: Tutti, Strings,
+  Winds, Brass, Solo, Piano, Silence, Bow, далі 9..16 «—». CLASSIC — шість:
+  Aria, Verse, Chorus, Cadenza, Recit, End, далі 7..16 «—». Кожна «—»
+  музично збігається з тихою сценою свого сімейства: load_ (839–883)
+  повторює індекс останнього рядка гучності, а в ORCH_MASK це нульовий
+  Silence. Ім'я «—» — той самий літерал DASH, що й у §12.
 
 
 8.1 Rock
 --------
 
   128 BPM, розмір 4/4, вісім доріжок, канали 1..8. Клік не є дев'ятою
-  доріжкою. poly_max усіх восьми — 1, включно з програмою 0, як вимагає
-  стеля сімейства. Зал: room, damping, feedback, wet = 40, 40, 30, 25.
+  доріжкою. poly_max усіх восьми — 1: сімейство ROCK зводить стелю голосів
+  до одного в gst_resolve_track (gst_rt.c:368–372), і навіть програма 0,
+  яка має шість, отримала б один. Зал: room, damping, feedback, wet = 40,
+  40, 30, 25.
 
   Доріжка  ch  pr  vol pan snd  i0         i1
   Kick      1 116  110  64  16  GATE       EQ
@@ -1140,7 +1607,8 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   шимів під ці інсерти не переписуються.
 
   Гучності каналів 1..8 по сценах. Темп кожної — 128, розмір 4/4.
-  program_change каналів 1..8 — програма доріжки, каналів 9..16 — 255.
+  program каналів 1..8 — програма доріжки, каналів 9..16 — 255, а їх
+  гучність — нуль, бо fill_scene заповнює лише перші вісім (800–813).
 
   Сцена     1    2    3    4    5    6    7    8
   Count   100   96   84    0    0    0    0    0
@@ -1196,7 +1664,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
    #  Ім'я  ch  pr  pan  EQ
    1  Vl1    1  40   40  peak 520, Q 2.2, +3 дБ
-   2  Vl2    2  40   88  те саме; isSolo = 0
+   2  Vl2    2  40   88  те саме; solo = 0
    3  Vla    3  41   56  те саме; tr -7 із програми
    4  Vc     4  42   72  LP 520, Q 2.2
    5  Cb     5  43   48  LP 400, Q 2.2; tr -12
@@ -1212,7 +1680,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   15  Hp    15  46   32  HP 80, Q 0.7
   16  Perc  16 112   96  HP 2000, Q 0.7
 
-  Сцени задають, хто тримає гучність. Решта каналів — 0. program_change
+  Сцени задають, хто тримає гучність. Решта каналів — 0. program
   каналу доріжки — її програма, порожнього каналу в цій розсадці немає, бо
   доріжок 16. Байт 255 лишається правилом для каналу без доріжки в інших
   сімействах.
@@ -1222,7 +1690,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   Winds     Fl Ob Cl Bsn тримають 64
   Brass     Hn Tpt Tbn Tba тримають 64
   Solo      Vl1 тримає 64; це гучність,
-            не прапор isSolo
+            не прапор solo
   Piano     Hp тримає 64; окремої доріжки
             фортепіано в розсадці немає
   Silence   ніхто; усі нулі
@@ -1249,9 +1717,16 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
       (20)  T = Q / f_s
 
-  На 48000 Гц T = 666 мкс. На 44100 Гц T = 725 мкс. У PLAYING граф
-  допускається лише коли сума оголошених WCET не більша за T сесії. Відмова
-  цього переходу є ASYNC із §3.4. Ціни в мікросекундах:
+  gst_rt_period_us (296–303) рахує T як Q * 1000000 / f_s, тому на 48000 Гц
+  T = 666 мкс, на 44100 Гц T = 725 мкс. orch_check на 300 приймає як частоту
+  лише 44100 і 48000, а для T — 666, 725 або будь-яке додатне значення.
+  Стелю рахує gst_rt_wcet_us (288–295). Допуск робить gst_rt_set_state
+  (1421–1455): у PLAYING він пускає граф лише з READY або PAUSED, лише коли
+  virtio_sound_is_ready() і сума WCET не більша за T сесії. Така відмова не
+  є ASYNC із §3.4, не має лічильника і не міняє стану: вона викликає
+  orch_status_hold("play") і повертає 0. Успіх бере npos у годинник через
+  wa_set_clock_samples, ставить s_arm = 1 і s_due = 0 та кидає в кільце
+  шини код 3. Ціни в мікросекундах:
 
   Крок                                      WCET
   queue                                        8
@@ -1263,45 +1738,112 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   virtiosndsink                               24
   identity, якщо вставлений; у концерті 0      4
 
-  Сума з identity — 636, і 636 не більше за 666. midisrc стоїть на INPUT, не
-  в цій сумі: 20 мкс на подію, не більше 16 подій за період, 320 не більше
-  за 500 мкс бюджету площини.
+  Сума семи рядків без identity — 632, і код публікує саме 632
+  (gst_rt.c:290). 636 стоїть у тій самій функції під умовою s_ident (292),
+  а s_ident ставить gst_factory_make (272–287) лише коли індекс 8 списку
+  ORCH_FACTORY потрапляє у виклик. Концерт (1328–1336) робить дев'ять
+  викликів, беручи на останньому кроці індекс 9 замість 8, тому identity не
+  вставляється, s_ident лишається 0, і 636 у живій збірці не буває.
+  Оголошена ціна — 632, orch_check(w <= 666u) на 291 тримає її нижче за T
+  на 48000 Гц, а g.element_count (284) показує дев'ять елементів.
 
-  Промах дедлайна не розтягує час. Квант у пристрій не пишеться, N і s_clock
-  все одно ростуть на Q, qos_drops збільшується. Темп не змінюється цим
-  промахом.
+  midisrc стоїть на INPUT, не в цій сумі. Пул входу — вісім бітів
+  s_midi_used (111): midi_take (1461–1472) перебирає i < 8, orch_check
+  (1464) фіксує вісім, і функція повертає -1 коли всі слоти зайняті;
+  midi_rel (1473–1477) звільняє. Єдиний виклик midi_take — 1546, і він
+  одразу повертає взятий слот (1547), тож жодна подія слот не тримає.
+  Одночасно резервується не більше восьми подій, не шістнадцять. 500 мкс
+  бюджету площини належать §6, де диспетчер не має викликача.
 
-  Пейсер сидить у virtiosndsink, не в пульті. Sink пише 32 кадри, коли черга
-  коротша за 2 періоди пристрою, і повертає DROP, не чекаючи годинника.
-  Відхилений virtio_sound_write збільшує orch_drop_audio і не повторюється
-  блокуванням. Робоча точка черги — 1–2 періоди пристрою. Гілки «долити до
-  4» немає. Глибина запиту LATENCY — глибина черги, помножена на T.
+  Промах дедлайна не розтягує час. Квант у пристрій не пишеться, а g.npos
+  усе одно збільшується на Q (1223), і темп від цього промаху не
+  змінюється. Годинника це не стосується: wa_set_clock_samples викликають
+  лише на вході в PLAYING (1439) і при скиданні позиції (1234, 1321).
+  Рахунок розрізняє причини. Коли черга вже не коротша за 2048 кадрів,
+  device_out (1184–1188) дає chain_result(ORCH_DROP, 0, 0), тобто росте
+  chain_drop. Коли пристрій неготовий або virtio_sound_write повертає
+  від'ємне (1189–1195), росте drop_audio; відхилений запис не повторюється
+  в цьому тіці й не блокує. Гілка s_force_late (1180–1183) єдина, що
+  збільшує qos_drops і кидає в кільце шини код 4, а той прапорець у збірці
+  лише обнуляється (127, 1259, 1264) і ніколи не стає одиницею, тому
+  qos_drops лишається нулем.
+
+  Пейсер сидить у orchestra_audio_service (1249–1277), не в sink і не в
+  пульті. Кожен тік пише в пристрій ORCH_Q = 32 кадри (1222). Коли
+  btron_render_perf_us() дорівнює 0, сервіс робить один тік і виходить без
+  жодної перевірки черги (1258–1262). Інакше він крутить цикл до 64 кроків:
+  qf = queued_frames() (1241–1248 — байти черги, поділені на 4), вихід коли
+  qf >= 2048, вихід коли qf >= 1024 і строк s_due ще не настав, інакше тік.
+  Тік, що припав на строк, зсуває s_due на T і не дає йому обертатися в нуль
+  (1273–1275), а перший виклик запасає s_due значенням now_us (1263).
+  Робоча точка черги — менше одного періоду хоста, коли пейсер доганяє без
+  обмежень, і один-два періоди, коли він тримає темп. Гілки «долити до 4»
+  немає. Запит LATENCY дає gst_rt_queued_ms (304–310): кадри черги,
+  поділені на f_s, тобто глибина черги в квантах Q, помножена на T; пульт
+  публікує її в OrchView.queued_ms (gst_rt.h:176).
 
 
 9.2 Актори
 ----------
 
-  Два входи і жодного спільного тіка. orchestra_ui_tick викликається один
-  раз за прохід UI з §2.4 і chain не виконує. Він публікує OrchRtView.
-  orchestra_audio_tick викликається один раз за період T, окремо від paint.
-  Окремого циклу з sleep_until_next_period немає. src/desktop/main_mobile.c
-  не чіпається: FOMA Orchestra не лінкує.
+  Три входи і жодного спільного тіка.
 
-    void orchestra_ui_tick(void);
-    void orchestra_audio_tick(void);
+    void orchestra_ui_tick(void);             /* orchestra.c:381–397 */
+    void orchestra_audio_tick(void);          /* gst_rt.c:1198–1240  */
+    void orchestra_audio_service(uint32_t);   /* gst_rt.c:1249–1277  */
 
-  Поки стан не PLAYING, audio_tick повертається одразу. Інакше він виконує
-  chain кванта Q і є єдиним, хто цей chain виконує. Запис у пристрій іде
-  лише якщо черга коротша за 2*1024. Промах — як у §9.1.
+  Два аудіо-входи оголошені в include/media/gst_rt.h:223–224, тік пульта —
+  в include/apps/orchestra.h:48.
 
-  На BTRON аудіоактор має пріоритет 100, як інші площини. Гарантія — тест
-  суми, не окремий щабель пріоритету. Період актора — T, не 250 мкс тексту
-  IOD. На NuttX той самий orchestra_audio_tick є одним завданням SCHED_FIFO
-  з дедлайном T і пріоритетом вищим за UI. Другої реалізації графа немає.
+  orchestra_ui_tick викликається один раз за прохід UI з §2.4 і chain не
+  виконує. Його кличуть шість циклів: src/desktop/main.c:263,
+  src/cores/core_boot.c:513, core_arm64.c:1891, core_yoko.c:544,
+  core_m68k.c:744, core_ps2.c:15244. Тіло будує криву, бере seqlock,
+  публікує OrchView.queued_ms і loop_tick, відпускає seqlock, ставить текст
+  статусного рядка, пише чергу в правий кінець меню і несе inval усім
+  вікнам (388–396). Поки g.sample_rate не 44100 і не 48000, воно повертається
+  до публікації (387).
 
-  Помилка virtio_sound_open вже друкується драйвером. Orchestra повторює її
-  текстом пульта і лишає пайплайн у READY. Запит PLAYING при неготовому
-  пристрої є відмовою без блокуючого повтору.
+  orchestra_audio_service — єдиний, хто зовні крутить аудіо. Його кличе
+  cassette_service (src/apps/audio_player.c:1078, 1084–1086) з тих самих
+  шести циклів, відразу після тіка пульта, і лише коли стан уже PLAYING;
+  сам сервіс ще раз перевіряє s_booted і стан (1255) інакше повертається.
+  Аргумент — btron_render_perf_us(). orchestra_audio_tick викликається лише
+  зсередини сервіса (1260, 1272); пульти його не кличуть. Окремого циклу з
+  sleep немає, і власного потоку ця збірка не заводила:
+  src/desktop/main_mobile.c не чіпається, FOMA Orchestra не лінкує.
+
+  Поки стан не PLAYING або йде експорт, tick повертається одразу (1202).
+  Коли s_sticky = 1 — а його ставить orch_assert_fail (129–134) на першому
+  ж невиконаному orch_check, — tick віддає chain_result(ORCH_REFUSE, 0, 0)
+  і нічого не рендерить (1203–1206): після проваленої інваріанти пульт
+  мовчить, а не клацає. Інакше порядок один і той самий щотику: latch_try,
+  slots_expire, clock_block, на першому тіці після армування ще й chase_on
+  з прапорцем 1, потім chase_on, chase_off, ring_apply, render_graph,
+  device_out(Q), npos += Q (1207–1223), завернення лупу з обнуленням npos і
+  новим home_gen (1224–1237), і два запити wcet та period для публікації
+  (1238–1239).
+
+  Лічильники бере chain_result (1162–1174), і інший шлях їх не чіпає: кожне
+  завершення збільшує OrchView.chain_accept, а далі рівно одне з
+  chain_deliver при ORCH_OK, chain_refuse при ORCH_REFUSE, chain_drop при
+  ORCH_DROP. Промах запису в пристрій — це §9.1.
+
+  Окремої аудіоплощини в цій збірці немає. include/btron/async_rt.h знає
+  INPUT і UI як дві рівнопріоритетні площини з періодами 1000 і 8333 мкс та
+  бюджетами 500 і 4000 мкс (4, 17–18, 31–32); аудіоактора в тій таблиці
+  немає, і числа «пріоритет 100» у дереві теж немає. chain живе в проходах
+  UI, тому гарантією є тест суми з §9.1, не щабель пріоритету, а період
+  навантаження — T з доганянням до 64 тіків, не 250 мкс тексту IOD. Речення
+  про SCHED_FIFO і пріоритет вищий за UI лишається контрактом §3.4 для
+  RTOS-класу: ланки NuttX у цьому дереві немає, і другої реалізації графа
+  теж немає.
+
+  Помилку open вже друкує драйвер рядками [VIRTIO-SOUND-01] і
+  [VIRTIO-SOUND-02] (src/drivers/virtio/virtio.c:157–173). Пульт її текстом
+  не переказує: gst_rt_boot (1395–1402) після від'ємного повертання ставить
+  orch_status_hold("virtio") і все одно лишає стан READY. Запит PLAYING при
+  неготовому пристрої є відмовою без блокуючого повтору (§9.1).
 
 
 9.3 Інваріанти
@@ -1331,16 +1873,35 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Три різні тривалості не підміняють одна одну.
 
-  MIDI, від статусу до виклику шима
-      площина INPUT, закінчити в 500 мкс.
-      Лише це можна назвати «менше ніж 0.2 мс».
+  Бюджет блока
+      orchestra_audio_tick рендерить ORCH_Q = 32 кадри і мусить устигнути
+      за період. Період — gst_rt_period_us (gst_rt.c:296–303), 666 мкс при
+      48000 і 725 мкс при 44100; опублікований WCET — 632 мкс (288–295 і
+      §9.1). Це найжорсткіше число, яке код доводить арифметикою, але це
+      бюджет, а не затримка звуку.
+  Площина INPUT
+      period 1000 мкс з бюджетом 500 мкс (include/btron/async_rt.h, §9.2).
+      За цієї збірки диспетчер MIDI не має викликача, тож площина нічого
+      в черзі не тримає. Речення «менше ніж 0.2 мс» не виводиться нізвідси:
+      500 мкс — це 0.5 мс, а 632 мкс — це 0.632.
   Акустика
-      queued_frames / f_s.
-      queued_frames = queued_bytes / (2*2),
-      каналів два, семпл int16.
-  Період SDL
-      1024 кадри, тривалості з §2.1.
-      Показ дає виміряні мс, не ці константи.
+      queued_frames / f_s, тобто черга пристрою. queued_frames =
+      queued_bytes / (2*2) — два канали, семпл int16 (gst_rt.c:1241–1248),
+      те саме ділення в gst_rt_queued_ms (304–310).
+  Період бекенда
+      wanted.samples = 1024 у virtio_sound_open
+      (src/drivers/virtio/virtio.c:166); рядок пульта «Q 32 | host 1024»
+      (src/media/orchestra.c:497) називає обидва, і це константи, а не
+      вимір.
+
+  Показ дає виміряні мс, не ці константи. Вимірювання робить UI-прохід
+  із §2.4: orchestra_ui_tick (orchestra.c:381–397) під seqlock кличе
+  gst_rt_queued_ms, пише результат у OrchView.queued_ms (390) і там же
+  кладе його в правий кінець смуги меню (394, right_ms 339–354). Пункт 903
+  меню Пристрій робить те саме вимірювання окремо — orch_cmd_latency_text
+  (565–588) — і додатково пише «q <ms> ms» у рядок стану, аж поки найближчий
+  тік не перебудує idle-рядок. Ідентифікатора LATENCY в застосунку немає:
+  903 показує чергу пристрою і більше нічого.
 
   Сталий напис 0.8 ms заборонений. Round-trip 5–8 мс не є контрактом цієї
   збірки: його міг би дати лише бекенд із періодом не більше 128 кадрів, а
@@ -1352,58 +1913,107 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 10. Виконання
 -------------
 
-  Виконання є рухом N по сесії, яка вже зібрана. Стан PLAYING можливий лише
-  після допуску §9.1. Кінець блока не виконує s_clock = N і не виконує N =
-  s_clock.
+  Виконання є рухом N по сесії, яка вже зібрана; N тут є OrchView.npos. Стан
+  PLAYING можливий лише після допуску §9.1. Кінець блока не прирівнює один
+  лічильник до другого: s_clock із §2.2 живе в lilcu64_wa.c (57) і рухається
+  лише рендером, а wa_set_clock_samples (513–517) кличуть на вході в PLAYING
+  (gst_rt.c:1439), при скиданні на нуль (1234, 1321) і навколо експорту
+  (1754, 1689).
 
-  Play від поточного N просить PLAYING. Перший блок дограє ноти, що вже
-  тривають. Stop має два кроки. Перший, із PLAYING: кожна подія з ev_live =
-  1 закривається на snap(tick(N)), dur_tick = max(q, snap(tick(N)) -
-  start_tick), ev_live скидається, далі PAUSED, N тримається, s_clock не
-  чіпається, слоти Orchestra відпущені. Другий, уже в паузі, є поверненням
-  на нуль: N = 0 і wa_set_clock_samples(0) в одному присвоєнні. Окремої
-  команди locate немає. Наступний Play починається з s_clock = N, тож
-  рівняння 1 дає 0, і chase цього блока бачить нуль.
+  Play (orch_cmd_play, orchestra_session.c:1714–1720) є викликом
+  gst_rt_set_state(PLAYING) від поточного N, і перший блок дограє ноти, що
+  вже тривають, гілкою армування з §9.2. Stop має два кроки (orch_cmd_stop,
+  1721–1730). Перший, із PLAYING, веде PAUSED і всередині переходу проганяє
+  stop_hold (gst_rt.c:1288–1300): ring_apply добиває чергу запису, кожна
+  подія з ev_live = 1 закривається close_one (715–731) на snap(tick(N)) із
+  dur_tick = max(q, snap(tick(N)) - start_tick), ev_live скидається, потім
+  release_all_slots відпускає всі 48 OrchSlot і ring_clear очищує кільце
+  запису. N тримається, годинника шимів перший крок не чіпає. Другий крок,
+  уже в паузі, є поверненням на нуль (gst_rt_return_zero, 1316–1327):
+  npos = 0, wa_set_clock_samples(0), обнулені s_minit, s_binit, s_mlast і
+  s_blast, і новий home_gen. Окремої команди locate немає. Наступний Play
+  бере npos у годинник на вході (1439), а після нульового повертання (1) дає
+  0, тож chase цього блока бачить нуль.
 
-  Темп і метр заголовка, а також ті самі поля активної сцени, пишуться лише
-  в PAUSED. У PLAYING такий запис збільшує orch_refuse_tempo і нічого не
-  змінює: інакше рівняння 3 розрізало б уже зіграний такт. Застосування
-  шаблону пише темп, тому в PLAYING воно теж відмова. Перший запит шаблону,
-  який лише ставить confirm_family, стану не потребує.
+  Темп і метр заголовка пишуться лише поза PLAYING: orch_cmd_tempo (1031),
+  orch_cmd_num (1045) і orch_cmd_den (1059) при стані PLAYING ідуть через
+  refuse_tempo (222–231), який збільшує OrchView.refuse_tempo, ставить
+  orch_status_hold("tempo") і нічого не змінює — інакше рівняння 3
+  розрізало б уже зіграний такт. Поля активної сцени пишуться тихше:
+  orch_cmd_scene у PLAYING просто пропускає темп, метр і знаменник, без
+  відмови й без лічильника (993–1014). Застосування шаблону теж пише темп,
+  тому в PLAYING воно відмова (§8). Перший запит шаблону, який лише ставить
+  confirm_family, стану не потребує.
 
-  Panic звільняє 48 слотів, не чіпає click і не змінює сцену.
+  Panic (orch_cmd_panic, 1731–1738, далі gst_rt_panic, gst_rt.c:1301–1310)
+  перебирає 48 OrchSlot, пропускає порожні й ті, у яких click = 1, а решту
+  глушить slot_silence з подальшим used = 0. Стан, сцена, клік і пул подій
+  лишаються як є.
 
-  Record озброює MIDI у вибрану доріжку і лише в PLAYING. Це не аудіозапис і
-  не punch. Note-off уже відкритої події пише dur_tick і після зняття
-  record, і після першого Stop.
+  Record — це OrchView.rec, який перемикає orch_desk_rec_flip
+  (orchestra.c:269–280) у будь-якому стані; озброєний у PLAYING він пише
+  MIDI вибраної доріжки (OrchView.selected) у кільце запису. Це не
+  аудіозапис і не punch. note_on_tracks (1494–1502) бере snap(tick(N)) і
+  кладе подію в 64-записне кільце RecEv (ring_push, 732–745), а в пул її
+  перекладає ring_apply (753–800): події без місця серед 4096 збільшують
+  refuse_note_cap, запису без місця в кільці — chain_accept і chain_drop
+  (1498–1501). Note-off уже відкритої події пише dur_tick і після зняття
+  record — поза PLAYING close_one працює напряму (1519–1533) — і після
+  першого Stop, де stop_hold спершу добиває кільце, а потім закриває решту
+  ev_live (1292–1297). Рядок з shot або рояльний row дістає dur_tick одразу
+  з pick_dur (778–779), і для такого рядка note-off у кільці не закриває
+  нічого (784).
 
-  Click, поки PLAYING і click = 1: один закритий shimHiHat, open = 0, коли
-  tick(N)/ticks_per_beat зростає, і один раз на переході в PLAYING, якщо
-  tick(N) ділиться на ticks_per_beat. Тік 0 — доля 0 такту 0. Клік займає
-  один із 48 слотів, bus 65, send 0, pan 0. Mute і solo його не стосуються.
+  Click — OrchView.click, у рушії він лежить як s_lclick, бо його бере
+  latch_copy (413). Поки PLAYING і click = 1, грає один закритий клік:
+  click_trig (1083–1114) бере LC_SHIM_HAT з відкритістю 0.0f, клавішею 42,
+  гучністю gain_of(0, 90) і тривалістю 0.055 с. Слот — той самий, де вже
+  лежить click = 1, а не новий (1091–1092): used, click, bus 65, key 42,
+  track 0, oneshot 1, bell 0, gain, t0, dur і ev = -1; ні send, ні pan у
+  OrchSlot немає. На вході в PLAYING клік звучить, коли tick(N) ділиться на
+  ticks_per_beat (1141–1143), далі — один раз на кожен перехід
+  tick(N)/ticks_per_beat з доганянням не більше чотирьох кліків за блок
+  (1153–1158). Тік 0 — доля 0 такту 0. Mute і solo його не стосуються:
+  sum_click (972–986) додає площину 65 з фіксованим 0.7071 на обидва
+  канали, без фейдера доріжки.
 
   Mute глушить навіть solo. Якщо є бодай один невимкнений solo, звучать лише
   solo-доріжки.
 
-  CC7 пише volume, CC10 пише pan, program change індексує карту §5. Інші CC,
-  включно з bank select CC0 і CC32, sustain CC64, pitch bend, aftertouch і
-  channel pressure, ігноруються і рахуються. Звуку з мікрофона ця стаття не
-  додає.
+  CC7 пише volume, CC10 пише pan, program change 0xC0 пише program і
+  перераховує доріжку gst_resolve_track (1558–1580). На відміну від пульта й
+  сцени, цей шлях не перевіряє gst_program_known і не чіпає refuse_program.
+  Решта CC — bank select CC0 і CC32, sustain CC64, pitch bend, aftertouch і
+  channel pressure — повертає ORCH_OK, нічого не міняючи (1582), і рахується
+  лише в MidiPort.message_count, знятому на вході (1545). Це тіло
+  диспетчера з §6, тобто в живому пульті воно не викликається. Звуку з
+  мікрофона ця стаття не додає.
 
-  Сцена. orchestra_switch_scene замінює тіло з §2.2. У PAUSED копіює темп і
-  метр сцени в заголовок; саму сцену лишає як є; копіює channel_volume[ch] у
-  volume кожної доріжки з цим channel; шле program change лише якщо байт не
-  255. У PLAYING гучності і програми, крім 255, копіюються так само, на
-  наступний блок; темп і метр заголовка не чіпаються. Звучні ноти не
-  гасяться і на новий шим не пересаджуються. Інсерти, P1..P4 і lighting_cue
-  не чіпаються. Chase сцена не перезапускає.
+  Сцена. orchestra_switch_scene з попередньої редакції не існує; перемикач —
+  orch_cmd_scene (orchestra_session.c:993–1014), який кличуть і меню
+  (orchestra.c:846), і кнопкові рядки сцени (orchestra_stage.c:332). Індекс
+  поза 0..15 є відмовою без лічильника. Під seqlock він ставить
+  active_scene; поза PLAYING бере з сцени темп, метр і знаменник — кожен
+  після власної перевірки bpm_ok, 1..12 та den_ok. Далі завжди працюють
+  push_volumes (982–991), що пишуть OrchScene.volume[ch] у volume кожної
+  доріжки з цим каналом, і push_programs (963–981), які пропускають 255,
+  відмовляють невідомому байту через refuse_program і для відомого пишуть
+  program з gst_resolve_track. У PLAYING темп і метр лишаються як є,
+  гучності й програми копіюються так само, і побачить їх наступний блок, бо
+  рушій читає latch_try. Звучні ноти не гасяться і на новий шим не
+  пересаджуються: слот тримає доріжку й клавіш, не програм. Інсерти, P1..P4
+  і lighting не чіпаються; поза PLAYING ще й gst_insert_touch озброює
+  обмежник (gst_rt.c:1456–1460). Chase сцена не перезапускає.
 
   Поки PLAYING, ноти з пулу грає лише chase, і цей chase є роботою
-  orchestra_audio_tick із §9.2. Живий orchestra_dispatch_midi_event звучить
-  одразу і в цьому блоці chase-ем не дублюється. Індекс формул у живому
-  транспорті — N. Поза PLAYING note-on моніториться і в пул не пишеться.
-  Note-off поза PLAYING усе одно закриває збіг track, key і ev_live = 1,
-  якщо перший Stop його ще не закрив.
+  orchestra_audio_tick із §9.2 — chase_on (664–694) і chase_off (695–714)
+  на кожному блоці. Живий orchestra_dispatch_midi_event звучить одразу через
+  sound_on і в тому ж блоці chase-ем не дублюється, бо подія лягає в кільце
+  запису, а не в пул. Індекс формул у живому транспорті — N. Поза PLAYING
+  note-on не бере жодного слота: 1550–1553 пускає note_on_tracks лише у
+  PLAYING, тож моніторингу й запису поза станом немає. Note-off поза
+  PLAYING усе одно закриває збіг track, key і ev_live = 1, якщо перший Stop
+  його ще не закрив (1519–1533).
 
   * На початку блока фіксується prefix = event_count. Події, додані живим
     записом під час блока, мають ev_live = 1 і в цьому блоці chase-ем не
@@ -1416,28 +2026,48 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   * Перехід у PLAYING один раз дограє події, у яких sample(start) < N <
     sample(start+dur): слот стартує з залишком. Перший Stop перед цим уже
     відпустив голоси, тож це не другий голос поверх живого.
-  * Record у PLAYING на note-on: монітор, і в пул лягає подія вибраної
-    доріжки. Байт 0 — track, байт 1 — key, start_tick = snap(tick(N)),
-    velocity note-on, ev_live = 1. dur_tick на note-on не пишеться. Повний
-    пул: orch_refuse_note_cap, нота звучить, подія не додається.
-  * Note-off вибирає відкриту подію з цим track, цим key і ev_live = 1. Якщо
-    таких кілька — та, у якої start_tick найбільший. Їй ставиться dur_tick =
-    max(q, snap(tick(N_off)) - start_tick) і скидається ev_live. Якщо
-    відкритої немає, note-off нічого не дописує. Velocity 0 новою подією не
-    є. Стирання ущільнює префікс event_count.
-  * Коло є. Щойно sample кінця останньої ноти вже позаду N, слоти
-    відпускаються, N стає 0 і chase грає твір знову. PLAYING лишається.
-    Другий Stop лишає паузу з N на нулі: Play іде з початку без кола.
+  * Record у PLAYING на note-on: нота звучить одразу через sound_on, а в
+    кільце лягає op 1 з track, key, vel і start_tick = snap(tick(N))
+    (1494–1502). У пул подію пише ring_apply з тим самим start_tick, з
+    ev_live = 1 і з dur_tick або з pick_dur для shot-рядків, або нулем; на
+    note-on тривалості в кільці немає. Повний пул — refuse_note_cap (768),
+    нота звучить, подія не додається; переповнене кільце — chain_accept і
+    chain_drop.
+  * Note-off у PLAYING кладе в кільце op 0; ring_apply вибирає відкриту
+    подію з тим самим track, тим самим key і ev_live = 1, при кількох — ту,
+    в якої start_tick найбільший, ставить dur_tick = max(q,
+    snap(tick(N_off)) - start_tick) і скидає ev_live (784–798). Для
+    shot-рядка гілка note-off не закриває нічого. Якщо відкритої немає,
+    note-off нічого не дописує. Velocity 0 новою подією не є. Стирання
+    ущільнює префікс event_count.
+  * Коло є, коли OrchView.loop_tick більше за нуль; його рахує span_tick
+    (orchestra.c:356–379) як насичену суму start_tick і dur_tick — максимум
+    по всіх подіях із vel не нуль — і публікує тік пульта з §9.2. Щойно
+    sample цього кінця опиняється позаду N, блокова гірка в audio_tick
+    (1224–1237) відпускає слоти, очищує ev_live і кільце, ставить npos = 0,
+    озброює chase і піднімає home_gen. PLAYING лишається. Другий Stop лишає
+    паузу з N на нулі: Play іде з початку без кола.
 
   Поки PLAYING, пул подій пише лише аудіоактор. Олівець у PLAYING є відмовою
-  і в пул не пише. Перший Stop, якщо клавіша ще опущена, закриває кожну
-  подію з ev_live = 1 тією самою формулою і лише потім відпускає слоти.
-  Пізніший note-off бачить уже закриту подію і другу не створює.
+  і в пул не пише: orch_event_put (1647–1685) і orch_event_del (1686–1713)
+  при стані PLAYING ставлять orch_status_hold("note") і повертають 0.
+  Довжина події в пультовому записі не менша за q: при dur < q його піднімає
+  той самий put (1667–1668). Перший Stop, якщо клавіша ще опущена, закриває
+  кожну подію з ev_live = 1 тією самою формулою і лише потім відпускає
+  слоти. Пізніший note-off бачить уже закриту подію і другу не створює.
 
-  Октава додає +12 до transpose кожної доріжки і замикає результат у
-  −36..+36. Канал і порт: канал 1..16, після оберту канал скидається в 1 і
-  порт збільшується на 1 за модулем 32. Додати доріжку понад 64 або стерти
-  останню — відмова. Другий aux — відмова: зал один.
+  Октава (orch_cmd_octave, 1225–1242) додає +12 до transpose кожної
+  доріжки сесії і замикає результат у −36..+36. Канал (orch_cmd_channel,
+  1204–1223) стосується вибраної доріжки: канал 1..16, після оберту канал
+  скидається в 1 і in_port збільшується на 1 за модулем 32. Доріжку додає
+  orch_cmd_add_track (1103–1127) з каналом (n mod 16) + 1, томом 100,
+  панорамою 64, програм 0 і діапазоном клавіш 0..127; понад 64 доріжок —
+  refuse_track, яка ставить лише orch_status_hold("track"), без лічильника.
+  orch_cmd_del_track (1149–1167) відмовляє в PLAYING, при одній доріжці й
+  без вибраної; інакше викидає її події з ущільненням пулу. Другого aux
+  немає не як відмова, а як структура: у доріжки одне поле send (0..127 за
+  field_ok), в міксі одна s_send, і одну її обробляє wa_reverb_process
+  (1027). Зал один.
 
 
 11. Обмін
@@ -1452,41 +2082,125 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   Норма — текст Standard MIDI Files асоціації MMA: заголовок MThd, доріжка
   MTrk, дельта-час VLQ. Жоден репозиторій читача не відкривався. Шлях —
-  /SYS/orchestra.mid.
+  ORCH_PATH_MID (orchestra.h:29), тобто /SYS/orchestra.mid. resolve_mid_path
+  (242–253) спершу шукає цей літерал; якщо його немає й літерал починається
+  з '/', пробує те саме ім'я без слеша наперед, поруч із бінарним файлом, як
+  clarity_export. На фрістендінгових мішенях фолбек просто не знаходить
+  відносного імені: це перевірка в час виконання, а не гілка препроцесора.
+  Команди віддають пункти 104 і 105 меню Файл (orchestra.c:635–636,
+  cmd_file 816–828).
 
   Читаються type 0 і type 1. Пишеться type 1, по одній MTrk на доріжку
-  Orchestra, і type 0, коли track_count = 1. Єдиний пункт меню пише type 1,
-  якщо доріжок більше однієї, і type 0, якщо доріжка одна. Division при
-  записі — 960, тобто ORCH_PPQ. Від'ємний SMPTE-division при читанні
-  відмовляє файл цілком: MTC не є ціллю, tc_format транспортом не читається.
+  Orchestra, і type 0, коли track_count = 1: write_header (1238–1251) ставить
+  fmt 0 рівно тоді, коли ntrks = 1. Division при записі — 960, тобто ORCH_PPQ
+  (1250). Від'ємний SMPTE-division при читанні відмовляє файл цілком:
+  check_header_b (339–354) вимагає division у 1..DIV_MAX, а DIV_MAX = 32767
+  (26) відсікає старший біт саме там. MTC не є ціллю, tc_format транспортом
+  не читається.
 
-  * stat понад 262144 байт — відмова, у буфер не читається.
-  * Довжина MThd не 6 — відмова.
-  * ntrks = 0 або ntrks > 64 — відмова цілком. Зайві доріжки не дочитуються
-    частиною.
-  * VLQ довше 4 байт — відмова. Довжина чанка поза залишком буфера —
-    відмова.
-  * Понад 4096 подій — подальші події відмова, лічильник orch_refuse_smf.
-  * Running status на читанні приймається. На записі кожна подія має власний
-    статус.
-  * SysEx пропускається, рахується і в сесію не кладеться.
-  * Перший meta tempo FF 51 03 у 40..240 пише tempo_bpm. Поза діапазоном
-    відмовляє цей meta, темп сесії лишається.
-  * Кінець доріжки FF 2F 00 обов'язковий.
-  * Type 0 розкладається по каналу статусу на доріжку з цим channel. Якщо
-    такої немає — на вибрану доріжку.
-  * Нота в тіках 960: дельта SMF множиться цілим delta * 960 / division.
+  * stat понад ORCH_SMF_CAP = 262144 байт — stat_mid (284–294) повертає 0,
+    файл не відкривається, команда відмовляє.
+  * Тег не MThd, довжина заголовка не 6, fmt більше 1 — check_header_a
+    (329–337) відмовляє.
+  * ntrks = 0 або ntrks > ORCH_MAX_TRACKS = 64 — відмова цілком. Зайві
+    доріжки не дочитуються частиною: load_chunks (820–828) робить рівно
+    ntrks викликів parse_chunk і зупиняється на першому поганому.
+  * Довжина MTrk, що не вміщується в залишок буфера, або тег не MTrk —
+    chunk_bounds (721–732) відмовляє чанк, а з ним увесь файл.
+  * VLQ довше SMF_VLQ = 4 байт — read_vlq (266–282) відмовляє рядок.
+  * Нота в тіках 960: add_delta (551–562) додає ціле delta * 960 / division,
+    і сума тіків понад 2^32 відмовляє рядок, а отже й файл (699). Кожен
+    чанк починається з тіка 0 (chunk_start, 734–742).
+  * Пул подій — ORCH_MAX_EVENTS = 4096. ev_live (522–533) більше не вміщує,
+    а add_event (535–548) на кожну подію після повного пула рахує
+    OrchView.refuse_smf (546) і не перериває розбір: файл лишається валідним,
+    просто решта подій у сесію не потрапляє.
+  * Running status на читанні приймається: one_row (691–707) бере статус з
+    попереднього рядка, а рядок без статусу й без running status відмовляє
+    (705). Meta, SysEx і system common running status знімають (452, 394,
+    673). На записі кожна подія має власний статус (write_note, 1145).
+  * System common 0xF1, 0xF2, 0xF3 і 0xF6 мають фіксоване тіло (669–671),
+    решта системних статусів відмовляє файл (672).
+  * SysEx пропускається, рахується всередині (s_sysex, 393) і в сесію не
+    кладеться; окремого рядка пульта для нього немає.
+  * Перший meta tempo FF 51 03 із довжиною 3 пише tempo_bpm: take_tempo
+    (407–432) бере лише перший, MICRO / us має впасти в 40..240, інакше
+    count_smf (398–405) рахує refuse_smf, а темп сесії лишається. Решта meta
+    читається і пропускається.
+  * Кінець доріжки FF 2F 00 обов'язковий: chunk_result (747–754) приймає
+    чанк, лише коли рядки зупинились на ST_END і ended встановлений, тобто
+    саме на FF 2F з довжиною 0 (meta_kind, 439). Чанк, у якого байти
+    скінчилися раніше за маркер, — відмова.
+  * Type 0 розкладається по каналу статусу: land_track (603–616) спершу шукає
+    доріжку з цим channel (457–468), не знайшовши — бере вибрану. У type 1
+    подія без доріжки на свій канал рахує refuse_smf (631) і пропускається.
+  * Ноту закриває остання відкрита пара канал і клавіша: s_pend[16][128] (73)
+    тримає індекс події note-on (remember_on, 592–601), close_note (571–590)
+    пише dur_tick = now − start, але не менше 1. note-off без відкритої ноти
+    ігнорується без лічильника (583). Створена подія має dur_tick =
+    ORCH_PPQ (fill_event, 519), тож пара без note-off лишає ноту завдовжки в
+    чверть такту.
+  * 0xC0 program change ставиться через set_program (482–494): невідомий
+    номер рахує refuse_program і нічого не змінює, знайомий — program і
+    gst_resolve_track для кожної доріжки з цим каналом (apply_program,
+    470–480). 0xD0 channel pressure розбирається як подія з одним байтом
+    тіла, але не застосовується (500–504). 0xA0 after-touch і 0xE0 pitch bend
+    мають два байти тіла і так само не мають наслідків (one_note, 654).
 
-  Розмір перевіряється до читання тіла. Тіло лягає в статичний буфер, ніколи
-  в буфер довжини з поля файлу.
+  Розмір перевіряється до читання тіла. Тіло лягає в статичний
+  s_smf[ORCH_SMF_CAP] (61), ніколи в буфер довжини з поля файлу, і slurp_body
+  (296–307) вважає зчитування успішним лише коли воно дало рівно заявлені
+  байти та s_size вийшов не меншим за SMF_HDR = 14.
+
+  Завантаження — послідовність orch_cmd_smf_load (1284–1302). У PLAYING
+  команда відмовляє через refuse_smf (1291; сама відмова — 123–132, ворота
+  перевіряє playing(), 114–121). Далі — resolve, read_smf_file (319–327),
+  check_header (356–364) і snap_take (830–858), який зберігає доріжки, сцени,
+  події з їх живими прапорцями, темп, кількість доріжок, сімейство, розмір,
+  click, вибрану доріжку й чотири ручки кімнати. seed_if_empty (794–802) на
+  порожній сесії сідає orch_cmd_family(ORCH_FAM_ROCK) (787). parse_all_chunks
+  (896–906) чистить пул (clear_events, 804–818) і будує новий під
+  gst_seq_begin та gst_seq_end (902–904), тож пульт бачить або стару сесію,
+  або нову, ніколи суміш. Поганий розбір — snap_restore (860–894) і
+  refuse_smf (914–916). Успіх — темп у 40..240, lc_insert_reset,
+  gst_rt_return_zero, gst_insert_touch, orch_status_ok (finish_load,
+  908–929).
+
+  Запис — orch_cmd_smf_save (1304–1317): у PLAYING відмова з refuse_smf
+  (1311), інакше build_smf (1253–1266) і write_smf_file (1270–1282). Одна
+  MTrk на доріжку сесії (write_chunks, 1222–1236); при нулі доріжок не
+  пишеться нічого й команда відмовляє (1230, 1263). Доріжка з каналом поза
+  1..16 зупиняє весь запис (track_channel 1188, write_chunk 1212). build_smf
+  спершу обнуляє весь буфер (1260). Тіло доріжки іде в порядку: program 0xC0
+  цієї доріжки (write_program, 1041–1053), tempo FF 51 03 лише в першій
+  доріжці (write_body 1199, lead при i == 0 — 1232), нотні пари, і наприкінці
+  FF 2F 00 (write_end, 1149–1159). Темп — MICRO / bpm, де bpm бере сесійний
+  tempo тільки в 40..240, інакше 120 (us_per_beat, 1055–1064). Нотні пари
+  збираються в s_out[SMF_OUT] — 8192 рядки, по одній парі на подію (74,
+  out_fill, 1118–1135); події з vel 0 пропускаються (1129), а переповнення
+  таблиці відмовляє збереження (1083). out_next (1093–1116) вибирає
+  найраніший тік, а за рівних тіків спочатку note-off, тож клавіша не лишається
+  притиснутою на межі. Різниця береться від попереднього рядка (put_delta,
+  1018–1029), тому тіки в чанку монотонні, і лічильник скидається на кожній
+  доріжці (write_body 1197); дельта, довша за чотири байти VLQ, стискається до
+  268435455 (vlq_measure, 938). Перед кожним рядком і перед кожною доріжкою
+  лишається SMF_ROOM = 5000 байт (1170, 1213), а довжину чанка put_chunk_head
+  (966–976) дописує після тіла. write_smf_file вважає запис успішним лише
+  коли fwrite віддав рівно size байтів і fclose повернув 0; інакше refuse_smf
+  (1281, 1314).
 
 
 11.2 WAV
 --------
 
-  Лише запис. Читача WAV немає. MP3, AIFF, OGG і SF2 немає. PCM 16-bit
-  stereo, частота сесії. Заголовок рівно 44 байти, little-endian. Шлях —
-  /SYS/orchestra.wav. У репозиторій WAV не кладеться.
+  Лише запис. Читача WAV немає: літерали RIFF і WAVE у дереві пишуться в
+  заголовок і нізвідки не зчитуються (wav_header, 1604–1606). MP3, AIFF, OGG
+  і SF2 немає. PCM 16-bit stereo, частота сесії. Заголовок рівно 44 байти,
+  little-endian. Шлях — літерал /SYS/orchestra.wav (WAV_PATH 18 і
+  ORCH_PATH_WAV в orchestra.h:30). На відміну від SMF, тут фолбека на ім'я
+  без слеша немає: same_path (802–812) порівнює рядки точно, інше ім'я —
+  відмова. Пункт меню 106 кличе orch_cmd_wav (orchestra.c:590–597), який
+  передає именно ORCH_PATH_WAV. У репозиторій WAV не кладеться.
 
   Зсув  Вміст
    0    RIFF
@@ -1503,25 +2217,79 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   36    data
   40    u32, число байт PCM
 
-  Експорт іде офлайн тими самими функціями розділів 4 і 6, що й живий
-  мастер, у статичний блок int16 на один період, без virtio_sound_write і
-  без пейсера. Лише з PAUSED. Якщо PLAYING — відмова, файл не чіпається.
+  Зсув у таблиці — байти заголовка, значення пише wav_header (1598–1617):
+  f_s бере fs_now() з перевіркою 44100 або 48000 (1600–1602, 1611), поле
+  після RIFF — 36 + 4 * кадри, тобто розмір файлу мінус вісім байтів
+  (1601, 1605), block align 4 і bits 16 статичні (1613–1614), поле data —
+  4 * кадри (1616). Кадри в заголовку — u32, і межа нижче не дає цьому полі
+  переповнити.
 
-  Перед рендером: wa_reverb_save, lc_insert_state_save, saved =
-  wa_clock_samples(). Сесійний N не читається і не змінюється. Власник
-  лишається, бо пайплайн не NULL. Далі wa_set_clock_samples(0) і
-  lc_set_score_base(0). Індекс chase і аргумент t у lc_shim_note — цей
-  локальний s_clock, через рівняння 1. wa_render_buses зрушує його на
-  довжину блока. wa_init не викликається: він обнулив би вузли, шум і
-  s_clock. Після останнього блока вузли bus 1..65 відпускаються, потім
-  wa_reverb_restore, lc_insert_state_restore і wa_set_clock_samples(saved).
-  Після цього s_clock знову дорівнює N, бо збережений clock уже дорівнював
-  N: повернення на нуль присвоює обидва разом ще до збереження, а перший
-  Stop s_clock не чіпає. Експорт N у s_clock не копіює.
+  Експорт іде офлайн тими самими функціями розділів 4 і 6, що й живий
+  мастер, — clock_block, slots_expire, chase_on, chase_off, render_graph
+  (1707–1712), — і так само у статичний блок int16 на один період
+  (s_pcm, 1049–1050, 1713), але з власною таблицею слотів s_xslot і власною
+  таблицею live, обидві обнуляються на кожен експорт (1699–1700). Без
+  virtio_sound_write, без ring_apply і без close_one: device_out у цикл не
+  входить, а останні дві мають orch_check(s_export == 0) (718, 756);
+  slots_expire дістає touch_live = 0 (1709), тож g.ev_live і пул подій під
+  експортом не рухаються. Лише з PAUSED за ініціалізованого ядра; PLAYING,
+  READY, NULL або чуже ім'я дають orch_status_hold("wav") ще до fopen, тому
+  файл не створюється і не чіпається (1728–1740).
+
+  Прапорець s_export (ставиться 1753, знімається 1690) робить рендер
+  безпобічним для публічного OrchView: метри не оновлюються (master_pcm
+  1081 і 1052–1055), midi_clock не рахується (clock_add 1125, clock_block
+  1142), не рахуються steal_voice (609), пара chain_accept і chain_drop за
+  відмовою слота (689–692) і refuse_insert разом із роззброєнням
+  обмежувача (969–970), а ручки ревербу, зняті з інсерта, лишаються в
+  затнутому знімку s_lat і не пишуться в g.trk, g.room, g.damping, g.wet
+  (896, 903–907), хоча wa_set_reverb саме з ними й викликається (908–909).
+  Живий тік у цей час повертається на першій же перевірці (1202).
+
+  Перед рендером snap_save (1659–1672) знімає п'ятнадцять u32-лічильників —
+  drop_audio, steal_voice, refuse_smf, refuse_session, refuse_program,
+  refuse_insert, refuse_note_cap, refuse_factory, refuse_tempo, midi_clock,
+  qos_drops, chain_accept, chain_deliver, chain_drop, chain_refuse — як блок
+  із 15 підряд полів OrchView (gst_rt.h:180–194, CtrSnap 42–52), і ще
+  обидва метри, s_arm, s_minit, s_binit, s_mlast, s_blast, N = g.npos та
+  wa_clock_samples(). Далі s_slot копіюється в s_slot_snap (1750), потім
+  ідуть wa_reverb_save, lc_insert_state_save, s_export,
+  wa_set_clock_samples(0) і lc_set_score_base(0.0) (1751–1755). Сесійний N
+  під експортом не читається і не змінюється, бо цикл оперує власним pos.
+  Власник звукового пристрою лишається Orchestra: експорт не викликає ані
+  lilcu64_set_audio_owner (його ставлять лише boot 1389 і shutdown 1410),
+  ані concert, ані gst_rt_set_state, тож граф і s_made_n не перебудовуються.
+
+  Індекс chase і аргумент t у lc_shim_note — локальна позиція експорту,
+  переведена в тіки і секунди (chase_on, 680–687), і за рівнянням 1 вона
+  росте від нуля разом із s_clock: wa_set_clock_samples(0) обнуляє годинник
+  (1754), wa_render_buses зсуває його рівно на кадри блока
+  (lilcu64_wa.c:571), а export_loop на стільки ж зсуває pos (1714). wa_init
+  не викликається: він обнулив би вузли, шум і s_clock (73–76).
+
+  Після останнього блока snap_restore (1673–1691) вертає лічильники, метри,
+  N і межі годинника, кладе s_slot назад із знімка, і лише потім release_buses
+  (1648–1658) відпускає вузли bus 1..65 на всі 128 клавіш; далі йдуть
+  wa_reverb_restore, lc_insert_state_restore, wa_set_clock_samples(saved) і
+  s_export = 0. Порядок важливий: вузли звільняються після повернення живих
+  слотів, тож експортні голоси не чутні, а живі лишаються на місці. Експорт
+  N у s_clock не копіює, годинник повертається із знімка. У допущеному
+  PAUSED ці два лічильники вже збігаються: вхід у PLAYING ставить
+  wa_set_clock_samples(N) (1439), під PLAYING обидва ростуть на кадри одного
+  блока (1223 і lilcu64_wa.c:571), зупинка з PLAYING годинника не чіпає
+  (1446–1450), а Stop із PAUSED і обертання петли обнуляють обидва разом
+  (1320–1321 і 1230–1234). Тому після експорту s_clock знову дорівнює N.
 
   Довжина — кінець останньої ноти, але не менше одного такту, не більше 64
-  тактів і не більше 80 МіБ. Довший результат обрізається, і текст пульта
-  каже truncated.
+  тактів і не більше ORCH_WAV_MAX = 80 МіБ разом із заголовком (export_end,
+  1618–1647; gst_rt.h:19). Довжина рахується від затнутих темпу, num і den
+  (latch_copy, 1741), тіків у такті — num * 3840 / den (1624), а межа в
+  байтах — (ORCH_WAV_MAX − 44) / 4 кадрів (1626). Крізь циклу — 655360
+  блоків по ORCH_Q = 32 кадри (1703), тобто 20971520 кадрів, на вісім більше
+  за межу 80 МіБ, тому ріже саме межа, а не крізь. Кожне стискання ставить
+  trunc, і текст пульта каже truncated (1644–1645, 1759); той самий текст
+  з'являється й коли fwrite віддав менше, ніж просили, бо умова об'єднана
+  (1759), а частково записаний файл при цьому лишається на диску.
 
 
 12. Пульт
@@ -1535,59 +2303,136 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 12.1 Вікна
 ----------
 
-  Вікон рівно сім. Інших немає.
+  Вікон рівно сім. Інших немає. Меню «ウィンドウ(W)» відкриває їх пунктами
+  701..707, і команди зводяться до відкривачів одним зсувом id = cmd - 701
+  (orchestra.c:871–883). Позначки W_STAGE, W_ARRANGE, W_PIANO, W_SCORE,
+  W_MIX, W_INSERT, W_ABOUT — читацькі імена цього розділу; таких
+  ідентифікаторів у дереві немає. Кожен модуль тримає один static WND *s_wnd,
+  і повторне відкриття лише піднімає наявне вікно викликом top_wnd
+  (наприклад orchestra_stage.c:396–399).
 
-  W_STAGE   концерт: транспорт, panic, 16 сцен,
-            click, family, текст, метри.
-            Типово 780 x 520. Paint читає
-            ширину і висоту вікна.
-  W_ARRANGE лінійна шкала всіх доріжок.
-            Скрол доріжок і шкали часу.
-            Гра гортає вікно, курсор зліва.
-            Клієнт вікна.
-  W_PIANO   редактор клавіш 0..127 однієї
-            доріжки. Клієнт вікна.
-            Той самий гортач часу.
-  W_SCORE   один нотоносець. Клієнт вікна.
-            Той самий гортач часу.
-  W_MIX     смуги, мастер, один aux return.
-  W_INSERT  інспектор вибраного слота.
-  W_ABOUT   про програму, 520 x 270.
+  Типові геометрії — фактичні значення рядка відкриття:
 
-  Текст стану — регіон W_STAGE на ім'я R_STATUS, не вікно. Декорація Cmaj7,
-  Leslie і DMX-cue з paint знімається. Ноти живуть у масиві подій і
-  малюються в W_ARRANGE і W_PIANO. Route Matrix і Pipeline Inspector
-  окремими вікнами не стають: маршрут є полями доріжки, діагностика — рядком
-  R_STATUS.
+    вікно       заголовок   x, y       w x h       рядок
+    W_STAGE     Orchestra   72, 40     780 x 520   orchestra_stage.c:401
+    W_ARRANGE   Arrange     96, 72     760 x 420   orchestra_arrange.c:1029
+    W_PIANO     Piano       120, 88    760 x 480   orchestra_piano.c:689
+    W_SCORE     Score       140, 120   720 x 320   orchestra_score.c:916
+    W_MIX       Mix         48, 64     780 x 460   orchestra_mix.c:287
+    W_INSERT    Insert      168, 96    420 x 460   orchestra_insert.c:228
+    W_ABOUT     About       240, 160   520 x 270   orchestra_about.c:69
 
-  W_STAGE сам достатній для концерту. На ширині менше за 700, що вміщає кадр
-  480, транспорт, panic, click, family і статус складаються вертикально;
-  сцени йдуть по 8 кнопок у ряд. Ціль натиску не менша за 24 px. Окремої
-  збірки на цю ширину немає. Інші вікна теж читають розмір вікна і не
-  припускають 780, але концерт із них не вимагається.
+  Шість вікон беруть TITLE, CLOSE, BORDER і RESIZE; W_ABOUT лишається без
+  RESIZE (orchestra_about.c:68) і розміру не змінює. Завантаження відкриває
+  одне вікно — W_STAGE: open_orchestra_window() кличе orch_boot_desk(),
+  menu_build() і orch_open_stage() (orchestra.c:941–948). Решту веде
+  користувач.
 
-  W_SCORE читає ключ програми, treble або bass. Середня лінія treble — MIDI
-  71, це B4. Середня лінія bass — MIDI 62, це D3. Нота нижче середньої лінії
-  має штиль угору, інакше вниз. Малюються голівки, штилі, тактові риски,
-  групування по долі і паузи долі. В'язка не перетинає долю і тактову риску.
-  Ліги між тактами дозволені. Ліги-фрази, hairpin, лірика і LilyPond — ні.
-  Точка дозволена, коли тривалість дорівнює 3/2 письмової вартості і
-  вміщається в такт.
+  Текст стану — смужка внизу W_STAGE, а не вікно; її малює paint, і власної
+  області подій у неї немає. Декорацій попередньої оболонки — Cmaj7, Leslie,
+  DMX-cue — у paint не залишилось: пошук по src/media не дає жодного
+  влучання. Ноти живуть у масиві подій і малюються у W_ARRANGE, W_PIANO і
+  W_SCORE. Route Matrix і Pipeline Inspector окремими вікнами не стають:
+  маршрут є полями доріжки, діагностика — рядком стану.
 
-  Палітра — лише імена ORCH_COL_*, уже наявні в оболонці. Нових кольорів
-  немає. Літерали на кшталт 0xFF0D5F38 з paint прибираються. ORCH_COL_PINK
-  лишається кольором акценту, не підписом DMX.
+  W_STAGE сам достатній для концерту. Геометрію рахує orch_lay_mode(w, h)
+  (orchestra.c:23–29), і режимами керує висота, а не лише ширина:
 
-  Модальних діалогів немає. Помилка файлу є текстом R_STATUS. W_ABOUT
-  лишається тим самим немодальним вікном 520 на 270.
+    ORCH_LAY_MIN     h < 200 або w < 240
+    ORCH_LAY_STACK   240 <= w < 700
+    ORCH_LAY_WIDE    w >= 700
 
-        W_STAGE
-        +----------------------------------+
-        | PLAY  STOP  REC  PANIC           |
-        | TEMPO  NUM  DEN  CLICK  FAMILY   |
-        | SCENE_1 .. SCENE_16              |
-        | R_STATUS     METER_L   METER_R   |
-        +----------------------------------+
+  place_min (orchestra_stage.c:50–63) лишає чотири кнопки — PLAY, STOP, REC,
+  PANIC — шириною (w - 20) / 4 у межах 24..88 px, висотою 24 px, і рядок
+  стану. Сітки сцен і метрів у цьому режимі немає.
+
+  place_stack (:65–96) кладе транспорт по три, решту — окремими рядами з
+  кроком 28 px: PANIC, потім TEMPO+NUM+DEN, потім CLICK+FAMILY. Сцени
+  з'являються, лише коли над рядком стану лишається 56 px (:87). Метри
+  з'являються, лише коли h >= 220, і мають ширину 12 px (:92–95).
+
+  place_wide (:98–117) збирає дев'ять контролів в один ряд висотою 28 px:
+  PLAY 64, STOP 64, REC 56, PANIC 72, TEMPO 72, NUM 40, DEN 40, CLICK 64,
+  FAMILY 112 px. Сцени малюються, коли w - 44 > 540, тобто від 585 px; метри
+  завширшки 14 px малюються завжди (:115–116).
+
+  Сітку сцен рахує place_scenes (:34–48): по вісім кнопок у ряд, два ряди,
+  ширина кнопки aw / 8 у межах 24..120 px, комірка 24 px заввишки при кроці
+  28 px. Написом кнопки є ім'я сцени з v->scn[i].name, а коли його немає —
+  номер 1..16 (word(), :190–198). Напис FAMILY — Rock, Classic або Orchestra
+  (:154), а під час підтвердження до нього додається «?» (:184–187).
+
+  Реагують на клік лише контролі: stage_click пропускає рядок стану і обидва
+  метри (:329). Кнопка не малюється, якщо її бок менший за 8 px
+  (orchestra.c:64), метр — якщо менший за 2 px (:78). Жодна реалізація не
+  припускає ширину 780: W_ARRANGE, W_PIANO, W_SCORE, W_MIX і W_INSERT читають
+  той самий orch_lay_mode. Заголовок доріжки зникає, коли w < 280 або режим
+  MIN (orchestra_arrange.c:112–122), смужка мікшера звужується з 68 до 52 px
+  (orchestra_mix.c:20–30), а W_INSERT у MIN лишає два перші параметри
+  (orchestra_insert.c:138).
+
+  Вікна редагують документ. Клік олівцем кличе orch_event_put, клік гумкою —
+  orch_event_del, а SELECT лише вибирає подію; це є у W_ARRANGE
+  (:775–786), W_PIANO (:595–604) і W_SCORE (:862–871). Швидкість ноти
+  фіксована — 100, тривалість дорівнює кванту прив'язки. Перетягування нот,
+  правка швидкості і рух уже створеної події не реалізовані; всі вікна
+  реагують лише на EV_BUT_DOWN, а прокручування й зум лишаються станом
+  вікна. W_MIX пише поля доріжки через orch_track_set_u8 — PAN, SEND, VOL,
+  MUTE, SOLO — і майстер (orchestra_mix.c:174–218); W_INSERT перемикає
+  інсерт і його параметри (orchestra_insert.c:171–174). W_ABOUT і рядок
+  стану мовчать.
+
+  W_SCORE малює один нотоносець вибраної доріжки: п'ять ліній
+  (paint_staff, :634–641), ключ (:328–341), тактові риски з номерами й
+  потовщеною заключною рискою (:644–658), голівки, знаки альтерації «#»,
+  штилі й точки (:392–396), додаткові лінії (:344–355), в'язки (:357–371),
+  подвійні риси для тривалостей до вісімки (:508–537) та паузи (:583). Ключ
+  рахується не в момент малювання: clef — байт доріжки, який заповнила
+  таблиця PROG за номером програми (gst_rt.c:365) і який сесія переносить у
+  слот p[63] (orchestra_session.c:412); paint лише читає v->trk[track].clef
+  (:745, 836). Пункту, який міняв би ключ, на пульті немає. Середня лінія
+  treble — MIDI 71, це B4; середня лінія bass — MIDI 62, це D4 (:54, 65).
+  Штиль іде вгору, коли нота вища за середню лінію — правило step < 0 (:462,
+  малюнок :394–395). Чого W_SCORE не робить: ключового розміру немає,
+  тактового розміру немає, бекарів немає, в'язка — пряма лінія в 1 px замість
+  дуги, пауза — суцільний блок 7 x 6 px замість знака; лігатур, hairpin і
+  лірики не передбачено, на системі не більше ND = 160 нот (:16).
+
+  Палітра — 21 ім'я ORCH_COL_* з include/apps/orchestra.h:6–26. У paint
+  пульта не залишилось літералів кольору; єдині шістнадцяткові числа в цих
+  файлах — межі переповнення тіків (orchestra.c:375, orchestra_arrange.c:168,
+  173, 330, orchestra_piano.c:574, orchestra_score.c:502, 555).
+  ORCH_COL_PINK лишається кольором акценту, не підписом DMX.
+
+  Модальних діалогів немає. Помилка файлу є текстом стану. W_ABOUT лишається
+  тим самим немодальним вікном 520 на 270.
+
+        W_STAGE, ORCH_LAY_WIDE (w >= 700)
+        +--------------------------------------------+
+        | PLAY STOP REC PANIC TEMPO NUM DEN CLICK FAM|
+        | SCENE_1 .. SCENE_8                 M_L     |
+        | SCENE_9 .. SCENE_16                M_R     |
+        | стан                                       |
+        +--------------------------------------------+
+
+        W_STAGE, ORCH_LAY_STACK (240 <= w < 700)
+        +------------------------+
+        | PLAY  STOP  REC        |
+        | PANIC                  |
+        | TEMPO NUM DEN          |
+        | CLICK FAMILY           |
+        | SCENE_1 .. SCENE_8     |
+        | SCENE_9 .. SCENE_16    |
+        | стан           M_L M_R |
+        +------------------------+
+
+        W_STAGE, ORCH_LAY_MIN (h < 200 або w < 240)
+        +----------------+
+        | PLAY STOP REC  |
+        | PANIC          |
+        | стан           |
+        +----------------+
+
            |        |        |        |
         ARRANGE   PIANO    SCORE     MIX
                                      |
@@ -1599,24 +2444,62 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 12.2 Меню
 ---------
 
-  Смуга меню малюється лише на W_STAGE, після тіла сцени. Інші вікна
-  лишають menu_open порожнім. Заголовків шість із стелі 8.
-  APP_MENU_MAX_ITEMS лишається 20. Найдовше меню — Файл, дев'ять рядків.
-  Правий текст смуги — виміряні мілісекунди черги.
+  Смуга меню малюється лише на W_STAGE, і малюється останньою: stage_paint
+  спершу кладе контролі, потім кличе orch_menu_paint
+  (orchestra_stage.c:255–256). Решта шести вікон ставить на menu_open
+  функцію orch_menu_no, яка завжди відповідає FALSE, тобто «смуга закрита»
+  (orchestra.c:807–814; присвоєння — orchestra_about.c:74 і п'ять інших
+  відкривачів). Заголовків шість при стелі
+  APP_MENU_MAX_HEADERS = 8 (include/btron/app_menu.h:17): переповнення
+  повертає -1 (app_menu.c:56), add_hdr перевіряє лише ширину 8 < w < 200
+  (orchestra.c:599–606), а кожен побудувач підтверджує індекс свого
+  заголовка і лічильник смуги (:629–630, 645–646, 661–662, 670–671,
+  697–698, 713–714). Найдовші меню — Файл, Концерт і Пристрій, по дев'ять
+  рядків кожне, при стелі APP_MENU_MAX_ITEMS = 20 (app_menu.h:18);
+  найкоротше — Сцена з двома рядками. Правий текст смуги — виміряні
+  мілісекунди черги (§12.4).
 
-  Шістнадцять сцен меню не повторює: їх кличе сітка §12.1. Темп,
-  чисельник і знаменник лишаються кнопками. Меню тримає часті дії,
-  щоб не цілитися в кнопку: файл, транспорт, доріжка.
+  Шістнадцять сцен меню не повторює: їх кличе сітка §12.1. Механізм
+  дописування імен у меню існує — orch_menu_scenes (orchestra.c:742–759) —
+  але його захист вимагає щонайменше 16 рядків під シーン(S) (:749), тоді як
+  menu_scene() кладе лише два (663–664). Функція тому повертається ще до
+  першого запису, і виклики з menu_build (:738), cmd_file (:827) та
+  orchestra_ui_tick (:395) нічого не міняють. Команди 301..316 лишаються
+  поза меню. Темп, чисельник
+  і знаменник лишаються кнопками. Меню тримає часті дії, щоб не цілитися в
+  кнопку: файл, транспорт, доріжка.
 
   Заголовок японський, мнемоніка в дужках, як у T-Editor. Пункт —
-  японська назва й англійська в дужках. Скорочення в колонці accel.
-  Ctrl і літера спрацьовують, поки меню закрите. Space на 再生 гойдає
-  PLAYING і PAUSED. Alt і літера заголовка відкриває меню. Поки меню
-  відкрите, цифри 1..9 беруть пункт за індексом віджета.
+  японська назва й англійська в дужках. Скорочення лежать у полі accel і
+  збігаються рядком (app_menu.c:82); пункт без скорочення тримає порожній
+  рядок, як 106. Клавіші розбирає app_menu_handle_key (app_menu.c:322–466),
+  а викликає її orch_menu_key (orchestra.c:904–925). Поки смуга закрита,
+  Ctrl і літера шукають збіг «Ctrl+X» і запускають знайдений пункт
+  (app_menu.c:445–463). Alt і літера-мнемоніка відкривають заголовок, а той
+  самий Alt на вже відкритому заголовку його закриває (:330–350). F2 або
+  клавіша Menu перемикають заголовки по колу (:353–362). Коли дропдаун
+  відкритий, Escape його закриває (:369–372), стрілки вгору і вниз
+  вибирають пункт (:375–398), стрілки ліворуч і праворуч — заголовок
+  (:401–412), Return і Space виконують наведений пункт (:415–426), а цифри
+  1..9 беруть пункт за індексом (:429–438); решту клавіш відкритий дропдаун
+  поглинає (:441).
+  Space без Ctrl і Alt за закритої смуги гойдає PLAYING і PAUSED — це
+  рішення Orchestra, а не меню (orchestra.c:917–924).
 
-  Ширина заголовка — 8 + напис + 8. Напис іде з left+8 і не
-  обрізається. Кана і кандзі — 16 пікселів, ASCII — 8. Між заголовками
-  віджет кладе 6 пікселів. На вікні 780 мілісекунди черги ще видимі.
+  Ширину заголовка передає викликач, віджет її не рахує: add_hdr кладе
+  rect.left = 4 для першого і попередній right + 6 для решти, а
+  rect.right = rect.left + width (app_menu.c:55–71). Числа menu_build —
+  104, 120, 88, 104, 72, 120 (orchestra.c:628, 644, 660, 669, 696, 712) —
+  це 8 + напис + 8 для кожного з шести японських заголовків, і правило
+  виконується для всіх шести. Напис іде з left + 8 і не обрізається
+  (app_menu.c:481, 485, 487). Кана і кандзі — 16 пікселів, напівширина —
+  8 (tc_get_char_advance, src/font/troncode.c:1189–1216). Між заголовками
+  віджет кладе 6 пікселів і малює в середині проміжку вертикальний
+  роздільник (app_menu.c:62–64, 491–494). Сума шести ширин — 608 px, правий
+  край останнього заголовка — 642 px; правий текст смуги стає на
+  dev->width - text_w - 14 і малюється, лише якщо не налазить на
+  заголовки — text_x > 642 + 20 (app_menu.c:502–509). На вікні 780
+  «NN ms» ще видимий; «0 ms» туди ж кладе menu_build (:736).
 
   ファイル (F)                 104
     新規作成 (New)             Ctrl+N   101
@@ -1648,7 +2531,10 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
     ロック (Rock)                       801
     クラシック (Classic)                802
     オーケストラ (Orchestra)            803
-    Play, Stop, Record, Panic, Click — ряд 1 сцени.
+    320..323 викликають ті самі orch_cmd_play, orch_cmd_stop,
+    orch_desk_rec_flip і orch_cmd_click, що й кнопки
+    транспорту (cmd_concert, 852–860); 317 — та сама
+    orch_cmd_panic, що й кнопка PANIC.
     Space з PAUSED іде в PLAYING, з PLAYING у PAUSED.
     Другий Stop повертає N на нуль, як кнопка.
     Три практики — family §8, без циклу кнопки.
@@ -1656,8 +2542,14 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
   シーン (S)                   88
     送信 (Send)                         318
     オクターブ (Octave)                 319
-    Імена 301..316 у меню не входять.
-    Send шле 16 програм сцени. Octave — §10.
+    Імена 301..316 у меню не входять: дописувач
+    orch_menu_scenes не проходить власний захист (абзац вище).
+    Send кладе program[0..15] активної сцени на доріжки за їх
+    каналом: 255 лишає доріжку як була, невідомий номер
+    прирощує refuse_program і теж лишає (push_programs,
+    orchestra_session.c:963–981). Octave — §10: +12 до
+    transpose кожної доріжки з обмеженням ±36
+    (orchestra_session.c:1225–1242).
 
   トラック (T)                 104
     追加 (Add)                 Ctrl+T   201
@@ -1681,15 +2573,20 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
     роздільник
     ポート (Port)                       902
     遅延 (Latency)                      903
-    READY, PAUSED, PLAYING у меню немає.
-    バッファ пише Q=32 і host=1024
-    і нічого не змінює.
-    DSP пише суму WCET і T.
-    Діагностика пише число елементів.
-    SMPTE крутить tc_format, MTC не шле.
-    Clock пише running_time.
-    Port пише message_count входу.
-    Latency пише виміряні queued ms.
+    READY, PAUSED, PLAYING окремими пунктами меню немає.
+    バッファ пише «Q 32 | host 1024» — дві константи,
+    жодної зміни (orchestra.c:491–498).
+    DSP пише «wcet <мкс> T <період мкс>» з gst_rt_wcet_us
+    і gst_rt_period_us (500–517).
+    Діагностика пише «elem <n>» і стан (519–536).
+    SMPTE крутить tc_format 24→25→29→30 і пише текст;
+    MTC не шле нікуди (444–461).
+    Clock пише «t <с>.<мс> s», рахуючи npos / f_s
+    (463–489 і gst_rt_running_ns, gst_rt.c:311–316) — це
+    позиція транспорту, а не стіна.
+    Port пише message_count знайденого входу (538–562).
+    Latency пише виміряні queued ms у рядок стану і в
+    правий кінець смуги (565–588, §9.4).
 
   ウィンドウ (W)               120
     ステージ (Stage)                    701
@@ -1711,64 +2608,117 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 -------------
 
   Ім'я контролю є скороченням дії, вже заданої вище. Діапазон не ширший за
-  поле сесії.
+  поле сесії. Позначки C_* і R_* — читацькі імена цього розділу; таких
+  ідентифікаторів у дереві немає. Екранними іменами контролів є індекси
+  кнопок W_STAGE (B_PLAY..B_MR), написи на цих кнопках і поля OrchView, а
+  перелік значень стоїть у переліках enum (gst_rt.h:31–67).
 
-  C_PLAY     W_STAGE   play із §10
-  C_STOP     W_STAGE   два кроки §10
-  C_REC      W_STAGE   0 або 1, record §10
-  C_PANIC    W_STAGE   panic §10
-  C_TEMPO    W_STAGE   40..240, §3.3 і §10
-  C_SIG_NUM  W_STAGE   1..12
-  C_SIG_DEN  W_STAGE   2, 4, 8 або 16
-  C_SCENE_1  W_STAGE   індекс 0..15
-    ..16               switch §10
-  C_FAMILY   W_STAGE   три шаблони §8
-  C_CLICK    W_STAGE   0 або 1
-  C_TOOL_*   ARRANGE   select, pencil, erase
-             PIANO     одне з трьох
-  C_SNAP     ті самі   BAR, BEAT, 8TH, 16TH
-  C_VOL      W_MIX     0..127, volume
-  C_PAN      W_MIX     0..127, pan
-  C_MUTE     W_MIX     0 або 1
-  C_SOLO     W_MIX     0 або 1
-  C_INS1     W_MIX     OrchInsertId
-  C_INS2     W_MIX     те саме
-  C_SEND     W_MIX     0..127
-  C_M_VOL    W_MIX     0..127, master
-  C_M_LIM    W_MIX     BYPASS або LIMITER
-  W_INSERT   цикл      алгоритм, bypass,
-                       P1..P4 каталогу §6
+  Транспорт і розмір:
 
-  Олівець і гумка пишуть у пул лише поза PLAYING, як уже сказано в §10.
-  Інструмент і snap є полями сесії.
+    C_PLAY    W_STAGE  play §10; пускають лише READY і PAUSED, і лише
+                       коли WCET не більший за період
+                       (gst_rt.c:1421–1455)
+    C_STOP    W_STAGE  два кроки §10: перший веде в PAUSED, другий — N=0
+    C_REC     W_STAGE  0 або 1, поле v->rec
+    C_PANIC   W_STAGE  panic §10
+    C_TEMPO   W_STAGE  40..240 (§3.3); в PLAYING — refuse_tempo
+                       (orchestra_session.c:1031–1072)
+    C_SIG_NUM W_STAGE  1..12; в PLAYING — відмова
+    C_SIG_DEN W_STAGE  2, 4, 8 або 16; в PLAYING — відмова
+    C_SCENE_* W_STAGE  16 кнопок, індекс 0..15
+    C_FAMILY  W_STAGE  три шаблони §8; кнопка веде ще й підтвердження
+                       (confirm_family, orchestra_stage.c:307–314)
+    C_CLICK   W_STAGE  0 або 1
+
+  Редагування нот:
+
+    C_TOOL_*  ARRANGE  ORCH_TOOL_SELECT, ORCH_TOOL_PENCIL і
+               PIANO   ORCH_TOOL_ERASE = 0, 1, 2 (gst_rt.h:63–67).
+               SCORE   Написи «S», «P», «E» у режимі MIN і «Sel», «Pen»,
+                       «Era» в усіх інших (orchestra_arrange.c:391–403,
+                       orchestra_piano.c:85–95)
+    C_SNAP    ARRANGE  ORCH_SNAP_BAR, ORCH_SNAP_BEAT, ORCH_SNAP_8TH і
+               PIANO   ORCH_SNAP_16TH = 0..3 (gst_rt.h:56–61); напис
+               SCORE   кнопки — «Bar», «Beat», «1/8», «1/16», а цикл іде
+                       по колу (orchestra.c:255–267). Чотири написи
+                       лежать у трьох копіях snap_name —
+                       orchestra_arrange.c:102, orchestra_piano.c:70,
+                       orchestra_score.c:271 (§15, ризик 15)
+
+  Кнопки інструментів є не в кожному режимі. У W_ARRANGE snap з'являється в
+  MIN лише при w >= 180 (:396), у W_PIANO в MIN немає ані snap, ані Undo
+  (:85–89), у W_SCORE весь ряд інструментів малюється лише при w >= 700
+  (orchestra_score.c:710–717). У вузькому W_SCORE інструмент тому
+  перемикають з Arrange або Piano: сам клік читає v->tool завжди (:861).
+
+  Мікшер і інсерти:
+
+    C_VOL     W_MIX    0..127, поле доріжки vol
+    C_PAN     W_MIX    0..127
+    C_MUTE    W_MIX    0 або 1
+    C_SOLO    W_MIX    0 або 1
+    C_SEND    W_MIX    0..127
+    C_INS1    W_MIX    ORCH_INS_BYPASS..ORCH_INS_LIMITER = 0..8
+    C_INS2    W_MIX    (gst_rt.h:38–48); значення бере цикл, не поле вводу
+    C_M_VOL   W_MIX    0..127, мастер
+    C_M_LIM   W_MIX    ORCH_INS_BYPASS або ORCH_INS_LIMITER; інше значення
+                       прирощує refuse_insert і тримає «insert»
+                       (orchestra_session.c:1600–1616)
+    W_INSERT  цикл     алгоритм слота, далі P1..P4 каталогу §6
+                       (orch_ins_cycle, orch_ins_param)
+
+  Межі чисел тримає field_ok (orchestra_session.c:1406–1416), а не кнопки:
+  mute і solo приймають 0 або 1, vol, pan, send і program — 0..127, решту
+  полів field_ok не бере. Кнопки й пункти меню пишуть тим самим
+  orch_track_set_u8 (1417–1440): невідомий номер програми прирощує
+  refuse_program і лишає поле як було (:1426–1430), а вдалий запис кладе
+  попереднє значення в undo (:1434).
+
+  Олівець і гумка пишуть у пул лише поза PLAYING. orch_event_put
+  (orchestra_session.c:1647–1668) у PLAYING тримає orch_status_hold("note")
+  і повертає нуль, відкидає vel = 0, упирається в стелю ORCH_MAX_EVENTS
+  через refuse_note_cap і піднімає тривалість до кванта прив'язки.
+  Інструмент і snap є полями сесії — байтами 22 і 23 (orchestra_session.c
+  :469–470 і :611–612).
 
 
 12.4 Показ
 ----------
 
-  R_STATUS показує щонайменше частоту, queued ms, drops, steals і smf. Форма
-  рядка:
+  R_STATUS показує щонайменше частоту, queued ms, drops, steals і smf.
+  Рядок збирає orch_publish_idle (orchestra.c:306–337) і має форму
 
-    48000 Hz | q 42 ms | drop 0 | steal 0 | smf 0
+    48000 Hz | q 42 ms | drop 0 | steal 0 | smf 0 | PAUSED | Scene 3
 
-  queued ms = 1000 * queued_frames / f_s, ціле. Жодного константного 0.8.
-  Поруч можна дописати PAUSED або PLAYING і ім'я сцени, якщо рядок
-  вміщається. drops — це orch_drop_audio, steals — orch_steal_voice, smf —
-  orch_refuse_smf. Решта лічильників доступна тим самим регіоном, коли
-  остання операція була відмовою: текст відмови замінює рядок до наступної
-  успішної дії. Queued ms оновлює orchestra_ui_tick, не paint.
+  де перші п'ять полів ідуть завжди, стан дописується, коли рядок коротший
+  за 70 символів, а ім'я активної сцени — коли коротший за 62 і сцена має
+  ім'я (326–335). queued ms = 1000 * queued_frames / f_s, ціле
+  (gst_rt_queued_ms, §9.4). Жодного константного 0.8. drops — поле
+  OrchView.drop_audio, steals — steal_voice, smf — refuse_smf (gst_rt.h:180,
+  181, 182). Решта лічильників доступна тим самим регіоном, коли остання
+  операція була відмовою: текст відмови замінює рядок, бо orch_publish_idle
+  виходить на перевірці status_hold (315), ще до збірки рядка, а наступна
+  успішна дія знімає прапорець через orch_status_ok.
+  Публікує рядок orchestra_ui_tick (381–397), не paint. Той самий тік
+  вимірює чергу наново — gst_rt_queued_ms під seqlock (390) — і кладе
+  результат у правий кінець смуги меню (394, right_ms 339–354). Пункт 903
+  меню Пристрій (§9.4) робить друге вимірювання й пише «q <ms> ms» у рядок
+  стану; orch_status_set знімає прапорець hold (gst_rt.c:151–156), тому
+  найближчий тік перебудує idle-рядок назад.
 
   R_METER_L і R_METER_R дорівнюють clamp(round(peak*100), 0, 100) після
-  обмежника. Це показ, не керування. Гарячий шлях не викликає printf.
-  Окремого вікна Monitor немає.
+  обмежника (master_pcm, gst_rt.c:1041–1055). Це показ, не керування:
+  смужки малює paint W_STAGE (orch_meter, orchestra_stage.c:229 і 233),
+  під експортом WAV вони не оновлюються (§11.2), а окремого вікна Monitor
+  немає. Гарячий шлях не викликає printf: у gst_rt.c немає жодного виклику.
 
 
 13. Місце серед DAW
 -------------------
 
-  Порівняння можливе лише тепер, коли пульт, файл і трак вже зібрані. Оцінка
-  кожного пункту — одне з трьох: є, підмножина, немає. Це не огляд Cubase 14
-  і не маркетинговий список.
+  Порівняння можливе лише тепер, коли пульт, файл і доріжки вже зібрані.
+  Оцінка кожного пункту — одне з трьох: є, підмножина, немає. Це не огляд
+  Cubase 14 і не маркетинговий список.
 
   Три зовнішні імена. Найближчий за родом праці — Steinberg Cubase Score і
   Cubase VST: лінійні MIDI-події, ключ і один нотоносець. Професійна стеля —
@@ -1824,8 +2774,9 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
                       у стелях §11.1
   LilyPond            немає
   Studio manager      немає; живий лише
-                      порт, переданий у
-                      dispatch
+                      порт 0 Stage MIDI In
+                      (port0, §9.2), і
+                      диспетчер без викликача
   Markers             немає окремим
                       об'єктом; 16 сцен —
                       знімки гучності

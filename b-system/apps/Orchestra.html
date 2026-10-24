@@ -3,11 +3,97 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Orchestra – 管弦楽・MIDI演奏 | B-System Specification</title>
-  <meta name="description" content="管弦楽（Orchestra）は、9要素のC99グラフ、32プログラム、1つのホール、8種のインサート、SMFとWAV、73408バイトのセッションを持つステージ用DAWです。">
+  <title>管弦楽・MIDI演奏 (Orchestra) — ユーザーマニュアル | B-System</title>
+  <meta name="description" content="Orchestra ユーザーマニュアル。七つの窓、32プログラム、48ボイス、八種のインサート、九要素のC99グラフ、WCET 632µs、73408バイトのセッションファイル、SMFとWAV、アルバム『Carol of the Bells』までを章立てで積み上げる単一ページの案内書。">
   <link rel="stylesheet" href="../../index.css">
   <link rel="stylesheet" href="../settings/settings.css">
   <link rel="stylesheet" href="./apps.css">
+  <style>
+    /* ─── Orchestra manual overrides (General Rosy Schema) ─────────────── */
+    .orch-manual-tag   { display:inline-block; margin-top:0.5rem; padding:0.2rem 0.7rem;
+                         border-radius:999px; border:1px solid rgba(255,93,162,0.45);
+                         background:rgba(255,255,255,0.7); color:DarkMagenta;
+                         font-size:0.78rem; font-weight:700; letter-spacing:0.03em; }
+
+    /* 目次 */
+    .orch-toc          { display:grid; grid-template-columns:1fr 1fr; gap:0.2rem 1.6rem;
+                         margin:1.1rem 0 0; padding:1.05rem 1.3rem;
+                         background:rgba(255,255,255,0.62); border:1.5px solid rgba(255,93,162,0.32);
+                         border-radius:14px; backdrop-filter:blur(10px); }
+    .orch-toc a        { color:#be185d; text-decoration:none; font-size:0.9rem; line-height:1.8;
+                         border-bottom:1px dotted rgba(190,24,93,0.35); }
+    .orch-toc a:hover  { color:DarkMagenta; border-bottom-color:DarkMagenta; }
+    .orch-toc .sub     { padding-left:1.4rem; font-size:0.84rem; color:#4a3560; line-height:1.7; }
+    @media(max-width:640px){ .orch-toc{ grid-template-columns:1fr; } }
+
+    /* 本文の二層: 日本語の説明 / 英語の動機 */
+    .orch-ja           { font-size:0.94rem; color:#1e293b; line-height:1.85;
+                         background:rgba(255,255,255,0.6); border-left:3px solid #008080;
+                         padding:0.8rem 1rem; border-radius:0 10px 10px 0;
+                         margin:0.9rem 0 0; backdrop-filter:blur(8px); }
+    .orch-en           { font-size:0.89rem; color:#4a3560; line-height:1.75;
+                         background:rgba(255,240,248,0.55); border-left:3px solid HotPink;
+                         padding:0.8rem 1rem; border-radius:0 10px 10px 0;
+                         margin:0.7rem 0 0; }
+    .orch-en b         { color:DarkMagenta; font-weight:700; }
+    .orch-uses         { font-size:0.82rem; color:#6b4f7e; font-style:italic; margin:0.55rem 0 0; }
+    .orch-hint         { font-size:0.82rem; color:#6b4f7e; margin:0.5rem 0 0; }
+
+    /* 数式・表・図 */
+    .orch-formula      { background:rgba(255,255,255,0.72); border:1.5px solid rgba(255,93,162,0.32);
+                         border-radius:10px; padding:0.95rem 1.15rem; color:DarkMagenta;
+                         font-family:ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+                         font-size:0.84rem; line-height:1.6; overflow-x:auto; margin:1rem 0 0;
+                         white-space:pre; }
+    .orch-ascii        { background:rgba(18,12,20,0.92); border-radius:12px; padding:1rem 1.15rem;
+                         color:#ffe4f1; font-family:ui-monospace, 'Cascadia Mono', monospace;
+                         font-size:0.8rem; line-height:1.5; overflow-x:auto; margin:1rem 0 0;
+                         white-space:pre;
+                         box-shadow:0 4px 16px rgba(255,93,162,0.14); }
+    .orch-fig          { font-size:0.8rem; color:#6b4f7e; margin:0.4rem 0 0; text-align:left; }
+    .orch-note         { background:rgba(254,252,232,0.8); border:1.5px solid rgba(161,98,7,0.35);
+                         border-radius:12px; padding:0.85rem 1.05rem; font-size:0.88rem;
+                         color:#7a5207; line-height:1.7; margin:1rem 0 0; }
+    .orch-warn         { background:rgba(253,242,248,0.85); border:1.5px solid rgba(220,38,38,0.3);
+                         border-radius:12px; padding:0.85rem 1.05rem; font-size:0.88rem;
+                         color:#991b1b; line-height:1.7; margin:1rem 0 0; }
+
+    /* 定数カード */
+    .orch-num-row      { display:flex; flex-wrap:wrap; gap:0.9rem; margin:1.15rem 0 0; }
+    .orch-num          { flex:1 1 calc(25% - 0.7rem); min-width:150px; text-align:center;
+                         background:rgba(255,255,255,0.7); border:1.5px solid rgba(255,93,162,0.32);
+                         border-radius:14px; padding:0.8rem 0.6rem; backdrop-filter:blur(10px); }
+    .orch-num strong   { display:block; font-family:ui-monospace, 'Cascadia Mono', monospace;
+                         font-size:1.3rem; color:DarkMagenta; font-weight:700; }
+    .orch-num span     { display:block; font-size:0.78rem; color:#6b4f7e; margin-top:0.25rem; }
+    @media(max-width:640px){ .orch-num{ flex:1 1 calc(50% - 0.5rem); } }
+
+    .arch-grid         { display:grid; grid-template-columns:1fr 1fr; gap:1.1rem; margin:1.15rem 0 0; }
+    @media(max-width:640px){ .arch-grid{ grid-template-columns:1fr; } }
+    .arch-card         { background:rgba(255,255,255,0.65); border:1.5px solid rgba(255,93,162,0.35);
+                         border-radius:14px; padding:1rem 1.2rem; backdrop-filter:blur(12px);
+                         box-shadow:0 4px 16px rgba(255,93,162,0.1); }
+    .arch-card h5      { margin:0 0 0.4rem; color:DarkMagenta; font-size:1rem; font-weight:700; }
+    .arch-card p       { margin:0; font-size:0.87rem; color:#4a3560; line-height:1.65; }
+
+    .code-inline       { background:rgba(255,255,255,0.75); border:1px solid rgba(255,93,162,0.35);
+                         border-radius:4px; padding:0.12em 0.42em;
+                         font-family:ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+                         font-size:0.86em; color:DarkMagenta; font-weight:600; white-space:nowrap; }
+
+    .bib-featured      { background:rgba(255,255,255,0.72); border:1.5px solid rgba(255,93,162,0.45);
+                         border-radius:14px; padding:1.2rem 1.5rem; margin:1.3rem 0 0;
+                         backdrop-filter:blur(12px); }
+    .bib-featured h4   { margin:0 0 0.45rem; color:DarkMagenta; font-size:1.08rem; }
+    .bib-featured p    { margin:0 0 0.5rem; font-size:0.88rem; color:#4a3560; line-height:1.65; }
+    .bib-list          { list-style:none; padding:0; margin:1.1rem 0 0; display:flex;
+                         flex-direction:column; gap:0.6rem; }
+    .bib-item          { display:flex; gap:0.9rem; font-size:0.87rem; line-height:1.6; color:#4a3560;
+                         background:rgba(255,255,255,0.55); border:1px solid rgba(255,93,162,0.28);
+                         border-radius:10px; padding:0.7rem 0.95rem; }
+    .bib-num           { flex:0 0 2.2rem; font-family:ui-monospace, monospace; font-weight:700;
+                         color:DarkMagenta; }
+  </style>
 </head>
 <body>
   <nav class="sticky" aria-label="Site navigation">
@@ -36,17 +122,20 @@
   <div class="setting-hero">
     <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F3BB.svg" alt="🎻" width="64" height="64"></div>
     <h1>管弦楽・MIDI演奏 (Orchestra)</h1>
-    <div class="setting-hero-badge">9要素のC99グラフ · Q=32 · ホスト周期 1024 · セッション 73408 バイト</div>
-    <div class="subtitle">ステージ、アレンジ、ピアノ、スコア、ミックス、インサート、アバウト<br><span style="font-size:0.9em; opacity:0.85;">"Stage desk: seven windows, three templates, one hall, SMF and WAV."</span></div>
+    <div class="setting-hero-badge">七つの窓 · 32プログラム · 48ボイス · WCET 632 µs · セッション 73408 バイト</div>
+    <div class="subtitle">ステージ DAW ユーザーマニュアル — 単一ページの案内書<br>
+      <span style="font-size:0.9em; opacity:0.85;">"A stage desk for three practices: a live band, classical instruments with a voice, and a philharmonic seating."</span>
+    </div>
+    <div class="orch-manual-tag">Guide Manual · 全12章 · 前章の語彙だけで次章を読む</div>
   </div>
 
   <div class="setting-content">
     <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>管弦楽（Orchestra）</strong> — セッションは <code>/SYS/orchestra.orch</code> の 73408 バイトです。プログラムは 32、SoundFont はありません。ホールは一つ。インサートの種類は八つで、一つの種類は八つまで、トラックには二つまでです。テンプレートは Rock、Classic、Orchestra の三つです。<br>
+      <strong>管弦楽（Orchestra）</strong> — このマニュアルは、B-System のステージ DAW Orchestra を、七つの窓・三つのテンプレート・ひとつのホール・32のプログラム・八種のインサート・セッションファイル・SMF と WAV の交換まで、章を順に積み上げて説明します。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
-        "The session file is 73408 bytes. Thirty-two programs, no SoundFont, one hall, eight insert types, three templates."
+        "This manual is a single-page guide. Each chapter uses only the words the chapters before it have defined, and every number it prints is a number the running program prints too."
       </span>
     </div>
 
@@ -54,52 +143,1270 @@
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
       <div class="screen-preview">
-        <img src="../img/screens/Orchestra_Application.png" alt="管弦楽 (Orchestra Application)">
-        <p>実機描画フレームバッファより自動抽出された管弦楽・MIDIオーケストラ演奏画面 (Live Stage MIDI Server & Workstation)</p>
+        <img src="../img/screens/Orchestra_Application.png" alt="管弦楽 ステージ (Orchestra Stage)">
+        <p>実機描画フレームバッファより自動抽出された管弦楽・MIDIオーケストラ演奏画面。アルバム第一曲『Carol of the Bells』を読み込んだ状態のステージ窓 (780×520)。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Orchestra_Arrange.png" alt="管弦楽 アレンジ (Orchestra Arrange)">
+        <p>実機描画フレームバッファより自動抽出されたアレンジ窓 (760×420)。17トラックのイベント線が小節格子に並ぶ。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Orchestra_Piano.png" alt="管弦楽 ピアノロール (Orchestra Piano Roll)">
+        <p>実機描画フレームバッファより自動抽出されたピアノ窓 (760×480)。鍵盤・グリッド・ツール行・Undo ボタン。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Orchestra_Score.png" alt="管弦楽 スコア (Orchestra Score)">
+        <p>実機描画フレームバッファより自動抽出されたスコア窓 (720×320)。選択トラックの一段ノートを高位記号つきで描く。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Orchestra_Mix.png" alt="管弦楽 ミキサー (Orchestra Mixer)">
+        <p>実機描画フレームバッファより自動抽出されたミキサー窓 (780×460)。トラックストリップとマスター列。</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Orchestra_Insert.png" alt="管弦楽 インサート (Orchestra Insert)">
+        <p>実機描画フレームバッファより自動抽出されたインサート窓 (420×460)。二つのスロットと P1〜P4 のノブ。</p>
       </div>
       <div class="screen-preview">
         <img src="../img/screens/Orchestra_About.png" alt="管弦楽 バージョン情報 (About Orchestra)">
-        <p>実機描画フレームバッファより自動抽出された透過バージョン情報ダイアログ (About Orchestra)</p>
+        <p>実機描画フレームバッファより自動抽出された透過バージョン情報窓 (520×270)。リサイズ不可の唯一の窓。</p>
       </div>
     </div>
 
-<div class="section">
-      <h2>概要 (Overview)</h2>
-      <p>
-        窓は七つです。ステージ、アレンジ、ピアノ、スコア、ミックス、インサート、アバウト（520×270）。メニューはステージだけに描きます。見出しは六つです。ファイル、コンサート、シーン、トラック、装置、ウィンドウ。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Seven windows. The menu bar is on the stage only, with six headers. About is 520 by 270."</span>
-      </p>
+    <!-- 概要 -->
+    <div class="section">
+      <h2>この案内書の読み方 (How to Read This Manual)</h2>
+      <div class="orch-ja">
+        この案内書は十二章建てです。第一章が材料（装置と層）を、第二章が時間（拍・チック・音高）を、第三〜第五章が音の作り方（プログラム・インサート・グラフ）を、第六章以降が使い方（窓・操作・テンプレート・ファイル・アルバム）を順に取り扱います。各章の冒頭に「前提」として前章までのどの語彙を使うかを書きます。数式には番号（式 1、式 2 …）をふり、本文はその番号を戻って引きます。各節は日本語で機能を述べ、英語でその設計理由を述べます。日本語の段落は操作性、英語の段落は根拠の担当です。
+        <div class="orch-uses">前提: なし（この節）／ Uses: nothing yet — this section only declares how the rest is written.</div>
+      </div>
+      <div class="orch-en">
+        <b>Why the order is the content.</b> A manual that lists buttons first teaches memorisation. This one teaches a vocabulary: a bar, a tick, a slot, an insert, a budget. Every later chapter is written with those words alone, so that a reader who has finished chapter five can read chapter nine without a dictionary and without a guess. The division of languages follows the same rule. Japanese describes what the desk does when it is used. English states why it does it that way and what would break otherwise. Neither layer repeats the other.
+      </div>
+      <div class="orch-en">
+        <b>Where the numbers come from.</b> Every figure printed here — 73408 bytes, 48 slots, 632 µs, 32 programs, 960 ticks — is a figure the running program can print itself, and each is stated in the specification <code class="code-inline">doc/txt/ORCHESTRA.txt</code> and implemented in <code class="code-inline">src/media</code> and <code class="code-inline">src/demo</code>. Where the desk does not do something, this manual says so in chapter twelve rather than leaving it unstated.
+      </div>
+      <div class="orch-toc">
+        <div><a href="#ch1">第1章 材料 — 装置と三つの層</a></div>
+        <div class="sub"><a href="#ch1-1">1.1 三つの実践</a> · <a href="#ch1-2">1.2 四つの固定数</a> · <a href="#ch1-3">1.3 三層</a></div>
+        <div><a href="#ch2">第2章 音楽時間 — 拍・チック・音高</a></div>
+        <div class="sub"><a href="#ch2-1">2.1 拍和小節</a> · <a href="#ch2-2">2.2 チックとスナップ</a> · <a href="#ch2-3">2.3 音高</a> · <a href="#ch2-4">2.4 ベロシティ</a></div>
+        <div><a href="#ch3">第3章 音源 — 32プログラムと48スロット</a></div>
+        <div class="sub"><a href="#ch3-1">3.1 プログラム表</a> · <a href="#ch3-2">3.2 声の割り当て</a> · <a href="#ch3-3">3.3 ワンショット</a> · <a href="#ch3-4">3.4 シグナルの式</a></div>
+        <div><a href="#ch4">第4章 インサートとホール</a></div>
+        <div class="sub"><a href="#ch4-1">4.1 二つのスロット</a> · <a href="#ch4-2">4.2 パラメータ</a> · <a href="#ch4-3">4.3 ひとつのホール</a> · <a href="#ch4-4">4.4 順序とプール</a></div>
+        <div><a href="#ch5">第5章 グラフと予算</a></div>
+        <div class="sub"><a href="#ch5-1">5.1 九つの要素</a> · <a href="#ch5-2">5.2 632 µs</a> · <a href="#ch5-3">5.3 ペーサー</a> · <a href="#ch5-4">5.4 聞こえる遅れ</a></div>
+        <div><a href="#ch6">第6章 七つの窓</a></div>
+        <div class="sub"><a href="#ch6-1">6.1 窓の一覧</a> · <a href="#ch6-2">6.2 三つのレイアウト</a> · <a href="#ch6-3">6.3 表示域</a></div>
+        <div><a href="#ch7">第7章 操作 — メニューと実時間</a></div>
+        <div class="sub"><a href="#ch7-1">7.1 メニュー</a> · <a href="#ch7-2">7.2 キー</a> · <a href="#ch7-3">7.3 トランスポート</a> · <a href="#ch7-4">7.4 録音</a> · <a href="#ch7-5">7.5 シーン</a> · <a href="#ch7-6">7.6 編集とUndo</a> · <a href="#ch7-7">7.7 拒否一覧</a></div>
+        <div><a href="#ch8">第8章 三つのテンプレート</a></div>
+        <div class="sub"><a href="#ch8-1">8.1 Rock</a> · <a href="#ch8-2">8.2 Classic</a> · <a href="#ch8-3">8.3 Orchestra</a></div>
+        <div><a href="#ch9">第9章 ファイルと交換</a></div>
+        <div class="sub"><a href="#ch9-1">9.1 セッション 73408</a> · <a href="#ch9-2">9.2 SMF</a> · <a href="#ch9-3">9.3 WAV</a></div>
+        <div><a href="#ch10">第10章 アルバム『Carol of the Bells』</a></div>
+        <div class="sub"><a href="#ch10-1">10.1 四つの曲</a> · <a href="#ch10-2">10.2 17トラック</a> · <a href="#ch10-3">10.3 カノンの構造</a></div>
+        <div><a href="#ch11">第11章 他のDAWとの位置</a></div>
+        <div class="sub"><a href="#ch11-1">11.1 比較</a> · <a href="#ch11-2">11.2 意図的にないもの</a></div>
+        <div><a href="#ch12">第12章 制約事項・早見表・出典</a></div>
+        <div class="sub"><a href="#ch12-1">12.1 既知の限界</a> · <a href="#ch12-2">12.2 数値早見</a> · <a href="#ch12-3">12.3 出典</a></div>
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 1 — MATERIAL                                          -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch1">
+      <h2>第1章 材料 — 装置と三つの層 (Foundations)</h2>
+      <div class="orch-uses">前提: なし。この章は装置・層・四つの数だけを定義する。以降の章はここで出た語を使う。</div>
+
+      <h3 id="ch1-1">1.1 三つの実践 — Rock・Classic・Orchestra</h3>
+      <div class="orch-ja">
+        Orchestra はステージ用の DAW です。想定する使い手は三つに固定されています。<strong>Rock</strong> は生バンド（キック、スネア、ハット、ベース、ギター、キー、リード、ボーカルの八トラック）。<strong>Classic</strong> は声と古典楽器（ボーカル、ピアノ、フルート、バイオリン、チェロ、コンティニュオの六トラック）。<strong>Orchestra</strong> はフィルハーモニーの配置（第一バイオリンから打楽器まで十六のモノフォニックトラック）。この三つ以外の用途を、この案内書は扱いません。同様に、チューナー、Logger、Click &amp; Cue、Router、レコーダ、Monitor、シーンマネージャといった別商品は存在しません。Orchestra の診断は窓ではなく、デスクの上の一行のテキストです。
+      </div>
+      <div class="orch-en">
+        <b>Three practices, not a market.</b> Orchestra is the only DAW specification in B-System, and it is written for a fixed set of users rather than for a general audience. The reason is structural: the tone of every sound is produced by a hand-written procedure, and a procedure has to be chosen, tuned and budgeted. Three practices give thirty-two programs that can be named, measured and defended. A fourth practice would mean a second set of procedures, a second budget, and a second manual. Diagnosis is text on the desk rather than a separate product for the same reason — an extra window is an extra layer of promise that the desk itself already has to keep.
+      </div>
+
+      <h3 id="ch1-2">1.2 四つの固定された数</h3>
+      <div class="orch-ja">
+        Orchestra を使ううえで暗記が必要な数は四つだけです。<sup>1</sup> サンプルレートは 48000 か 44100 の二択で、既定は 48000。<sup>2</sup> ホスト周期は 1024 フレーム（48000 で 21.3 ms、44100 で 23.2 ms）。<sup>3</sup> 合成の量子 Q は 32 フレーム。<sup>4</sup> セッションファイルは 73408 バイト。この四つは設定項目ではなく、コードのリテラルです。<code class="code-inline">wanted.samples = 1024</code> は <code class="code-inline">virtio_sound_open</code> のなかに書かれていて、Q は <code class="code-inline">RENDER_BLOCK</code> の 32、73408 は 128 + 64×96 + 16×100 + 4096×16 です。
+        <div class="orch-num-row">
+          <div class="orch-num"><strong>48000 / 44100</strong><span>Hz の二択のみ</span></div>
+          <div class="orch-num"><strong>1024</strong><span>フレーム = 21.3 / 23.2 ms</span></div>
+          <div class="orch-num"><strong>Q = 32</strong><span>合成量子</span></div>
+          <div class="orch-num"><strong>73408</strong><span>セッションのバイト数</span></div>
+        </div>
+      </div>
+      <div class="orch-ja">
+        音の出口は virtio サウンドの五つの呼出だけです。呼び出しは <code class="code-inline">open</code>・<code class="code-inline">write</code>・<code class="code-inline">close</code>・<code class="code-inline">is_ready</code>・<code class="code-inline">get_queued_bytes</code>。<strong>装置から読む呼出は存在しません</strong>。回線は int16、_INTERLEAVE（L,R,L,R）、little-endian。<code class="code-inline">open</code> はすでに使用中の装置を乗せ替えます。周期を取り出す呼出はないので、周期は上の固定数として扱うほかありません。
+      </div>
+      <div class="orch-en">
+        <b>The four numbers are not dials.</b> A conventional DAW offers a buffer-size slider, a sample-rate picker and an import size. Orchestra offers none of them, because each would move a deadline that the admission test in chapter five has to compare against. Fix the host period at 1024 and the block quantum at 32, and "did the graph make it?" becomes an arithmetic question with one answer per sample rate. Fix the session file at 73408 bytes and a file can be validated by its length before a single byte is read. The missing read path is a fact of the driver, not an omission of the desk: audio leaves, and the only thing that comes back is the depth of the queue.
+      </div>
+
+      <h3 id="ch1-3">1.3 三つの層と行の上限</h3>
+      <div class="orch-ja">
+        <div class="orch-ascii">Desk and session (src/media, 10 files, 7712 lines)
+  orchestra.c        957   menu, tick, commands, layout
+  orchestra_stage.c  409   W_STAGE
+  orchestra_arrange.c 1037 W_ARRANGE
+  orchestra_piano.c  697   W_PIANO
+  orchestra_score.c  924   W_SCORE
+  orchestra_mix.c    295   W_MIX
+  orchestra_insert.c 236   W_INSERT
+  orchestra_about.c   79   W_ABOUT
+  orchestra_session.c 1761 session file, undo
+  orchestra_smf.c   1317   SMF
+            |
+            v
+Media (src/media/gst_rt.c + include/media/gst_rt.h = 2000)
+            |
+            v
+System (virtio_sound_*, async_rt.h, files in /SYS)</div>
+        <p class="orch-fig">図1-1 三つの層と、各ファイルの実行数。行の順はレイヤの順ではありません。</p>
+      </div>
+      <div class="orch-ja">
+        デスクは描画し、メニューを持ち、<code class="code-inline">gst_rt.h</code> に公開されたものだけを呼びます。セッション（<code class="code-inline">orchestra_session.c</code> と <code class="code-inline">orchestra_smf.c</code>）は <code class="code-inline">wnd.h</code> を含まず、描かず、装置へ書きません。メディア層は <code class="code-inline">wnd.h</code>・<code class="code-inline">app_menu.h</code>・<code class="code-inline">dp.h</code> を含みません。システムはメニューを見ず、Rock / Classic / Orchestra という名前を知りません。行数の上限は三つのカウンタで管理されます。窓とコマンドの八ファイル合計は 4000 行まで（現在 4634 行で、12.1 節の既知の限界）、セッション 1800 行まで、SMF 1400 行まで。gst_rt.c とそのヘッダは 2000 行で、三つのカウンタに入りません。
+      </div>
+      <div class="orch-en">
+        <b>Arrows only point down.</b> The layering rule is enforced by includes, not by review: the desk cannot reach the device, and the media cannot reach the window system. That is what makes the desk portable across the seven targets in chapter twelve, and what makes a rendering bug unable to corrupt a file. The line ceilings exist because a paint routine and an algorithm are not equally expensive to read; the rule is to cut drawing and comments first, and never a table or an algorithm. The desk is one POD, <code class="code-inline">OrchView</code>, published under a seqlock, so the boundary is a data snapshot rather than a call graph.
+      </div>
     </div>
 
-    <div class="section">
-      <h2>1. 九つの要素 (Nine Elements)</h2>
-      <p>
-        コンサートのグラフは九スロットです。<code>midisrc</code>、<code>queue</code>、<code>midiroute</code>、<code>shimsynth</code>、<code>audioconvert</code>、<code>tee</code>、<code>audiomixer</code>、<code>volume</code>、<code>virtiosndsink</code>。ファクトリに <code>fluidsynth</code> はありません。音源は 32 プログラムの手続き型シムです。<br>
-        MIDI の配送は INPUT 面の 500 µs 以内に戻ります。「0.2 ms 未満」と言えるのはこの一文だけです。聞こえる遅れは、キューに残ったフレーム数をサンプルレートで割った値です。<br>
-        量子は Q=32、締め切りは T です。ホスト周期は 1024 フレームです。48000 Hz では 21.3 ms、44100 Hz では 23.2 ms。サンプルレートはこの二つだけです。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Nine slots, shimsynth, no SoundFont. MIDI dispatch returns inside 500 µs. Heard delay is the measured queue. Q is 32. The host period is 1024 frames."</span>
-      </p>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 2 — MUSICAL TIME                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch2">
+      <h2>第2章 音楽時間 — 拍・チック・音高 (Musical Time)</h2>
+      <div class="orch-uses">前提: 第1章のサンプルレートと量子 Q。この章のチックは第九章の SMF まで一直線に使われます。</div>
+
+      <h3 id="ch2-1">2.1 拍・小節・テンポ</h3>
+      <div class="orch-ja">
+        拍（beat）は BPM が数える単位です。BPM は 40 から 240 までの整数、分子 num は 1 から 12、分母 den は 2・4・8・16 のいずれか。<strong>拍は分母の音符です</strong>。den が 4 なら拍は四分音符、8 なら八分音符、2 なら二分音符、16 なら十六分音符。小節の長さは拍の num 倍です。
+        <div class="orch-formula">  式1   T_beat = 60 / BPM
+        T_bar  = T_beat × num
+        T_quarter = T_beat × (den / 4) = 15 × den / BPM</div>
+        <p class="orch-fig">例: 96 BPM・6/8 なら T_beat = 0.625 秒（八分音符ひとつ分）、T_bar = 3.75 秒（小節に六つの八分音符）、四分音符は 1.25 秒。</p>
+      </div>
+      <div class="orch-en">
+        <b>Why the denominator defines the beat.</b> Counting the beat as the note the denominator names, rather than always as a quarter, is what makes 6/8 unambiguous: at 96 BPM a 6/8 bar is 3.75 s, six eighth-notes, exactly what a player expects. The cost is that "quarter note" is no longer a constant duration, so the desk keeps one extra factor — den/4 — wherever a quarter is meant. The tempo range 40–240 is a validator, not a preference: outside it, the session file is refused (chapter nine) and a menu change is refused with the counter <code class="code-inline">refuse_tempo</code>.
+      </div>
+
+      <h3 id="ch2-2">2.2 チックとスナップ</h3>
+      <div class="orch-ja">
+        Orchestra の内部時計は <code class="code-inline">ORCH_PPQ = 960</code> チック／四分音符です。拍あたりのチックは 3840 / den、小節あたりは num × 3840 / den。編集グリッド（snap）は四つの量子だけを持ちます。
+        <div class="orch-formula">  式2   snap(t) = floor(t / q) × q
+
+        BAR   = num × 3840 / den   （小節）
+        BEAT  = 3840 / den         （拍 = 分母の音符）
+        8TH   = 480                （固定）
+        16TH  = 240                （固定）</div>
+        <p class="orch-fig">6/8 では BEAT と 8TH の量子が一致します（どちらも 480 チック）。</p>
+      </div>
+      <div class="orch-ja">
+        チックとサンプルの変換は<strong>整数演算だけ</strong>です。float の音楽スケールは存在しません。
+        <div class="orch-formula">  式3   sample(tick) = floor((tick × f_s × den + 32 × BPM) / (64 × BPM))
+  式4   D = 64 × BPM
+        tick(N)      = floor(((N + 1) × D − D/2 − 1) / (f_s × den))
+
+  検算: f_s = 48000, den = 4, BPM = 128, tick = 40 → sample = 938
+        sample 938 → tick 40（40.04）, sample 937 → tick 39</div>
+        <p class="orch-fig">MIDI クロックは常に 24 パルス／四分音符（インターバル 40 チック）で、拍が四分音符でないときも変わりません。0xF8 はどこにも出力されず、<code class="code-inline">OrchView.midi_clock</code> のカウンタだけが増えます。</p>
+      </div>
+      <div class="orch-en">
+        <b>Integer time, twice.</b> The two conversions above are the only place where musical position becomes memory position, and they are integer in both directions so that a tick round-trips to itself. A float scale would let a session drift between the arrange grid and the file; the worked check (tick 40 → sample 938 → tick 40) is printed in the specification precisely because rounding is where a naive implementation fails. The half-denominator offset in equation 3 is not cosmetic and cannot be moved by rearranging the division. MIDI clock stays at 24 per quarter because that is the wire convention, while the desk's own grid stays at 960 — the two are deliberately not the same number.
+      </div>
+
+      <h3 id="ch2-3">2.3 音高 — 12平均律と転調の列</h3>
+      <div class="orch-ja">
+        音高は 12 平均律です。MIDI キー n は 0 から 127。
+        <div class="orch-formula">  式5   f(n) = 440 × 2^((n − 69) / 12)</div>
+        実際に鳴る音は、四つの段を経て決まります。① トラックのキー分割（key split）が <code class="code-inline">[key_lo, key_hi]</code> の外を捨てる（lo=0 かつ hi=0 は 0..127 と読む。分割は 0..127 / 0..59 / 60..127 の三位置を <code class="code-inline">orch_cmd_split</code> が mod 3 で回す）→ ② トラックの transpose → ③ プログラムの transpose → ④ 0..127 へクランプ → 式5。ただし式5 は呼び出しごとに powf を計算しません。<code class="code-inline">s_pitch[128]</code> の表を起動時に一度だけ埋めます。
+      </div>
+      <div class="orch-en">
+        <b>Why a table and a clamp.</b> Frequency is computed on the hot path, so it is a lookup, and the lookup has to be bounded before it is indexed — hence the clamp to 0..127 after both transposes. The split zone is a three-position switch rather than free ranges because the file stores exactly two bytes (key_lo, key_hi) and the desk must never offer a control the container cannot carry.
+      </div>
+
+      <h3 id="ch2-4">2.4 ベロシティ・音量・パン</h3>
+      <div class="orch-ja">
+        強弱は速さ（velocity, v_m = 0..127）から振幅へ換算します。u = v_m / 127、領域は 0.08–0.45、カーブは <code class="code-inline">vel_curve</code> の 0・1・2 の三つです。
+        <div class="orch-formula">  式6   v0 = 0.08 + 0.37 × u          （線形）
+        v1 = 0.08 + 0.37 × √u         （遅い立ち上がり重視）
+        v2 = 0.08 + 0.37 × u²         （強い打鍵重視）
+
+  式7   G_trk = 0                    （volume = 0 または mute）
+        G_trk = 0.08 + 0.37 × (volume / 127)   （それ以外）
+
+  式8   p = (CC10 − 64) / 64 ∈ [−1, +1]
+        G_L = cos(π/4 × (p + 1))     G_R = sin(π/4 × (p + 1))</div>
+        <p class="orch-fig">pp 0.08–0.12 / mp 0.14–0.18 / mf 0.20–0.26 / f 0.28–0.36 / ff 0.38–0.45 は、すでに計算された v の帯域名であり、別の曲線ではありません。式7 で volume 64 → 0.2665、40 → 0.1965。CC127 は p = 63/64 で +1 には届きませんが、式はそれに合わせられません。</p>
+      </div>
+      <div class="orch-en">
+        <b>One scale, three curves, no second curve.</b> Velocity shaping is the only place a performer's touch reaches the sound, and it is deliberately a single linear family with three exponents. There is no hidden curve that recentres 64 into the middle of the mf band: the numbers above are what the desk computes, so a mixer reading of "64 is mf" is a reading of the same line, not of a second model. Pan follows the equal-power pair, and CC10 maps onto it with the MIDI range, which is why the extreme right is 63/64 rather than 1. The desk keeps the honest value instead of rescaling the formula to hide it.
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 3 — PROGRAMS AND VOICES                               -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch3">
+      <h2>第3章 音源 — 32のプログラムと48スロット (Programs and Voices)</h2>
+      <div class="orch-uses">前提: 式5 の音高（第2章）、vel と G_trk（第2章）、キー分割（第2章）。この章の「スロット」は第五章の予算と第九章のファイルで使い直します。</div>
+
+      <h3 id="ch3-1">3.1 プログラム表 — GM の三十二個</h3>
+      <div class="orch-ja">
+        プログラム（音色番号）は <code class="code-inline">PROG[32]</code> という三十六行ではなく三十二行の不変テーブルです。各 row は「GM の番号 → 既存のシム関数の呼び出し」を定めただけで、新しい楽器の C 関数は一本も書かれていません。GM の番号がそのまま行番号になるのは、役割が一致する場所だけです。残る 96 の GM 番号は未定義で、指定すると <code class="code-inline">refuse_program</code> が増え、トラックの旧音色のまま残ります。<strong>チャンネル10 のドラムマップは存在しません</strong>（どの経路も channel と 10 を比較しないため）。表の tr はプログラム側の転調、p はpoly（トラックあたりの声の天井）、鍵はト音／ヘ音のどちらの記号譜面を描くかです。
+      </div>
+      <table class="market-table">
+        <thead><tr><th>GM</th><th>名称</th><th>シム（呼ばれる手続き）</th><th>鍵</th><th>p</th><th>tr</th><th>データ</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>Piano</td><td><code class="code-inline">shimGrandPiano</code></td><td>tr</td><td>6</td><td>0</td><td>duration 1.2 s、ハンマーはシムの内側</td></tr>
+          <tr><td>4</td><td>Rhodes</td><td><code class="code-inline">shimFloat</code></td><td>tr</td><td>1</td><td>0</td><td>dur &lt; 0.50 s なら tone_dance、ほか tone_glass</td></tr>
+          <tr><td>26</td><td>Guitar</td><td><code class="code-inline">shimGuitar</code></td><td>tr</td><td>1</td><td>0</td><td>LP 2800 Hz、Q 1.0</td></tr>
+          <tr><td>32</td><td>Upright</td><td><code class="code-inline">shimWaddle</code></td><td>bs</td><td>1</td><td>0</td><td>LP 180 Hz、shimWaddleD 経由</td></tr>
+          <tr><td>33</td><td>Bass</td><td><code class="code-inline">shimIndustrialBass</code></td><td>bs</td><td>1</td><td>0</td><td>シム LP 2600、Q 4.5、sweep 420</td></tr>
+          <tr><td>38</td><td>Continuo</td><td><code class="code-inline">shimPedalBass</code></td><td>bs</td><td>1</td><td>0</td><td>MMA の Synth Bass 1 という名前は名乗らない</td></tr>
+          <tr><td>40</td><td>Violin</td><td><code class="code-inline">shimViolin</code></td><td>tr</td><td>1</td><td>0</td><td>3ノイズ／2サウ／1ローパス。LFO と peaking は入らない</td></tr>
+          <tr><td>41</td><td>Viola</td><td><code class="code-inline">shimViolin</code></td><td>tr</td><td>1</td><td>−7</td><td>同じシム。アルト記号は使わない</td></tr>
+          <tr><td>42</td><td>Cello</td><td><code class="code-inline">shimCello</code></td><td>bs</td><td>1</td><td>0</td><td>isPizz = 0、シムの Q = 20·log₁₀(2.2)</td></tr>
+          <tr><td>43</td><td>Contrabass</td><td><code class="code-inline">shimCello</code></td><td>bs</td><td>1</td><td>−12</td><td>LP 400、Q 2.2。shimPedalBass は他が使用中</td></tr>
+          <tr><td>46</td><td>Harp</td><td><code class="code-inline">shimGrandPiano</code></td><td>tr</td><td>1</td><td>0</td><td>duration = 2.4 s（既存パラメータ）</td></tr>
+          <tr><td>47</td><td>Timpani</td><td><code class="code-inline">shimTimpani</code></td><td>bs</td><td>1</td><td>0</td><td>LP 260、one-shot</td></tr>
+          <tr><td>52</td><td>Voice</td><td><code class="code-inline">shimSaxFlute</code></td><td>tr</td><td>1</td><td>0</td><td>filter_hz 800 はフォルマントのデータ、歌声の録音ではない</td></tr>
+          <tr><td>56</td><td>Trumpet</td><td><code class="code-inline">shimCyberLead</code></td><td>tr</td><td>1</td><td>0</td><td>LP 1800、Q 2.0、k = 0</td></tr>
+          <tr><td>57</td><td>Trombone</td><td><code class="code-inline">shimCyberLead</code></td><td>bs</td><td>1</td><td>0</td><td>LP 900、Q 2.0、k = 0</td></tr>
+          <tr><td>58</td><td>Tuba</td><td><code class="code-inline">shimCyberLead</code></td><td>bs</td><td>1</td><td>0</td><td>LP 400、Q 1.5、k = 0</td></tr>
+          <tr><td>60</td><td>Horn</td><td><code class="code-inline">shimCyberLead</code></td><td>tr</td><td>1</td><td>0</td><td>LP 800、Q 2.0、k = 0</td></tr>
+          <tr><td>68</td><td>Oboe</td><td><code class="code-inline">shimSaxFlute</code></td><td>tr</td><td>1</td><td>0</td><td>BP 1800、Q 8.0</td></tr>
+          <tr><td>70</td><td>Bassoon</td><td><code class="code-inline">shimCello</code></td><td>bs</td><td>1</td><td>0</td><td>LP 900、Q 1.5、アルコ（isPizz = 0）</td></tr>
+          <tr><td>71</td><td>Clarinet</td><td><code class="code-inline">shimSaxFlute</code></td><td>tr</td><td>1</td><td>0</td><td>BP 1500、Q 5.0</td></tr>
+          <tr><td>73</td><td>Flute</td><td><code class="code-inline">shimSaxFlute</code></td><td>tr</td><td>1</td><td>0</td><td>BP 2000、Q 5.0、息の雑音 0.025 はシム内のまま</td></tr>
+          <tr><td>80</td><td>Pulse</td><td><code class="code-inline">shimPulseSquash</code></td><td>tr</td><td>1</td><td>0</td><td>one-shot</td></tr>
+          <tr><td>81</td><td>Lead</td><td><code class="code-inline">shimCyberLead</code></td><td>tr</td><td>1</td><td>0</td><td>LP 3800、Q 4.0、k = 25 はテンプレートが SAT を置いたときだけ</td></tr>
+          <tr><td>90</td><td>Pad</td><td><code class="code-inline">shimSwarmatron</code></td><td>tr</td><td>1</td><td>0</td><td>LP 950、Q 2.5、8オシレータでもスロットは1</td></tr>
+          <tr><td>98</td><td>Bell</td><td><code class="code-inline">lilcu64_shim_pulse_bell</code></td><td>tr</td><td>1</td><td>0</td><td>2オペレータ FM（式12）。8本のサイン波ではない</td></tr>
+          <tr><td>102</td><td>Dance</td><td><code class="code-inline">shimDance</code></td><td>tr</td><td>1</td><td>0</td><td>one-shot</td></tr>
+          <tr><td>103</td><td>Zap</td><td><code class="code-inline">shimGlitchZap</code></td><td>tr</td><td>1</td><td>0</td><td>HP 1800、one-shot</td></tr>
+          <tr><td>112</td><td>Chime</td><td><code class="code-inline">shimDing</code></td><td>tr</td><td>1</td><td>0</td><td>decays 既存、既定 0.70 s</td></tr>
+          <tr><td>116</td><td>Kick</td><td><code class="code-inline">shimKick</code></td><td>bs</td><td>1</td><td>0</td><td>Taiko ではない。pitch = f(n)</td></tr>
+          <tr><td>117</td><td>Snare</td><td><code class="code-inline">shimSnare</code></td><td>tr</td><td>1</td><td>0</td><td>BP 2400。MIDI の高さは無視（vel が周波数枠へ）</td></tr>
+          <tr><td>118</td><td>Hat</td><td><code class="code-inline">shimHiHat</code></td><td>tr</td><td>1</td><td>0</td><td>シム HP 7500、Q 1.0。Rock テンプレの EQ は 7000 / Q 0.7 で別物</td></tr>
+          <tr><td>119</td><td>Ind.Kick</td><td><code class="code-inline">shimIndustrialKick</code></td><td>bs</td><td>1</td><td>0</td><td>高さはシム内で固定（160 → 42 Hz）</td></tr>
+        </tbody>
+      </table>
+      <div class="orch-ja">
+        番号 24 は存在しません。<code class="code-inline">shimPianoHammer</code> と <code class="code-inline">shimPedalSwoosh</code> は補助の手続きで、ディスパッチャからは呼ばれません。<code class="code-inline">shimFrogCroak</code>（2）と <code class="code-inline">shimIndustrialSnare</code>（16）は番号を持ちますが、どの row も指さないため、プールのイベントからたどり着けません。3つの打楽器（Snare・Hat・Ind.Kick）は <code class="code-inline">vel</code> を周波数の引数に流し込みます。velocity 110 以上でスネアはリムショット、100 以上でハイハットは開きます。
+      </div>
+      <div class="orch-en">
+        <b>A program is a call site.</b> The desk has no synthesis engine of its own and no sample library; a program is a row that names an existing procedure and the data that procedure needs. That is why there are 32 programs instead of 128: each row had to be measured against the block budget of chapter five before it could be published. The single exception worth learning is program 98, Bell, which goes to a two-operator FM voice rather than to the partial-shim dispatcher — the ratio and index below are the paper's pair, 2.76 and 1.8, not an invented one. Refusing the other 96 GM numbers is a deliberate act: an unmapped number that silently picked a default instrument would make a session file mean one thing on the desk and another on paper.
+      </div>
+
+      <h3 id="ch3-2">3.2 声の割り当て — 48スロットと盗み</h3>
+      <div class="orch-ja">
+        DAW 側のスロットは <code class="code-inline">s_slot[48]</code> の静的なプールで、ひとつのスロットはひとつの MIDI 音符です（部分音ではありません）。合成器自身にも <code class="code-inline">MAX_VOICES 48</code> が別々にありますが、数字が一致するだけでプールは別です。割り当ての順序は「空いていれば取る」ではありません。
+        <div class="orch-formula">  式9   proxy(slot) = gain × exp( −(npos − t0) / f_s )      （τ = 1 秒）
+
+  ① トラックの占有人数 ≥ poly → 同じトラックの式9で最も静かなスロットを盗む
+  ② そうでなく、空_slot があれば index 小から取る
+  ③ 空がなければ、全プールで式9の最静音を盗む（track = −1 で探す）</div>
+        poly はロード後の天井で、<strong>ファミリーはこれを下げるだけ</strong>です。Rock と Orchestra は全トラック 1、Classic はプログラム 0（ピアノ）だけ 6、ほか 1。盗みは <code class="code-inline">steal_voice</code> を増やします（書き出し中を除く）。黙らせたスロットは <code class="code-inline">wa_release_bus_key(bus, key)</code> と、ベルなら <code class="code-inline">lilcu64_voice_release</code> で消えます。シムを呼んだあと何も起きなかった場合（ノードが採れなかった等）は、スロットをプールへ戻して <code class="code-inline">shim_landed</code> がノート refused を数えます — この場合だけ、戻り方が「ハング」ではなく「返却」になります。
+      </div>
+      <div class="orch-en">
+        <b>Stealing is defined by loudness, not by age.</b> The desk ranks a held slot by the product of the gain written at note-on and an exponential decay with a one-second time constant. Age alone would cut a long piano note that is still audible, and gain alone would keep a note that has already faded to nothing; the product is the honest proxy for what the listener can still hear. The per-track ceiling is checked before the global one, so a busy track cannot starve its own channel by reaching into another track's notes first. During WAV export the same steals happen but are not counted, because a render artifact must not depend on who is listening.
+      </div>
+
+      <h3 id="ch3-3">3.3 ワンショットとノートオフ</h3>
+      <div class="orch-ja">
+        one-shot（<code class="code-inline">shot = 1</code>）は九つの row です。47 Timpani 1.2 s、80 Pulse 2.4 s、102 Dance 0.85 s、103 Zap 0.12 s、112 Chime 0.70 s、116 Kick 0.16 s、117 Snare 0.15 s、118 Hat（vel ≥ 100 なら 0.28 s、そうでなければ 0.055 s）、119 Ind.Kick 0.22 s。長さはその row の方針ではなく <code class="code-inline">pick_dur</code>（dur10/100）が返し、one-shot はノートオフを聞きません。期限が来るまで <code class="code-inline">slots_expire</code> が消します。プログラム 98 Bell は shot = 0 で、別の分岐を通ります。減衰は 1/(1.8 × f_s) — 1.8 秒です。なお、本物の鍵盤から鳴る live note-on（8.0 s 上限、ノートオフで切る）は、このビルドでは聞こえません。理由は第七章 7.4 にあります。
+      </div>
+      <div class="orch-en">
+        <b>Percussion length belongs to the instrument.</b> For the nine one-shot rows the duration is a property of the procedure, not of the recorded performance, so note-off is ignored and the slot is released by expiry. This keeps a hi-hat from being truncated to the length of a mouse drag and matches the shim bodies that already exist. The consequence the manual must state plainly: an event drawn with the pencil gets the length of the snap quantum, not the instrument's fixed length, except when the row is a shot and the pass is the armed record pass, where the event's own duration wins.
+      </div>
+
+      <h3 id="ch3-4">3.4 音の式 — シム・FM・ビクヮード</h3>
+      <div class="orch-ja">
+        シム（部分音合成）は各部分音 A_k に窓 W_k とフィルタ H_k をかけて重ねます。包絡はピーク V_peak と時定数 tau で決まります。
+        <div class="orch-formula">  式10  y(t) = Σ_k A_k(t − t0) · W_k( 2π f_k (t − t0) + φ_k ) · H_k
+  式11  A(t) = V_peak · exp( −(t − t_attack) / tau )
+  式12  y(t) = A_c sin( 2π f_c t + I(t) sin( 2π f_m t ) )
+        Bell: f_m/f_c = 2.76、I = 1.8
+  式13  y[n] = b0·x[n] + b1·x[n−1] + b2·x[n−2] − a1·y[n−1] − a2·y[n−2]</div>
+        <table class="market-table">
+          <thead><tr><th>型</th><th>b0</th><th>b1</th><th>b2</th><th>a0</th><th>a2</th></tr></thead>
+          <tbody>
+            <tr><td>LP</td><td>(1−c)/2</td><td>1−c</td><td>(1−c)/2</td><td>1+a</td><td>1−a</td></tr>
+            <tr><td>HP</td><td>(1+c)/2</td><td>−(1+c)</td><td>(1+c)/2</td><td>1+a</td><td>1−a</td></tr>
+            <tr><td>BP</td><td>a</td><td>0</td><td>−a</td><td>1+a</td><td>1−a</td></tr>
+            <tr><td>peak</td><td>1+a·A</td><td>−2c</td><td>1−a·A</td><td>1+a/A</td><td>1−a/A</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">w₀ = 2π f₀ / f_s、a = α = sin w₀ / 2Q、c = cos w₀、A = 10^(G_dB/40)。三型とも a1 = −2c。a0 で割って正規化します。</p>
+      </div>
+      <div class="orch-en">
+        <b>Two Q conventions, never mixed.</b> The coefficients above are the Audio EQ Cookbook — a public formula, not a library. The EQ insert uses them with alpha = sin(w0)/(2Q). The older <code class="code-inline">wa_filter</code> in the synth takes its Q argument in decibels for LP and HP (alpha = sin(w0)/(2·10^(Q/20))) and linearly for BP, so a JS body that says Q 2.2 becomes 20·log₁₀(2.2) on the way in. Converting between them is the only translation the desk performs on a filter, and mixing them silently is the failure mode the manual warns about. Note also that <code class="code-inline">wa_filter</code> has no peaking type at all — a peak exists only in the insert's own biquad, which is why violin and viola in the table above are three nodes rather than the five-biquad shape of the web prototype.
+      </div>
     </div>
 
-    <div class="section">
-      <h2>2. メニュー (Menu)</h2>
-      <p>
-        ファイルは新規、開く、上書き保存、SMF の読み書き、WAV の書き出し、閉じる。コンサートは再生、停止、録音、パニック、クリックと三つのテンプレート。シーンは送信とオクターブ。十六のシーンはステージの格子です。トラックは追加、削除、分割、ベロシティ、チャンネル、リターン。装置はバッファ（Q=32 とホスト 1024 を表示するだけ）、DSP、診断、タイムコード形式の保存、クロック、ポート、測定した遅延。ウィンドウは七つの窓を開きます。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"File, Concert, Scene, Track, Device, Window. WAV export writes /SYS/orchestra.wav and nothing reads it back. SMF is /SYS/orchestra.mid."</span>
-      </p>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 4 — INSERTS AND THE HALL                              -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch4">
+      <h2>第4章 インサートとホール (Inserts and the Hall)</h2>
+      <div class="orch-uses">前提: 式13 のビクヮード（第3章）、G_trk とパン（第2章）、小節と拍（第2章）— ディレイの長さは十六分音符の長さから決まるためです。</div>
+
+      <h3 id="ch4-1">4.1 インサートは要素ではなく位置</h3>
+      <div class="orch-ja">
+        インサート（挿入エフェクト）は九つの id です。<code class="code-inline">ORCH_INS_BYPASS = 0</code>、EQ = 1、SAT = 2、DELAY = 3、REVERB = 4、CHORUS = 5、GATE = 6、TREMOLO = 7、LIMITER = 8。 tenth はありません。<strong>インサートはグラフの要素ではありません</strong>。要素なら、第六章のトラック64本が第五章の上限16を突き破ってしまうからです。トラックには二つまで（<code class="code-inline">ins0</code> と <code class="code-inline">ins1</code>）、マスターには一つだけ（<code class="code-inline">master_lim</code>）で、マスターが許す値は LIMITER と BYPASS の二つだけです。他を指定すると <code class="code-inline">refuse_insert</code> が増え、状態はそのまま、ステータス行に "insert" が出ます。
+      </div>
+      <div class="orch-en">
+        <b>The slot imitates a VST slot, not its format.</b> A binary plug-in host would need a loader, allocations on the hot path and a heap — three things the real-time contract forbids. So the insert is a place in the chain whose algorithm is chosen from a closed catalogue of eight, and the catalogue is closed because each entry has a state budget. The ninth id, LIMITER, is reserved for the master and enforced at the setter, not at the renderer, so the desk cannot get into a state it cannot play.
+      </div>
+
+      <h3 id="ch4-2">4.2 パラメータ一覧 — P1〜P4</h3>
+      <div class="orch-ja">
+        どのインサートも整数四つ（P1〜P4）だけを受け取ります。値は編集のたびに <code class="code-inline">clamp_row</code> で、レンダリングのたびに <code class="code-inline">clamp_i</code> でもう一度、下の範囲へ締められるので、ファイルに書かれた範囲外の数値は聞こえません。
+        <table class="market-table">
+          <thead><tr><th>型</th><th>P1</th><th>P2</th><th>P3</th><th>P4</th><th>式</th></tr></thead>
+          <tbody>
+            <tr><td>BYPASS</td><td colspan="4">パラメータなし</td><td>—</td></tr>
+            <tr><td>EQ</td><td>0 LP・1 HP・2 BP・3 peak</td><td>Hz 20..20000</td><td>Q（百分の1）10..1000</td><td>gain dB −24..+24（LP/HP/BP は無視）</td><td>式13</td></tr>
+            <tr><td>SATURATOR</td><td>k 0..100（既定 25）</td><td>0</td><td>0</td><td>0</td><td>式14</td></tr>
+            <tr><td>DELAY</td><td>k 1..16（十六分音符数）</td><td>feedback 0..90</td><td>wet 0..100</td><td>0</td><td>式16</td></tr>
+            <tr><td>REVERB</td><td>send 0..127（トラックの項目）</td><td>room 0..100</td><td>damping 0..100</td><td>wet 0..100</td><td>式15</td></tr>
+            <tr><td>CHORUS</td><td>d0 ms 1..40</td><td>depth ms 0..10</td><td>f_lfo 0.1Hz単位 1..50</td><td>mix 0..100</td><td>式17</td></tr>
+            <tr><td>GATE</td><td>閾（百分の1）1..100</td><td>tau ms 1..500</td><td>hold ms 0..500</td><td>0</td><td>式18</td></tr>
+            <tr><td>TREMOLO</td><td>d 0..100</td><td>f 0.1Hz単位 1..120</td><td>0</td><td>0</td><td>式19</td></tr>
+            <tr><td>LIMITER</td><td colspan="4">パラメータなし（マスター専用）</td><td>式20</td></tr>
+          </tbody>
+        </table>
+        <div class="orch-formula">  式14  C(x) = (3+k)·x·(20π/180) / (π + k·|x|)         x ∈ [−1, 1]
+  式15  wetL[i] = wetR[i] = 0;  wa_reverb_process(send, wetL, wetR, n);
+        wetL[i] −= send[i];   wetR[i] −= send[i]
+  式16  L = round( k × T_16th × f_s )
+  式17  d(n) = d0 + depth · sin( 2π f_lfo n / f_s )
+  式18  e[n] = max(|x[n]|, e[n−1] × λ),  λ = exp( −1 / (tau × f_s) )
+  式19  y ×= (1 − d) + d · sin( 2π f n / f_s )
+  式20  |x| ≤ 0.85 は素通し、超えた分は d/(1 + 2.5d) で圧縮、1.25 で 1.05
+        s = (int16_t) lrintf( clamp(x, −1, 1) × 32767 )</div>
+      </div>
+      <div class="orch-en">
+        <b>Four integers per slot.</b> Keeping every parameter an integer in a documented range is what lets the session file carry inserts in eight i16 slots per track (chapter nine) and lets the validator reject an out-of-range file before anything renders. The saturator curve is pre-sampled into <code class="code-inline">curve[1024]</code> rather than evaluated per frame: the table is built at boot with k = 25 and rebuilt by the UI tick from the last SAT insert found on any track, so the renderer only reads and BSS does not grow per insert. Equation 15 subtracts the dry send because the existing reverb body adds dry to wet; that is also why <code class="code-inline">enabled</code> has to stay 1 for the whole session — with the reverb off, the subtraction would leave silence instead of the wet signal.
+      </div>
+
+      <h3 id="ch4-3">4.3 ホールはひとつ</h3>
+      <div class="orch-ja">
+        リバーブは「もう一つのホール」を作りません。<code class="code-inline">room</code>・<code class="code-inline">damping</code>・<code class="code-inline">feedback</code>・<code class="code-inline">wet</code> の四つ（各 0..100）はセッション全体で共有される一つのホールの旋钮で、ファイルのヘッダに置かれます。トラック側の REVERB インサートの P1 はそのトラックの <code class="code-inline">send</code> として読み、P2〜P4 は共有ホールの room・damping・wet を更新します（走査で最後に見つかったものが勝つ）。<code class="code-inline">feedback</code> は P1〜P4 のどこにもなく、ファミリーのテンプレートとセッションファイルだけが書きます。<code class="code-inline">wa_set_reverb</code> は REVERB がひとつも無いときにも呼ばれ、そのときはセッション側の三つの値が渡ります。ラインは 93 BPM のままで、ウェット信号の内側に残ります。
+      </div>
+      <div class="orch-en">
+        <b>One hall, because a hall is memory.</b> The reverb is four comb filters and four all-passes per channel, with line lengths scaled by s_sr/44100 and two delay buffers fixed at 44100 samples. A second hall would double a static buffer that cannot grow, so the design gives each track a send into the one hall instead. That is also why the manual can promise that adding a REVERB insert never allocates.
+      </div>
+
+      <h3 id="ch4-4">4.4 トラックの上の順序とラインのプール</h3>
+      <div class="orch-ja">
+        一本のトラックの中で信号は必ずこの順に通ります。<strong>① インサート0 → ② インサート1 → ③ フェーダ（式7）→ ④ パン（式8）→ ⑤ send の加算 s_send += (L+R) × send/127</strong>。mute と solo は G_trk = 0 に落ちます。ホールはマスターのリミッタより前に混ぜ込まれます（マスターは s_wl − s_send を加えてから総音量を掛け、LIMITER のときだけ soft clamp を回します）。クリックは別のバス65で、send 0・pan 0・両チャンネル 0.7071固定 — mute/solo は及ばず、フェーダも通りません。ラインのプールは静的で、ディレイ8本・コーラス8本。<strong>同一アルゴリズムは九つ目に到達しません</strong>：スロットを回して九つ目を置こうとすると、そのスロットは BYPASS になり、<code class="code-inline">refuse_insert</code> が増えます。
+        <div class="arch-grid">
+          <div class="arch-card"><h5>PS2 のライン長</h5><p>1ライン 2048 サンプル（8 × 2048 × 4 = 65,536 B）。スナップショットが倍で、ディレイ＋コーラス = 284,672 B。</p></div>
+          <div class="arch-card"><h5>ほかのターゲット</h5><p>1ライン min(f_s, 48000) サンプル（8 × 48000 × 4 = 1,536,000 B）。スナップショット込みで 3,225,600 B。コーラスは 2400 サンプル固定。</p></div>
+        </div>
+      </div>
+      <div class="orch-en">
+        <b>Fixed pools, counted refusals.</b> Delay and chorus lines come from static pools with owners, so a line is reassigned rather than allocated, and the assignment is stable while the session is not edited. The PS2 image pays for the pool in RDRAM and therefore gets a shorter line; the manual states the two numbers because a 16-step delay at 48 kHz fits on a host and is clamped on the console, and a clamp is reported (<code class="code-inline">refuse_insert</code> and the "truncated" family of status texts) instead of being hidden.
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 5 — GRAPH, BUDGET AND LATENCY                         -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch5">
+      <h2>第5章 グラフと予算 (Graph, Budget and Latency)</h2>
+      <div class="orch-uses">前提: 量子 Q とサンプルレート（第1章）、スロット（第3章）、インサートとホール（第4章）。この章の「周期 T」が第七章の拒否と第十一章の比較で使い直されます。</div>
+
+      <h3 id="ch5-1">5.1 九つの要素 — _static_ な接続図</h3>
+      <div class="orch-ja">
+        音が出るまでには九個の要素が並んでいます。グラフは <code class="code-inline">gst_rt_boot</code> の中で一度だけ組まれ、以後 組み替えられません。登録されている型は十個（midisrc, queue, midiroute, shimsynth, audioconvert, tee, audiomixer, volume, identity, virtiosndsink）ですが、コンサートが使うのは九個で、<strong>identity は入りません</strong>。工場名を文字列で照合し、知らない名前（昔 fluidsynth と書かれていた行も含めて）は <code class="code-inline">refuse_factory</code> を増やし、0 を返し、前のグラフを壊しません。<code class="code-inline">OrchView.element_count</code> が9を返すのはこのためで、装置メニューの「診断 (Diag)」が同じ数を読みます。
+        <div class="orch-ascii">  midisrc -> queue -> midiroute -> shimsynth
+     MIDI       split      lilcu64
+                                |
+                                v
+                          audioconvert -> tee
+                              F32        /  \
+                                         v    v
+                                  audiomixer  send (track field)
+                                    volume
+                                 virtiosndsink
+                               virtio_sound_write</div>
+        <p class="orch-fig">図5-1 静的な接続図。tee の枝は二本だけ（ドライなミックスとトラックの send）で、両方は同じ一周で計算されます。ミキサが重ねるのは最大66本 — トラックのバス1..64 と、クリックが点いているときのバス65 — で、バス0（デモの音）は並びに入りません。</p>
+        <div class="orch-ja">
+          データ型（caps）は三つです。MIDI、Q = 32 フレームの float32（1か2チャンネル、セッションのレート）、同じ大きさの int16。交差の規則は「完全一致」で、文字列のパースはありません。イベント語彙（EOS、SEGMENT、CAPS、GAP、SEEK など）はメディ層に存在せず、状態変化は「代入 + 拒否」であってメッセージではありません。位置は <code class="code-inline">npos</code>、ループ端は <code class="code-inline">loop_tick</code>、深さは <code class="code-inline">gst_rt_queued_ms()</code>。すべて静的プールです。MIDI トークン8、録音リング64、スロット48、ミックス平面 66×Q、作業行6本、配線バッファ Q×2、ディレイライン8、コーラスライン8。
+        </div>
+      </div>
+      <div class="orch-en">
+        <b>A closed graph, built once.</b> A media graph that can be rebuilt at runtime needs a heap, and a heap on the audio path makes the block deadline unprovable. So the topology is a constant: the ten names, the two tee branches, the bus list and every buffer are fixed at boot. The ceiling of sixteen elements is a ceiling on names, not on bodies — each body is one function in <code class="code-inline">render_graph</code>. An insert is not an element for exactly this reason: sixty-four tracks with slots would blow a limit placed on the vocabulary.
+      </div>
+
+      <h3 id="ch5-2">5.2 632 µs と admission</h3>
+      <div class="orch-ja">
+        一周期の長さは決まっています。
+        <div class="orch-formula">  式21  T = Q / f_s = 32 × 1 000 000 / f_s
+        48000 Hz → 666 µs   44100 Hz → 725 µs</div>
+        <table class="market-table">
+          <thead><tr><th>ステップ</th><th>WCET（µs）</th></tr></thead>
+          <tbody>
+            <tr><td>queue</td><td>8</td></tr>
+            <tr><td>midiroute</td><td>24</td></tr>
+            <tr><td>shimsynth（16声まで）</td><td>340</td></tr>
+            <tr><td>鳴っているトラックのインサート（16×2まで）</td><td>120</td></tr>
+            <tr><td>tee・mixer・volume・pan・aux・limiter</td><td>100</td></tr>
+            <tr><td>audioconvert</td><td>16</td></tr>
+            <tr><td>virtiosndsink</td><td>24</td></tr>
+            <tr><td>identity（入った場合。コンサートでは0）</td><td>4</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">七行の合計 <strong>632 µs</strong> がコードの公開する値です（636 は identity を入れた側の数字で、実ビルドでは生まれない）。632 ≤ T が常に成り立つので、グラフは Play を通ります。</p>
+      </div>
+      <div class="orch-ja">
+        Play（再生）は審査を通過します。条件は三つ。状態が READY か PAUSED であること。<code class="code-inline">virtio_sound_is_ready()</code> が真であること。上の合計が T を越えないこと。どれかを欠くと <code class="code-inline">gst_rt_set_state</code> は 0 を返し、ステータスに "play" を書き、<strong>状態はそのまま</strong>です。これは第七章の拒否の一覧に入ります。ミッドナイトの missed deadline は時間を伸ばしません。デバイスへ量子は書かれず、<code class="code-inline">npos</code> は Q だけ進むのでテンポは変わらず、増えるのは <code class="code-inline">chain_drop</code>（キューが2048フレーム以上）か <code class="code-inline">drop_audio</code>（デバイス未準備、または書負）です。<code class="code-inline">qos_drops</code> はこのビルドでは動きません（遅延試験の旗はリセットされるだけで立つ経路がないため）。
+      </div>
+      <div class="orch-en">
+        <b>Publish the number, then compare.</b> The WCET is not a measured average and the manual does not call it one; it is a declared sum of per-step ceilings, and the admission test is the only place the sum is used. This is what makes the deadline checkable on hardware that has no profiler: the same 632 that the specification prints, <code class="code-inline">gst_rt_wcet_us()</code> returns, and the refusal path prints instead of degrading. The midisrc is excluded from the sum because it belongs to the INPUT plane, whose budget is 500 µs and whose dispatcher, in this build, has no caller (12.1).
+      </div>
+
+      <h3 id="ch5-3">5.3 ペーサー — 追い付きは64回まで</h3>
+      <div class="orch-ja">
+        音を回す入口は三つに分かれ、共用の tick はありません。<code class="code-inline">orchestra_ui_tick()</code> は UI の一周に一度（六か所）、<code class="code-inline">orchestra_audio_service(now_us)</code> はキャセットの呼出しと同じ場所で、<code class="code-inline">orchestra_audio_tick()</code> は中の専用です。
+        <div class="orch-formula">  service(now_us):
+    if !booted or state != PLAYING: return
+    T = period_us()
+    if render_perf_us() == 0:            （時計が無いビルド）
+        audio_tick(); return             （1回だけ、キューを見ない）
+    if due == 0: due = now_us
+    for i in 0 .. 63:                    （最大64回の追い付き）
+        qf = queued_bytes / 4            （1フレーム = L,R int16 = 4 バイト）
+        if qf >= 2048: break             （一杯。ここからは chain_drop）
+        if qf >= 1024 and now_us < due: break   （周期ぶん以上、まだ早い）
+        audio_tick()                     （Q = 32 フレームを書く）
+        if now_us >= due: due += T       （0に戻さない）</div>
+        <p class="orch-fig">動作点は「追い付き中は1周期未満、テンポを保っているときは1〜2周期」。4へ足して埋める経路はありません。 別個のオーディオ面と SCHED_FIFO はこのビルドには無く、保証は上の合計と追い付き上限です。</p>
+      </div>
+      <div class="orch-en">
+        <b>Catch-up is bounded, and so is silence.</b> The pacer can render at most sixty-four blocks per call, so a stalled host cannot make the desk spend unbounded time in one loop, and the two queue thresholds keep it from writing into a device that is already full. There is no separate audio thread in this build: the audio actor is driven from the same UI passes that paint the desk, which is exactly why the guarantee is the published sum rather than a scheduler priority. If a single invariant ever fails, <code class="code-inline">orch_check</code> raises a sticky flag and every later block returns REFUSE — the desk goes quiet instead of clicking.
+      </div>
+
+      <h3 id="ch5-4">5.4 聞こえる遅れ — 三つの長さは交換しない</h3>
+      <div class="orch-ja">
+        「遅延」という語は三つの別々な長さに使われます。混ぜないでください。
+        <div class="arch-grid">
+          <div class="arch-card"><h5>① ブロックの予算</h5><p>632 µs の WCET を 666 µs（48000）または 725 µs（44100）の周期に収める、という算数。音の遅れではなく、間に合うかどうかの話です。</p></div>
+          <div class="arch-card"><h5>② INPUT 面</h5><p>周期 1000 µs・予算 500 µs。MIDI 配送がこの中で戻る、という約束。ただし本ビルドでは配送の呼出元がありません。</p></div>
+          <div class="arch-card"><h5>③ 聞こえる遅れ</h5><p>queued_frames / f_s。デバイスに残っているフレーム数を実際のサンプルレートで割った、測定された値です。</p></div>
+          <div class="arch-card"><h5>④ 参考：ホスト周期</h5><p>1024 フレーム = 21.3 / 23.2 ms。メニューの「バッファ」は "Q 32 | host 1024" と出しますが、これは定数の表示で測定ではありません。</p></div>
+        </div>
+      </div>
+      <div class="orch-ja">
+        プルトが出す ms は測定値だけです。UI の一周が毎回 <code class="code-inline">gst_rt_queued_ms()</code> を呼び、その値を <code class="code-inline">OrchView.queued_ms</code> に入れ、メニューの右端へ書き、ステータス行の "q NN ms" にも使います。「0.8 ms」のような定数表記は禁止、「0.2 ms 未満」もこの章からは導けません（500 µs は 0.5 ms、632 µs は 0.632 ms）。5〜8 ms の round-trip もこのビルドの約束ではありません — ホスト周期が1024フレームなので、それを裏切るには128フレーム以下の backend が必要で、それは <code class="code-inline">virtio_sound_open</code> の値ではありません。
+      </div>
+      <div class="orch-en">
+        <b>Latency is a measurement, or it is nothing.</b> Three different lengths are routinely confused in audio writing: what a block is allowed to cost, what an input plane is allowed to cost, and what the listener actually hears. This manual keeps them apart and publishes only the third as a millisecond figure, because the first two are ceilings and the third is a queue depth that changes as you play. A constant "0.8 ms" label would be a claim with no instrument behind it, so it is forbidden rather than merely avoided.
+      </div>
     </div>
 
-    <div class="section">
-      <h2>関連コンポーネント (Related Components)</h2>
-      <div class="related-apps">
-        <a href="Cassette.html">📼 カセット (Cassette Deck)</a>
-        <a href="../settings/Sound.html">🔊 音響設定 (Sound Settings)</a>
-        <a href="Workbench.html">🗄️ ワークベンチ (Workbench)</a>
-        <a href="Editor.html">✍️ 文書編集 (Editor)</a>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 6 — THE SEVEN WINDOWS                                 -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch6">
+      <h2>第6章 七つの窓 (The Seven Windows)</h2>
+      <div class="orch-uses">前提: 三つの層（第1章）、トラックとシーン（第3・4章）。「表示」は第五章の測定値を読みます。</div>
+
+      <h3 id="ch6-1">6.1 窓の一覧</h3>
+      <div class="orch-ja">
+        窓は七つです。起動時に開くのはステージだけ、残りはウィンドウメニュー（またはコマンド）で開きます。それぞれ固定の初期サイズと初期位置を持ち、すべてリサイズ可能 — ただし <strong>アバウトだけがリサイズ不可</strong>です（同じ幅・高さで作り、毎回サイズ変更を拒否するため）。
+        <table class="market-table">
+          <thead><tr><th>窓</th><th>日本語/英語の題</th><th>初期サイズ</th><th>初期位置</th><th>役割</th></tr></thead>
+          <tbody>
+            <tr><td>ステージ</td><td>ステージ (Orchestra Stage)</td><td>780 × 520</td><td>72, 40</td><td>トランスポート、十六シーン格子、レベルメータ、メニューを描く唯一の窓</td></tr>
+            <tr><td>アレンジ</td><td>アレンジ (Arrange)</td><td>760 × 420</td><td>96, 72</td><td>トラックの横並びとイベント線、小節の格子</td></tr>
+            <tr><td>ピアノ</td><td>ピアノ (Piano Roll)</td><td>760 × 480</td><td>120, 88</td><td>鍵盤、グリッド、ノート編集</td></tr>
+            <tr><td>スコア</td><td>スコア (Score)</td><td>720 × 320</td><td>140, 120</td><td>選択トラックの一段ノートの高位記号譜</td></tr>
+            <tr><td>ミキサー</td><td>ミキサー (Mixer)</td><td>780 × 460</td><td>48, 64</td><td>ストリップ（vol・pan・send・mute・solo）とマスター列</td></tr>
+            <tr><td>インサート</td><td>インサート (Insert)</td><td>420 × 460</td><td>168, 96</td><td>二スロットと P1〜P4 のノブ</td></tr>
+            <tr><td>アバウト</td><td>アバウト (About)</td><td>520 × 270</td><td>240, 160</td><td>バージョン情報。リサイズ不可。モーダルではない</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">W_STAGE, W_ARRANGE … という名前は読み方の規約で、窓の id は「コマンド番号 − 701」です（ウィンドウメニューの 701〜707）。状態行とレベルメータは窓ではなく、ステージの描画領域です。</p>
+      </div>
+      <div class="orch-en">
+        <b>One window family, one geometry model.</b> Seven windows are built from the same desk helper, so a control that exists in two windows is drawn by one function and lands in the same place in both. The window identifiers are derived from the command identifiers rather than numbered separately, which keeps the menu and the window list from becoming two lists that can disagree. About is the single non-resizable window because it is a printed card, not a workspace.
+      </div>
+
+      <h3 id="ch6-2">6.2 三つのレイアウト — WIDE・STACK・MIN</h3>
+      <div class="orch-ja">
+        同じデスクが七つの広さで動きます。レイアウトの段階は幅と高さだけで決まり、すべての窓が同じ関数を読みます。
+        <div class="orch-formula">  lay_mode(w, h):
+    h &lt; 200 or w &lt; 240  →  MIN
+    w &lt; 700             →  STACK
+    それ以外            →  WIDE</div>
+        <table class="market-table">
+          <thead><tr><th>段階</th><th>トランスポート</th><th>十六シーン格子</th><th>レベルメータ</th></tr></thead>
+          <tbody>
+            <tr><td><strong>WIDE</strong></td><td>九つのコントロールを一段（高さ28 px）：PLAY 64・STOP 64・REC 56・PANIC 72・TEMPO 72・NUM 40・DEN 40・CLICK 64・FAMILY 112</td><td>残幅 w − 44 が 540 を超えるときだけ</td><td>必ず。高さ14 px</td></tr>
+            <tr><td><strong>STACK</strong></td><td>三つずつの複数列、行のピッチ28 px</td><td>次の行が y + 56 &lt; h − 30 に入るときだけ</td><td>h ≥ 220 のときだけ。高さ12 px</td></tr>
+            <tr><td><strong>MIN</strong></td><td>四つのボタン（幅 (w − 20)/4 を 24..88 にクランプ）</td><td>出ません</td><td>出ません</td></tr>
+          </tbody>
+        </table>
+        <div class="orch-ascii">   WIDE   ┌──────────────────────────────────────────────┐
+         │ PLAY STOP REC PANIC TEMPO NUM DEN CLICK FAMILY│
+         │ 1 2 3 4 5 6 7 8   (scenes, 8 per row × 2)     │
+         │ L ▓▓▓▓▓▒▒░   R ▓▓▓▓▓▒▒░        48000 Hz | q … │
+   STACK ┌───────────────────────┐   MIN ┌────────────┐
+         │ PLAY STOP REC         │        │ PLAY STOP  │
+         │ PANIC TEMPO NUM       │        │ REC  PANIC │
+         │ DEN CLICK FAMILY      │        └────────────┘
+         │ (scenes if they fit)  │        no scenes, no meters
+         └───────────────────────┘</div>
+        <p class="orch-fig">図6-2 三段階の配置。シーン格子は八つずつ二行、セル幅は aw/8 を 24..120 にクランプ、ピッチ28 px。FAMILY ボタンは Rock / Classic / Orchestra を回し、テンプレートの適用がまだ確定していないときはラベルに "?" が付きます。</p>
+      </div>
+      <div class="orch-ja">
+        窓ごとに、細いときの出方は違います。アレンジのヘッダ幅は段階で変わり、スナップの表示は幅180以上、ピアノは MIN でスナップと Undo が出ず、スコアのツール行は幅700以上で出て、インサートは MIN でも二つのノブを残します。ミキサの列は68 px（WIDE）から52 px（狭い）へ縮み、編集ボタンは最小8×8 px、メータは最小2×2 px のときだけ描かれます。
+      </div>
+      <div class="orch-en">
+        <b>Three tiers, not seven builds.</b> The desk is one program with a mode switch, not a per-width build; the tiers exist because a stage box and a 480-wide handset cannot share a control layout. The manual states the thresholds so a reader can predict what disappears: scenes go before meters, meters go before the third transport row. What never disappears is the refusal — a control that cannot be drawn is not a control that silently does nothing.
+      </div>
+
+      <h3 id="ch6-3">6.3 表示域 — 状態行とメータ</h3>
+      <div class="orch-ja">
+        ステータス行（この案内書では「状態」）は必ず次を出します。周波数、測定したキュー、drop、steal、smf。
+        <div class="orch-formula">  48000 Hz | q 42 ms | drop 0 | steal 0 | smf 0 | PAUSED | Scene 3</div>
+        行が70文字より短ければ状態語が、62文字より短く、かつ active なシーンに名前があればその名前が足されます。直前の操作が拒否だったときは、拒否の文（"play"・"note"・"session"・"insert"・"tempo"・"track"・"program"・"wav" など）が行を置き換えます。行を作るのは <code class="code-inline">orch_publish_idle</code> で、描画関数ではありません。
+      </div>
+      <div class="orch-ja">
+        レベルメータは二本（L/R）で、制限器のうしろのピークから <code class="code-inline">clamp(round(peak × 100), 0, 100)</code> を描きます。<strong>表示であって操作ではありません</strong>（掴んでも動かない）し、WAV 書き出し中は更新が止まります（第九章 9.3）。色は二十一種の <code class="code-inline">ORCH_COL_*</code> だけで、窓のコードに生の16進数は置いてありません（例外はチック溢れのマーカーのみ）。モーダルの会話窓はありません。
+      </div>
+      <div class="orch-en">
+        <b>The status line is the diagnostic.</b> There is no Monitor product and no diagnostics window; the counters of chapter three and the measured queue of chapter five are printed as one line, and a refusal replaces that line rather than appending to it. That is a deliberate economy: a reader who sees "insert" knows a cycle was refused, and a reader who sees the idle line knows the counters are still zero. The palette is a named set because a colour written twice is two decisions about one appearance.
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 7 — OPERATION                                         -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch7">
+      <h2>第7章 操作 — メニューと実時間 (Operation)</h2>
+      <div class="orch-uses">前提: 第六章の窓と三段階のレイアウト、第五章の admission と状態（READY・PAUSED・PLAYING）、第二〜第四章の語（チック、テンポ、プログラム、インサート）。この章で新しい数は出しません。出るのは操作と、それが断られる条件だけです。</div>
+
+      <h3 id="ch7-1">7.1 メニュー — 六つの見出しと三十七の項目</h3>
+      <div class="orch-ja">
+        メニューバーは<strong>ステージにだけ</strong>描かれ、しかも最後に描かれます（コントロールを置いてから <code class="code-inline">orch_menu_paint</code>）。ほかの六つの窓は <code class="code-inline">menu_open</code> に常に FALSE を返す関数を立てるので、どの窓が前面に出てもバーは一つです。見出しは六つ、上限は八（<code class="code-inline">APP_MENU_MAX_HEADERS</code>）、一見出しの項目上限は二十（<code class="code-inline">APP_MENU_MAX_ITEMS</code>）。最多的はファイル・コンサート・装置の九行、最短はシーンの二行。幅は呼び出し側が渡します（104・120・88・104・72・120 の順で合計 608 px、最後の見出しの右端が 642 px）。バーの右端の文字は第五章の<strong>測定したキュー</strong>で、見出しに重ならなければ描かれます。
+      </div>
+      <table class="market-table">
+        <thead><tr><th>見出し</th><th>項目（日本語 / 英語）</th><th>アクセラータ</th><th>コマンド</th><th>何をする</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="7"><strong>ファイル (F)</strong><br>104 px</td><td>新規作成 (New)</td><td>Ctrl+N</td><td>101</td><td>セッションを空にして PAUSED にする。Rock を確認なしで当てる</td></tr>
+          <tr><td>開く (Open) ▶</td><td>Ctrl+O</td><td>102</td><td>サブメニュー（Session・Bells・Caterpillar・Rising・TRON Init）。<code class="code-inline">/SYS/orchestra.orch</code> を読む</td></tr>
+          <tr><td>上書き保存 (Save)</td><td>Ctrl+S</td><td>103</td><td>必ず <code class="code-inline">orchestra.orch</code> へ書く（第九章）</td></tr>
+          <tr><td>SMFを読み込む (Load SMF)</td><td>Ctrl+L</td><td>104</td><td><code class="code-inline">/SYS/orchestra.mid</code> を読む</td></tr>
+          <tr><td>SMFを書き出す (Save SMF)</td><td>Ctrl+M</td><td>105</td><td>type 1 を書く（一トラック = 一 MTrk）</td></tr>
+          <tr><td>WAVを書き出す (Export WAV)</td><td>—</td><td>106</td><td><code class="code-inline">/SYS/orchestra.wav</code> をオフラインレンダ。読み戻すものはない</td></tr>
+          <tr><td>閉じる (Close)</td><td>Ctrl+W</td><td>107</td><td>セッションを NULL へ導く</td></tr>
+          <tr><td rowspan="8"><strong>コンサート (C)</strong><br>120 px</td><td>再生 (Play)</td><td>Space</td><td>320</td><td>ボタンと同じ <code class="code-inline">orch_cmd_play</code>（7.3）</td></tr>
+          <tr><td>停止 (Stop)</td><td>—</td><td>321</td><td>二段階の停止（7.3）</td></tr>
+          <tr><td>録音 (Record)</td><td>Ctrl+R</td><td>322</td><td><code class="code-inline">rec</code> を反転（7.4）</td></tr>
+          <tr><td>パニック (Panic)</td><td>Ctrl+K</td><td>317</td><td>ボタンと同じ <code class="code-inline">orch_cmd_panic</code></td></tr>
+          <tr><td>クリック (Click)</td><td>—</td><td>323</td><td>ボタンと同じ反転（7.4）</td></tr>
+          <tr><td>ロック (Rock)</td><td>—</td><td>801</td><td>第八章のテンプレート適用（PLAYING 中は拒否）</td></tr>
+          <tr><td>クラシック (Classic)</td><td>—</td><td>802</td><td>テンプレート適用（8.2）</td></tr>
+          <tr><td>オーケストラ (Orchestra)</td><td>—</td><td>803</td><td>テンプレート適用（8.3）</td></tr>
+          <tr><td rowspan="2"><strong>シーン (S)</strong><br>88 px</td><td>送信 (Send)</td><td>—</td><td>318</td><td>active シーンの program[0..15] をチャンネル順にトラックへ写す（7.5）</td></tr>
+          <tr><td>オクターブ (Octave)</td><td>—</td><td>319</td><td>全トラックの transpose に +12、±36 で止める</td></tr>
+          <tr><td rowspan="6"><strong>トラック (T)</strong><br>104 px</td><td>追加 (Add)</td><td>Ctrl+T</td><td>201</td><td>64 トラック上限。超えたら拒否（7.7）</td></tr>
+          <tr><td>削除 (Delete)</td><td>Ctrl+D</td><td>205</td><td>PLAYING・トラック1枚・未選択は拒否。イベントは詰める</td></tr>
+          <tr><td>分割 (Split)</td><td>Ctrl+E</td><td>202</td><td>key split を 0..127 → 0..59 → 60..127 の三位置で回す</td></tr>
+          <tr><td>ベロシティ (Velocity)</td><td>—</td><td>208</td><td><code class="code-inline">vel_curve</code> を 0・1・2 で回す</td></tr>
+          <tr><td>チャンネル (Channel)</td><td>—</td><td>204</td><td>1..16 を循環。16 の次は 1 になり in_port を +1（mod 32）</td></tr>
+          <tr><td>リターン (AUX)</td><td>—</td><td>206</td><td>唯一の send を<strong>見るだけ</strong>。第二の aux は構造にない</td></tr>
+          <tr><td rowspan="7"><strong>装置 (D)</strong><br>72 px</td><td>バッファ (Buffer)</td><td>—</td><td>404</td><td>「Q 32 | host 1024」— 二つの定数。変更项ではない</td></tr>
+          <tr><td>DSP</td><td>—</td><td>405</td><td>「wcet &lt;µs&gt; T &lt;周期µs&gt;」を <code class="code-inline">gst_rt_wcet_us</code> と <code class="code-inline">gst_rt_period_us</code> から</td></tr>
+          <tr><td>診断 (Diag)</td><td>—</td><td>406</td><td>「elem &lt;n&gt;」と状態語</td></tr>
+          <tr><td>SMPTE</td><td>—</td><td>501</td><td><code class="code-inline">tc_format</code> を 24→25→29→30。MTC はどこへも出ない</td></tr>
+          <tr><td>クロック (Clock)</td><td>—</td><td>502</td><td>「t &lt;s&gt;.&lt;ms&gt; s」= <code class="code-inline">npos / f_s</code>。壁時計ではなくトランスポート位置</td></tr>
+          <tr><td>ポート (Port)</td><td>—</td><td>902</td><td>見つかった入力ポートの <code class="code-inline">message_count</code></td></tr>
+          <tr><td>遅延 (Latency)</td><td>—</td><td>903</td><td>キューを測り直し、状態行とバー右端に書く（第五章 5.4）</td></tr>
+          <tr><td rowspan="7"><strong>ウィンドウ (W)</strong><br>120 px</td><td>ステージ (Stage)</td><td>—</td><td>701</td><td rowspan="7">第七章 6.1 の七つの窓を順に開く。窓 id は「コマンド番号 − 701」。Help の見出しはない</td></tr>
+          <tr><td>アレンジ (Arrange)</td><td>—</td><td>702</td></tr>
+          <tr><td>ピアノ (Piano)</td><td>—</td><td>703</td></tr>
+          <tr><td>スコア (Score)</td><td>—</td><td>704</td></tr>
+          <tr><td>ミキサー (Mix)</td><td>—</td><td>705</td></tr>
+          <tr><td>インサート (Insert)</td><td>—</td><td>706</td></tr>
+          <tr><td>アバウト (About)</td><td>—</td><td>707</td></tr>
+        </tbody>
+      </table>
+      <div class="orch-ja">
+        十六のシーンはメニューに<strong>繰り返しません</strong>。 ステージの格子が呼ぶほうが短いからです。名前を項目として足す仕掛け（<code class="code-inline">orch_menu_scenes</code>）はコードに残っていますが、自分のガード（見出しの下に十六行以上必要）を通らず、最初の書き込みより前に戻ります — シーン見出しが置くのは二行だけなので、永遠に通しません。よってコマンド 301..316 はメニューの外です。同様に、MTC 送受信・RTP・FluidSynth・「バッファを 64 フレームにする」項目も入りません。<code class="code-inline">USB [OK] DIN-5 [OK] RTP [OK]</code> という文字は禁止です — orchestra はこれらのドライバを開きません。
+      </div>
+      <div class="orch-en">
+        <b>Why the bar holds what it holds.</b> The menu keeps the frequent actions — file, transport, track — so that a hand aiming at a track control does not have to aim at a small button first. Scene switching is deliberately <em>not</em> duplicated into a dropdown: sixteen scenes in a list would push a menu against its twenty-item ceiling and would hide the grid, which is the only place scenes are legible as a seating plan. That is risk four in chapter twelve resolved by layout rather than by raising a ceiling.
+      </div>
+      <div class="orch-en">
+        <b>Header widths are arithmetic, not taste.</b> Each width is 8 + the label + 8 in a 16-pixel kana/kanji grid, and the widget — not the desk — places headers at <code class="code-inline">previous right + 6</code> and draws a separator in the gap. Because the sum (608) and the last right edge (642) are fixed, the queue readout at the right of the bar has a provable overlap rule: it is drawn only past 662 px. On a 780-wide stage the measurement is visible; on a narrow window it is dropped rather than colliding with a header.
+      </div>
+
+      <h3 id="ch7-2">7.2 キー — バーが閉じているあいだの Orchestra</h3>
+      <div class="orch-ja">
+        キー操作の解釈はメニュー部品（<code class="code-inline">app_menu_handle_key</code>）が持ち、デスクの <code class="code-inline">orch_menu_key</code> が呼みます。バーが<strong>閉じている</strong>あいだは、Ctrl + 文字が「Ctrl+X」の欄と照合され、当たった項目を実行します。Alt + 見出しの頭字は その見出しを開き、同じ Alt を開いた見出しに当てると閉じます。F2 または Menu キーは見出しを循環。<strong>Space を Ctrl も Alt もなしで押すと、バーが閉じているときに限り PLAYING と PAUSED を揺すります</strong> — これはメニュー部品の規則ではなく Orchestra の決定です。
+      </div>
+      <div class="orch-ja">
+        ドロップダウンが開いているあいだは、Escape が閉じ、上下一の矢印が項目を選び、左右の矢印が見出しを移し、Return と Space が映っている項目を実行し、数字 1..9 は番号で項目を取ります。ほかのキーは開いたドロップダウンが吸い取ります。つまり「開いたメニューの中で Space は実行、閉じたデスクの上の Space は再生」という二重の意味が、どちら側でも意図どおりになります。
+      </div>
+      <div class="orch-en">
+        <b>One key, two owners.</b> Space is the only key whose meaning changes with the state of the bar, and the split is placed at the desk rather than in the widget so that the widget stays reusable. Every other accelerator is a table lookup in the accel field, which means an item without an accelerator (Export WAV, and every scene, window and template item) is unreachable by keyboard and is honestly listed above with "—" rather than given an invented binding.
+      </div>
+
+      <h3 id="ch7-3">7.3 トランスポート — Play、二段階 Stop、Panic</h3>
+      <div class="orch-ja">
+        <div class="orch-ascii">        boot(48000)
+            |
+            v
+         READY ---- Play ----> PLAYING
+            ^                    |
+            |                    | Stop (1st) : PAUSED, N kept,
+            |                    |              live notes closed
+            |                    v
+            +----------------- PAUSED
+                                 |
+                        Stop (2nd): N = 0, shim clocks zeroed,
+                                    new home generation
+        Panic: 48 slots silenced (empty and click slots skipped),
+               state / scene / rec / event pool untouched.</div>
+        <p class="orch-fig">図7-3 トランスポートの状態。locate（位置指定ジャンプ）は無く、Second Stop が唯一の「最初に戻る」です。</p>
+      </div>
+      <div class="orch-ja">
+        Play は第五章の admission を呼ぶだけ（<code class="code-inline">gst_rt_set_state(PLAYING)</code>）で、現在の N から続けます。最初のブロックは、鳴り続けている音を第5・第9章のアーミング枝で<strong>残り長さで</strong>なり直します。Stop の第一段階は PAUSED へ入り、その遷移のなかで録音リングを流し切り、<code class="code-inline">ev_live = 1</code> の各行を snap(tick(N)) で閉じ、四十八のスロットを解き、リングを空にします。N は保持されます。第二段階は零へ戻ります — <code class="code-inline">npos = 0</code>、シムの時計も 0、内部の位相記憶も クリア、新しい home 生成番号。
+      </div>
+      <div class="orch-ja">
+        <strong>テンポ・分子・分母は PLAYING 中は書けません。</strong>ボタンからもメニューからも同じ <code class="code-inline">refuse_tempo</code> になり、カウンタが 1 増えて状態行が "tempo" になるだけで、値は動きません。理屈は式3です — 走った小節の途中で sample(tick) の対応が変われば、同じ N が二つの位置を持ちます。シーン切り替えはもっと静かで、PLAYING 中はテンポ・分子・分母を<strong>拒否ではなく無視</strong>します（カウンタなし）。ゲインとプログラムは動きます。テンプレート適用もテンポを書くので、PLAYING 中は拒否です（第八章）。
+      </div>
+      <div class="orch-en">
+        <b>Two stops because pause and rewind are different promises.</b> The first stop must end sounding notes without losing the place — a performer pausing a passage returns to the same bar. The second must make the desk stateless again: position zero, shim phase memory cleared, and a fresh generation number so that a late block from the previous run cannot be mistaken for the next one. Collapsing the two into one button would either throw away the position or leave a half-reset clock, which is risk ten in chapter twelve.
+      </div>
+      <div class="orch-en">
+        <b>Panic is not stop.</b> Panic silences voices — it walks the 48 slots, skips empty ones and the metronome slot, and writes the rest to silence. It does not change state, scene, record arming or the event pool, so Panic during PLAYING leaves the transport running against a quiet pool. That asymmetry is the point: Panic answers "make it silent now", and only Stop answers "end the passage".
+      </div>
+
+      <h3 id="ch7-4">7.4 録音とクリック</h3>
+      <div class="orch-ja">
+        Record は <code class="code-inline">OrchView.rec</code> の 0/1 で、<strong>どの状態でも</strong>反転できます。 武装して PLAYING になると、選択トラック（<code class="code-inline">OrchView.selected</code>）へ来た MIDI が 64 行の録音リングに積まれ、<code class="code-inline">ring_apply</code> が同じブロックでイベントプールへ写します。オーディオ録音ではなく、punch-in でもありません。書き込みは必ず <code class="code-inline">snap(tick(N))</code> に丸められ、長押しの行は <code class="code-inline">pick_dur</code> をすぐ得ます（shot 行では note-off が何も閉じない）。
+      </div>
+      <div class="orch-ja">
+        <strong>正直に書いておくこと：</strong>このビルドでは <code class="code-inline">orchestra_dispatch_midi_event</code> の呼出元がありません。つまり 7.4 が記述するのは「配線が通ったときの規則」で、実機で鍵盤を叩いても今は録音されません（第十二章 12.1）。リングが満杯なら <code class="code-inline">chain_accept</code> と <code class="code-inline">chain_drop</code> が増え、プールが 4096 に達then <code class="code-inline">refuse_note_cap</code> が増えます — 音はなって、行は足されない、という食い違いがカウンタに現れます。
+      </div>
+      <div class="orch-ja">
+        Click は <code class="code-inline">OrchView.click</code> で、エンジン内では latch で写る <code class="code-inline">s_lclick</code> です。PLAYING かつ click = 1 のあいだ、閉じたハイハット系シム（key 42、ゲイン <code class="code-inline">gain_of(0, 90)</code>、長さ 0.055 秒）が<strong>一つだけ</strong>鳴ります。新しいスロットは取らず、既に click = 1 のスロットを使い回します。鳴る条件は tick(N) が ticks_per_beat で割れるところで、追い付きは 1 ブロック 4 回まで。チック 0 は小節 0 の拍 0 です。mute と solo は及ばず、固定 0.7071 を両チャンネルへ、トラックのフェーダを通さずに足します（bus 65）。
+      </div>
+      <div class="orch-en">
+        <b>The click is a bus, not a ninth track.</b> Reserving a slot with the click flag and summing bus 65 at a fixed gain means the metronome cannot be stolen, cannot be muted by a track, and cannot appear in the exported session as music. Four catch-up clicks per block is the same bounded-catch-up rule as chapter five's pacer applied to a musically visible event: after a stall the desk resumes in time rather than firing a burst.
+      </div>
+
+      <h3 id="ch7-5">7.5 シーン — 十六個の音量とプログラムのスナップショット</h3>
+      <div class="orch-ja">
+        シーン格子はステージに八つずつ二行で並び、セルは 0..15。<code class="code-inline">orch_cmd_scene</code> が唯一の切替で、メニュー（318/319 の Send・Octave）も格子のボタン行も同じ関数を呼みます。0..15 を外れれば拒否（カウンタなし）。seqlock の下で active_scene を置き、PLAYING で<strong>なければ</strong>そのシーンのテンポ・分子・分母を、それぞれの検査（40..240、1..12、2/4/8/16）を通した上で採用します。そのあと常に、そのシーンの volume[ch] を同じチャンネルのトラックへ、program[ch] を同じくトラックへ写します（<code class="code-inline">push_volumes</code>、<code class="code-inline">push_programs</code>）。255 は「変えない」、未知の番号は <code class="code-inline">refuse_program</code> を増やしてトラックを残します。PLAYING では音量とプログラムだけが動き、次のブロックから聞こえます。
+      </div>
+      <div class="orch-ja">
+        すでに鳴っている音は<strong>消えず、別のシムへ乗り換えません</strong>。スロットはトラックとキーを持つが、プログラムは持ちません。インサート、P1〜P4、lighting は触りません。Octave（319）は全トラックの transpose に +12 して −36..+36 で止め、セッション全体に効きます。
+      </div>
+      <div class="orch-en">
+        <b>A scene is a snapshot of two arrays, not a version of the score.</b> Sixteen scenes carry per-channel volume and per-channel program — nothing else — which is why a scene change is cheap enough to be a stage grid and safe enough to be allowed during PLAYING. There is no separate scene manager product, and there is no marker object: what a conventional DAW would mark, this desk expresses as a loudness and program preset. The 255 sentinel exists because 0 would mean piano, and "leave this channel alone" has to be a third value distinct from both.
+      </div>
+
+      <h3 id="ch7-6">7.6 編集 — 三つの道具、四つのグリッド、Undo 十六</h3>
+      <div class="orch-ja">
+        道具は Select・Pencil・Erase（0・1・2）で、アレンジ・ピアノ・スコアの三窓が同じ欄を読みます。表示は MIN なら「S / P / E」、それ以外なら「Sel / Pen / Era」。snap は Bar・Beat・1/8・1/16（0..3）を循環し、式2がその量子です。三つの窓にそれぞれ四つのラベルのコピー（<code class="code-inline">snap_name</code>）があることは第十二章の既知のリスクです。
+      </div>
+      <div class="orch-ja">
+        Undo は UI 面だけの静的なリングで、容量は 16、動的確保はありません。行は <code class="code-inline">UndoSlot</code>（kind、track、index、n、mode、before[48]）で、種は四つ — イベント 16 バイト、名前 48 バイト、トラックの u8 欄 1 バイト、インサート（id 二つと i16 八つ）18 バイト。mode は上書き・削除・挿入の三形で、リングが満杯なら最古を置き換えます。<code class="code-inline">orch_undo_apply</code> は<strong>最新の一件だけを</strong>戻します — redo は無い。適用中は <code class="code-inline">s_in_undo</code> を立てて、戻した値が新しい行としてリングに押し返されるのを防ぎます。
+      </div>
+      <div class="orch-ja">
+        ペンとゴムは PLAYING 中は書けません（<code class="code-inline">orch_event_put</code> / <code class="code-inline">_del</code> が "note" を保持して 0 を返す）。vel = 0 は新しい行にならない。イベントが 4096 枠に収まらなければ <code class="code-inline">refuse_note_cap</code>。長さが snap 量子より短ければ <code class="code-inline">put</code> が引き上げます。削除はプールを詰めて <code class="code-inline">event_count</code> を前に戻します。トラック欄（vol・pan・send・program）は <code class="code-inline">field_ok</code>（0/1 または 0..127）を通り、同じ <code class="code-inline">orch_track_set_u8</code> から書かれ、成功時に前の値が undo へ入ります。
+      </div>
+      <div class="orch-en">
+        <b>Sixteen undo slots and no redo is a size decision, not a missing feature.</b> The ring is static because chapter five forbids allocation on the hot path, and it is shallow because a slot has to hold whatever it might restore — up to a 48-byte track name. Sixteen is the point where the ring stays inside a page of memory while still covering the realistic mistake ("that last phrase of notes", "the wrong program on three tracks"). Redo was dropped for the same reason the desk has no clip list: it would require the ring to be a stack with a cursor, and a cursor is a second truth about what the session currently is.
+      </div>
+
+      <h3 id="ch7-7">7.7 拒否とカウンタ — 断られたら何が動くか</h3>
+      <div class="orch-ja">
+        Orchestra は失敗を黙って飲み込まない代わりに、例外も出しません。断られた操作は (a) 値を変えなくし、(b) 状態行をその語に置き換え、(c) 多くはカウンタを 1 増やします。直後の成功操作は <code class="code-inline">orch_status_ok</code> で旗を降ろし、次の UI 一周が idle 行を作り直します。
+        <table class="market-table">
+          <thead><tr><th>操作</th><th>断られる条件</th><th>カウンタ</th><th>状態行の語</th></tr></thead>
+          <tbody>
+            <tr><td>Play</td><td>状態が READY/PAUSED でない、装置が未準備、WCET &gt; T</td><td>—</td><td>play</td></tr>
+            <tr><td>セッション読込／書出</td><td>長さが 73408 でない、検証器の一つでも落ちた、PLAYING 中</td><td>refuse_session</td><td>session</td></tr>
+            <tr><td>SMF 読込／書出</td><td>PLAYING 中、256 KiB 超、検証失敗、プールが溢れる</td><td>refuse_smf</td><td>smf</td></tr>
+            <tr><td>WAV 書出</td><td>PAUSED でない、パスが一致しない（fopen より前）</td><td>—</td><td>wav</td></tr>
+            <tr><td>テンポ／分子／分母</td><td>PLAYING 中</td><td>refuse_tempo</td><td>tempo</td></tr>
+            <tr><td>テンプレート適用</td><td>PLAYING 中（テンポを書くため）</td><td>refuse_tempo</td><td>tempo</td></tr>
+            <tr><td>プログラム設定（Send・トラック・SMF読込）</td><td>32の登録外の数</td><td>refuse_program</td><td>program</td></tr>
+            <tr><td>インサートの循環／マスター</td><td>マスターが LIMITER・BYPASS 以外、同一アルゴリズムの枠が 8 を超える</td><td>refuse_insert</td><td>insert</td></tr>
+            <tr><td>ペン・ゴム・イベント書込</td><td>PLAYING 中、vel = 0、プール 4096</td><td>refuse_note_cap（溢れたとき）</td><td>note</td></tr>
+            <tr><td>トラック追加／削除</td><td>64 を超える、PLAYING 中、1枚だけ、未選択</td><td>—（旗のみ）</td><td>track</td></tr>
+            <tr><td>要素の生成</td><td>登録外の名前（fluidsynth など）</td><td>refuse_factory</td><td>elem</td></tr>
+            <tr><td>装置 open の失敗</td><td>virtio が負を返した</td><td>—（driver が行を出す）</td><td>virtio</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">数える欄は全部で十五（drop_audio、steal_voice、refuse_smf、refuse_session、refuse_program、refuse_insert、refuse_note_cap、refuse_factory、refuse_tempo、midi_clock、qos_drops、chain_accept、chain_deliver、chain_drop、chain_refuse）。状態行に出るのはそのうち drop・steal・smf の三つで、残りは同じ領域から読み取れます。<code class="code-inline">qos_drops</code> はこのビルドでは動きません（遅延試験の旗が立つ経路なく、リセットされるだけ）。</p>
+      </div>
+      <div class="orch-en">
+        <b>Refusal is a value-free answer.</b> Every rejection leaves memory untouched and prints one word, so a reader of the status line knows which rule fired without a dialog box — and the invariant G3 of chapter five (accepted = delivered + DROP + REFUSE) still adds up, because the refused action never entered the pool in the first place. Two operations refuse without a counter (track add/delete, Play) because their ceiling is visible in the desk itself: the track list and the state word.
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 8 — THE THREE TEMPLATES                               -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch8">
+      <h2>第8章 三つのテンプレート (Three Templates)</h2>
+      <div class="orch-uses">前提: 第三章のプログラムと poly_max、第四章のインサートとホール、第七章 7.3 の拒否と 7.5 のシーン。テンプレートは第七章の語だけで説明できます。</div>
+
+      <h3 id="ch8-0">8.0 テンプレートとは何か</h3>
+      <div class="orch-ja">
+        テンプレートは<strong>ミキサの雛形であって、楽譜ではありません</strong>。三つの表（<code class="code-inline">ROCK_ROW</code>・<code class="code-inline">CLASSIC_ROW</code>・<code class="code-inline">ORCH_ROW</code>）と二つの音量表（<code class="code-inline">ROCK_VOL</code>・<code class="code-inline">CLASSIC_VOL</code>）はファイルではなくコードに置かれています。適用するとトラックとシーンが置き換わり、テンポ・拍・ホールが定まり、イベントとインサートの値線は<strong>ゼロになります</strong>。<code class="code-inline">apply_fam</code> は seqlock の中で <code class="code-inline">blank_music</code> → 表の読み込み → <code class="code-inline">family_fields</code> を行い、seq の外で <code class="code-inline">wa_set_reverb</code>・<code class="code-inline">lc_insert_reset</code>・<code class="code-inline">gst_rt_return_zero</code>・<code class="code-inline">gst_insert_touch</code> を呼ぶ。トラックの無いチャンネルは program 255・volume 0 です。
+      </div>
+      <div class="orch-ja">
+        三つに共通して <code class="code-inline">family_fields</code> が置く値は、master_lim = LIMITER、master_vol = 100、click オフ、拍 4/4、selected = 0、confirm_family = −1。テンポとホールは表から：<strong>Rock 128 / 40・40・30・25</strong>、<strong>Classic 84 / 75・35・55・45</strong>、<strong>Orchestra 96 / 85・40・60・40</strong>（room・damping・feedback・wet の順）。クリックはシーン音量に入りません（bus 65 の専用加算、7.4）。lighting は三つとも空（埋める関数が memset から始める）。accent は Rock と Classic の表にあり、Orchestra の表はゼロ。<strong>どのテンプレートも REVERB を置きません</strong> — send は同じ一つのホールへ行くからです（第四章 4.3）。
+      </div>
+      <div class="orch-ja">
+        <strong>確認の流れ。</strong>空でないセッションで一度目を押すと <code class="code-inline">confirm_family</code> だけを置いて<strong>何も変えません</strong>（ステージの FAMILY ボタンに "?" が付くのはこの状態）。同じ family を二度目いて適用します。セッションが空（track_count と event_count が 0）なら即適用 — <code class="code-inline">orch_cmd_new</code> が確認なしで ROCK を置くのも、起動直後の <code class="code-inline">orch_boot_desk</code> が同じことをするのもこの条です。PLAYING 中の要求は 7.7 の refuse_tempo。
+      </div>
+      <div class="orch-en">
+        <b>Why a template needs a second press.</b> Applying a template destroys every event in the session, and the undo ring of 7.6 does not cover it — the ring records individual field writes, not a wholesale replacement. So the destructive half is gated by an explicit confirmation held in the session struct, which also survives a window switch, and the label that reads "?" tells the operator which press was just spent. On an empty session the gate is lifted because there is nothing left to destroy.
+      </div>
+
+      <h3 id="ch8-1">8.1 Rock — 八トラック、全トラック単声</h3>
+      <div class="orch-ja">
+        128 BPM、4/4、トラック八、チャンネル 1..8。クリックは九枚目のトラックではありません。<code class="code-inline">poly_max</code> は全トラック 1 — family ROCK が <code class="code-inline">gst_resolve_track</code> の中で声の上限を 1 に落とすため、六声を許すプログラム 0 でも 1 声です。ホール 40・40・30・25。
+        <table class="market-table">
+          <thead><tr><th>#</th><th>トラック</th><th>ch</th><th>pr</th><th>vol</th><th>pan</th><th>snd</th><th>ins0</th><th>ins1</th><th>色</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Kick</td><td>1</td><td>116</td><td>110</td><td>64</td><td>16</td><td>GATE</td><td>EQ</td><td>RED</td></tr>
+            <tr><td>2</td><td>Snare</td><td>2</td><td>117</td><td>104</td><td>64</td><td>20</td><td>GATE</td><td>EQ</td><td>AMBER</td></tr>
+            <tr><td>3</td><td>Hat</td><td>3</td><td>118</td><td>90</td><td>80</td><td>24</td><td>GATE</td><td>EQ</td><td>SILVER</td></tr>
+            <tr><td>4</td><td>Bass</td><td>4</td><td>33</td><td>108</td><td>64</td><td>20</td><td>SATURATOR</td><td>EQ</td><td>ORANGE</td></tr>
+            <tr><td>5</td><td>Guitar</td><td>5</td><td>26</td><td>100</td><td>40</td><td>48</td><td>SATURATOR</td><td>DELAY</td><td>PURPLE</td></tr>
+            <tr><td>6</td><td>Keys</td><td>6</td><td>4</td><td>96</td><td>84</td><td>56</td><td>EQ</td><td>CHORUS</td><td>CYAN</td></tr>
+            <tr><td>7</td><td>Lead</td><td>7</td><td>81</td><td>104</td><td>70</td><td>40</td><td>SATURATOR</td><td>DELAY</td><td>GREEN</td></tr>
+            <tr><td>8</td><td>Voice</td><td>8</td><td>52</td><td>100</td><td>64</td><td>64</td><td>EQ</td><td>GATE</td><td>PINK</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">色の接頭辞は <code class="code-inline">ORCH_COL_</code>。インサートの値：GATE ドラム = しきい 8（= 0.08）・tau 30 ms・hold 20 ms。EQ kick LP 120 Hz Q 0.7 / snare BP 2400 Q 2 / hat HP 7000 Q 0.7（hat と bass の p[] にテンプレートが書く<strong>ただ一つの</strong>値）。SATURATOR bass・guitar・lead = k 25。EQ bass LP 800 Q 0.7。DELAY guitar・lead = k 3（十六分三つ分）・feedback 35・wet 30。EQ keys peak 800 Hz Q 1.0 +2 dB。CHORUS keys d0 18 ms・depth 4 ms・0.4 Hz・mix 25。EQ voice BP 1200 Q 4.0。GATE voice しきい 6・tau 40 ms・hold 30 ms。シムの本体は書き換えません。</p>
+      </div>
+      <div class="orch-ja">
+        <strong>チャンネル 1..8 のシーン音量</strong>（各シーンのテンポ 128、拍 4/4。チャンネル 9..16 の program は 255 で volume 0 — 埋める関数が最初の八枠だけを書くため）。
+        <table class="market-table">
+          <thead><tr><th>シーン</th><th>Kick</th><th>Snare</th><th>Hat</th><th>Bass</th><th>Guitar</th><th>Keys</th><th>Lead</th><th>Voice</th></tr></thead>
+          <tbody>
+            <tr><td>1 Count</td><td>100</td><td>96</td><td>84</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+            <tr><td>2 Verse</td><td>110</td><td>104</td><td>90</td><td>108</td><td>100</td><td>96</td><td>96</td><td>100</td></tr>
+            <tr><td>3 Chorus</td><td>114</td><td>110</td><td>96</td><td>112</td><td>108</td><td>100</td><td>110</td><td>108</td></tr>
+            <tr><td>4 Solo</td><td>100</td><td>96</td><td>80</td><td>104</td><td>112</td><td>90</td><td>120</td><td>70</td></tr>
+            <tr><td>5 Bridge</td><td>90</td><td>84</td><td>70</td><td>96</td><td>80</td><td>108</td><td>90</td><td>112</td></tr>
+            <tr><td>6 Break</td><td>108</td><td>100</td><td>0</td><td>112</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+            <tr><td>7 Outro</td><td>100</td><td>96</td><td>84</td><td>100</td><td>96</td><td>90</td><td>90</td><td>96</td></tr>
+            <tr><td>8 End</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">シーン 9..16 は名前「—」で音量は End と同じ。クリックを付けていれば End でもクリックは鳴り続けます — 静寂はトラックの話です。</p>
+      </div>
+      <div class="orch-en">
+        <b>Monophony is the Rock template's one strictness.</b> Forcing poly_max to 1 across the family means a rock desk cannot accumulate a dozen overlapping guitar tails; each new note takes the track's single voice, and the steal counter of chapter three makes that audible as a count rather than as a leak. The drum gates (8 / 6 threshold, 20–40 ms release) are the reason a kit reads as separate hits through one hall.
+      </div>
+
+      <h3 id="ch8-2">8.2 Classic — 六トラック、声はピアノだけ六つ</h3>
+      <div class="orch-ja">
+        84 BPM、4/4、トラック六。send は全トラック 80。SATURATOR は置きません。ホール 75・35・55・45。<code class="code-inline">poly_max</code> はピアノ 6、ほかは 1。
+        <table class="market-table">
+          <thead><tr><th>#</th><th>トラック</th><th>ch</th><th>pr</th><th>vol</th><th>pan</th><th>ins0</th><th>ins1</th><th>色</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Voice</td><td>1</td><td>52</td><td>96</td><td>64</td><td>EQ</td><td>GATE</td><td>PINK</td></tr>
+            <tr><td>2</td><td>Piano</td><td>2</td><td>0</td><td>100</td><td>64</td><td>EQ</td><td>CHORUS</td><td>AMBER</td></tr>
+            <tr><td>3</td><td>Flute</td><td>3</td><td>73</td><td>90</td><td>40</td><td>EQ</td><td>BYPASS</td><td>CYAN</td></tr>
+            <tr><td>4</td><td>Violin</td><td>4</td><td>40</td><td>96</td><td>88</td><td>EQ</td><td>BYPASS</td><td>PURPLE</td></tr>
+            <tr><td>5</td><td>Cello</td><td>5</td><td>42</td><td>96</td><td>72</td><td>EQ</td><td>BYPASS</td><td>GREEN</td></tr>
+            <tr><td>6</td><td>Continuo</td><td>6</td><td>38</td><td>88</td><td>64</td><td>EQ</td><td>BYPASS</td><td>ORANGE</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">EQ voice BP 1200 Q 4 / GATE voice しきい 5・tau 50 ms・hold 40 ms / EQ piano peak 400 Q 0.7 +2 dB / CHORUS piano d0 12 ms・depth 2 ms・0.2 Hz・mix 15 / EQ flute BP 2000 Q 5 / EQ violin peak 520 Q 2.2 +3 dB / EQ cello LP 520 Q 2.2 / EQ continuo LP 200 Q 0.7。</p>
+        <table class="market-table">
+          <thead><tr><th>シーン</th><th>Voice</th><th>Piano</th><th>Flute</th><th>Vln</th><th>Vc</th><th>Cont</th></tr></thead>
+          <tbody>
+            <tr><td>1 Aria</td><td>104</td><td>90</td><td>80</td><td>70</td><td>80</td><td>84</td></tr>
+            <tr><td>2 Verse</td><td>96</td><td>100</td><td>90</td><td>96</td><td>96</td><td>88</td></tr>
+            <tr><td>3 Chorus</td><td>108</td><td>104</td><td>96</td><td>104</td><td>100</td><td>92</td></tr>
+            <tr><td>4 Cadenza</td><td>0</td><td>112</td><td>0</td><td>100</td><td>0</td><td>0</td></tr>
+            <tr><td>5 Recit</td><td>110</td><td>70</td><td>0</td><td>0</td><td>0</td><td>80</td></tr>
+            <tr><td>6 End</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">シーン 7..16 は「—」で End と同じ。</p>
+      </div>
+      <div class="orch-en">
+        <b>Continuo is the honest compromise.</b> A baroque continuo is a realised keyboard over a bass line, and this desk has one program-38 voice and one chordal bus for it. The Cadenza scene — piano and violin only, everything else silent — exists to show what a scene array is for: it is a loudness preset that can leave a soloist standing, not a mute switch.
+      </div>
+
+      <h3 id="ch8-3">8.3 Orchestra — 十六のモノフォニック席</h3>
+      <div class="orch-ja">
+        96 BPM、4/4、トラック十六、send 64。SATURATOR は置きません。インサートは EQ と BYPASS の二種だけ。ホール 85・40・60・40。チャンネル 10 は打楽器ではなく<strong>ホルン</strong>（プログラム 60）。典型的なトラック音量は 64、すなわち式7で G_trk = 0.2665。転調はプログラム側で入れます（Vla −7、Cb −12）。
+        <table class="market-table">
+          <thead><tr><th>#</th><th>席</th><th>ch</th><th>pr</th><th>pan</th><th>EQ</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Vl1</td><td>1</td><td>40</td><td>40</td><td>peak 520, Q 2.2, +3 dB</td></tr>
+            <tr><td>2</td><td>Vl2</td><td>2</td><td>40</td><td>88</td><td>same; solo = 0</td></tr>
+            <tr><td>3</td><td>Vla</td><td>3</td><td>41</td><td>56</td><td>same; transpose −7 from the program</td></tr>
+            <tr><td>4</td><td>Vc</td><td>4</td><td>42</td><td>72</td><td>LP 520, Q 2.2</td></tr>
+            <tr><td>5</td><td>Cb</td><td>5</td><td>43</td><td>48</td><td>LP 400, Q 2.2; transpose −12</td></tr>
+            <tr><td>6</td><td>Fl</td><td>6</td><td>73</td><td>36</td><td>BP 2000, Q 5</td></tr>
+            <tr><td>7</td><td>Ob</td><td>7</td><td>68</td><td>48</td><td>BP 1800, Q 8</td></tr>
+            <tr><td>8</td><td>Cl</td><td>8</td><td>71</td><td>80</td><td>BP 1500, Q 5</td></tr>
+            <tr><td>9</td><td>Bsn</td><td>9</td><td>70</td><td>96</td><td>LP 900, Q 1.5</td></tr>
+            <tr><td>10</td><td>Hn</td><td>10</td><td>60</td><td>44</td><td>LP 800, Q 2</td></tr>
+            <tr><td>11</td><td>Tpt</td><td>11</td><td>56</td><td>64</td><td>LP 1800, Q 2</td></tr>
+            <tr><td>12</td><td>Tbn</td><td>12</td><td>57</td><td>84</td><td>LP 900, Q 2</td></tr>
+            <tr><td>13</td><td>Tba</td><td>13</td><td>58</td><td>104</td><td>LP 400, Q 1.5</td></tr>
+            <tr><td>14</td><td>Timp</td><td>14</td><td>47</td><td>64</td><td>LP 260, Q 0.7</td></tr>
+            <tr><td>15</td><td>Hp</td><td>15</td><td>46</td><td>32</td><td>HP 80, Q 0.7</td></tr>
+            <tr><td>16</td><td>Perc</td><td>16</td><td>112</td><td>96</td><td>HP 2000, Q 0.7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="orch-ja">
+        シーンはこの表で<strong>誰が音量を保つか</strong>を決めます（残りは 0）。この配席にはトラックの無いチャンネルが存在しないので、255 の規則はほかの二つの family の話として残ります。
+        <table class="market-table">
+          <thead><tr><th>シーン</th><th>意味</th></tr></thead>
+          <tbody>
+            <tr><td>1 Tutti</td><td>十六すべてが 64 を保つ</td></tr>
+            <tr><td>2 Strings</td><td>Vl1 Vl2 Vla Vc Cb が 64</td></tr>
+            <tr><td>3 Winds</td><td>Fl Ob Cl Bsn が 64</td></tr>
+            <tr><td>4 Brass</td><td>Hn Tpt Tbn Tba が 64</td></tr>
+            <tr><td>5 Solo</td><td>Vl1 だけ 64 — 音量の話で、solo 旗ではない</td></tr>
+            <tr><td>6 Piano</td><td>Hp だけ 64 — 配席にピアノ枠は無い</td></tr>
+            <tr><td>7 Silence</td><td>誰も保たない。全員 0</td></tr>
+            <tr><td>8 Bow</td><td>弦五が 40（G_trk = 0.1965）、ほかは 0（ハープを含む）</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">シーン 9..16 は「—」で Silence と同じ。</p>
+      </div>
+      <div class="orch-en">
+        <b>Sixteen monophonic seats, not sixteen instruments.</b> The philharmonic template is written as a seating plan because each voice is one hand-written procedure with one budget line; a sixteenth seat that could play chords would change the WCET of chapter five, which is quoted at sixteen voices for exactly this reason. The name "Solo" is therefore a level preset, not a flag — and the manual says so, because a reader who expects a flag will reach for the mixer's solo control instead and get a different result.
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 9 — FILES AND EXCHANGE                                -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch9">
+      <h2>第9章 ファイルと交換 (Files and Exchange)</h2>
+      <div class="orch-uses">前提: 第2章のチック（式3・式4）と検証の語、第3章のプログラム登録、第4章のインサートとホール、第7章 7.7 の拒否とカウンタ。セッションファイルは第四章までの全欄を並べたもの、SMF はその欄の別符号、WAV はその音です。</div>
+
+      <h3 id="ch9-1">9.1 セッションファイル — 73408 バイトの四つの面</h3>
+      <div class="orch-ja">
+        マジックは <code class="code-inline">ORCH</code>、版は 1、little-endian、ポインタなし。書き込みは<strong>欄ごとに</strong>行い、構造体を <code class="code-inline">fwrite</code> しません（コンテナの整列は規範ではないため）。静的な <code class="code-inline">s_file</code> はちょうど <code class="code-inline">ORCH_FILE_BYTES</code> を持つので、長さは読む前に確かめられます — <code class="code-inline">read_orch</code> は stat し、73408 でなければ読みません。PLAYING 中の読み書きも断られます（止まった状態のみ）。断れば <code class="code-inline">refuse_session</code> が増え、状態行が "session" になり、<strong>メモリの中のセッションはそのまま</strong>です（<code class="code-inline">accept_buf</code> が四つの検証を通してから <code class="code-inline">commit_buf</code> を呼ぶ順番）。
+        <div class="orch-formula">  式22  128 + 64×96 + 16×100 + 4096×16
+      = 128 + 6144 + 1600 + 65536 = 73408 バイト</div>
+      </div>
+      <div class="orch-ja">
+        <strong>ヘッダ 128 バイト</strong>
+        <div class="orch-formula">  0    4     O R C H
+  4    u16   version = 1
+  6    u16   tempo            （40..240）
+  8    u32   sample_rate      （44100 か 48000）
+ 12    u8    num              （1..12）
+ 13    u8    den              （2・4・8・16）
+ 14    u8    family           （0..2）
+ 15    u8    click            （0..1）
+ 16    u8    active_scene     （0..15）
+ 17    u8    track_count      （0..64）
+ 18    u8    scene_count      = 16 固定
+ 19    u8    master_vol       （0..127）
+ 20    u8    master_lim       （BYPASS か LIMITER）
+ 21    u8    tc_format        （ファイルへ書く。トランスポートは読まない）
+ 22    u8    tool             （0..2）
+ 23    u8    snap             （0..3）
+ 24    u32   event_count      （0..4096）
+ 28    u8    room             ┐
+ 29    u8    damping          │ 0..100 — ホール四つ
+ 30    u8    feedback         │
+ 31    u8    wet              ┘
+ 32    96    path             = /SYS/orchestra.orch</div>
+      </div>
+      <div class="orch-ja">
+        <strong>トラック 96 バイト × 64</strong>（track_count が小さくても 64 枠書き、残りはゼロ）。
+        <div class="orch-formula">  0    48     name
+ 48    u8     channel        （1..16）
+ 49    u8     in_port        （0..31）
+ 50    u8     out_port
+ 51    u8     key_lo         （0..127、key_hi 以下）
+ 52    u8     key_hi
+ 53    i8     transpose
+ 54    u8     vel_curve      （0..2）
+ 55    u8     muted          （0..1）
+ 56    u8     solo           （0..1）
+ 57    u8     volume         （0..127）
+ 58    u8     pan            （0..127）
+ 59    u8     send           （0..127）
+ 60    u8     program        （32の登録内）
+ 61    u8     ins0           ┐ ORCH_INS_BYPASS..ORCH_INS_LIMITER
+ 62    u8     ins1           ┘
+ 63    u8     clef
+ 64    i16×4  p0             （インサート0の四つ）
+ 72    i16×4  p1             （インサート1の四つ）
+ 80    u32    accent         （ORCH_COL_* の一色）
+ 84    u8     poly_max
+ 85    11     ゼロ</div>
+        <strong>シーン 100 バイト × 16</strong> と <strong>イベント 16 バイト × 4096</strong>。
+        <div class="orch-formula">  シーン                                        イベント
+  0    32   name                          0    u8  track   （< track_count）
+ 32    u16  tempo                         1    u8  key     （0..127）
+ 34    u8   num                           2    u8  vel     （0 は空）
+ 35    u8   den                           3    u8  flags   （版1は常に 0）
+ 36    16   program （255 または登録内）    4    u32 start_tick
+ 52    16   volume  （0..127）              8    u32 dur_tick
+ 68    32   lighting                       12   u32 reserved = 0</div>
+      </div>
+      <div class="orch-ja">
+        検証は五つの関数に分かれます。<code class="code-inline">hdr_ok</code> が上の範囲（scene_count は 16 ちょうど、パスは一字一句）。<code class="code-inline">tracks_ok</code> と <code class="code-inline">one_track_ok</code> が六十四枠すべて（track_count のうしろはゼロだけ）。<code class="code-inline">type_over</code> が同一アルゴリズム八枠の天井（第四章）。<code class="code-inline">scenes_ok</code> が十六シーンの範囲。<code class="code-inline">events_ok</code> が event_count 以下の行（vel 非ゼロ、flags 0、track <code class="code-inline">&lt;</code> track_count、reserved 0）と残りのゼロ。<code class="code-inline">ev_live</code> はこの十六バイトの外です — 版1の flags はゼロでなければならないので、ライヴの旗はファイルに載りません。デスクで置いた行の長さは snap 量子未満なら引き上げられて載ります（7.6）。
+      </div>
+      <div class="orch-ja">
+        ホールの四つ（room・damping・feedback・wet）は<strong>もともと reserved だった四バイト</strong>をもらった欄です。REVERB インサートはトラックの send と 28・29・31 番地を P1〜P3 から書き、30 番地（feedback）は<strong>テンプレートと読み込みしか書きません</strong>。<code class="code-inline">commit_buf</code> は seqlock の中で欄を埋め、外で <code class="code-inline">wa_set_reverb(1,…)</code>・<code class="code-inline">lc_insert_reset()</code>・<code class="code-inline">gst_rt_return_zero()</code>・<code class="code-inline">gst_insert_touch()</code> を呼ぶ。トラックから導かれる値（shim、prog_tr、kind、oneshot）は <code class="code-inline">gst_resolve_track</code> が program から作り直します。読み込みは UI 面だけ — レンダはファイルを読みません。<code class="code-inline">/SYS</code> が無いホストビルドでは <code class="code-inline">SYS/</code> を読みます（開くメニューのサブ項目は Session・Bells・Caterpillar・Rising・TRON Init）。
+      </div>
+      <div class="orch-en">
+        <b>The length is the first validator.</b> A fixed 73408-byte container means a hostile or truncated file is rejected by <code class="code-inline">stat</code> before one body byte is read, and the static buffer cannot be resized to whatever a field claims. Every ceiling the file carries (64 tracks, 16 scenes, 4096 events, eight slots per algorithm) is a ceiling the running desk already has, so the validator is a restatement rather than a second policy — and because the restatement is generated from the same enum ranges, a new insert type cannot be written to disk before it can be played.
+      </div>
+      <div class="orch-en">
+        <b>Why no pointers and no structure image.</b> The file is a serialization of a POD desk snapshot, not a memory dump. Compiler alignment is not normative, so writing the struct would make the byte offsets a property of the toolchain; naming each field makes 73408 a property of the format. That is also what keeps version 1 readable on all seven targets, where the C ABI's padding rules differ.
+      </div>
+
+      <h3 id="ch9-2">9.2 SMF — 読む範囲と書く範囲</h3>
+      <div class="orch-ja">
+        規範は MMA の Standard MIDI Files 1.0（MThd・MTrk・VLQ のデルタ時刻）。パスは <code class="code-inline">/SYS/orchestra.mid</code>。<code class="code-inline">resolve_mid_path</code> はまず完全一致を探し、無ければ先頭の <code class="code-inline">/</code> を落とした同じ名前（バイナリのそば）を試します — フリースタンディング目標では相対名が見つからないだけで、これは実行時の検査であり前処理の枝ではありません。読むのは type 0 と 1、書くのは type 1（track_count が 1 のときだけ type 0）。記録時の division は 960（式2の ORCH_PPQ）。<strong>負の SMPTE division はファイル全体を断ります</strong>（1..32767 の外）。MTC は目標ではなく、<code class="code-inline">tc_format</code> はトランスポートで読まれません。
+      </div>
+      <table class="market-table">
+        <thead><tr><th>検査</th><th>断られる条件</th><th>効き方</th></tr></thead>
+        <tbody>
+          <tr><td>長さ</td><td>262144 バイト（ORCH_SMF_CAP）超</td><td>stat が 0 を返し、開かない。コマンドは断る</td></tr>
+          <tr><td>ヘッダ</td><td>タグが MThd でない、長さが 6 でない、fmt が 1 超</td><td>ファイル全体を断る</td></tr>
+          <tr><td>トラック数</td><td>ntrks = 0 または 64 超</td><td>全体を断る。残りを部分読みしない</td></tr>
+          <tr><td>チャンク</td><td>MTrk 長が残りに入らない、タグが違う</td><td>そのチャンクごと、つまり全体を断る</td></tr>
+          <tr><td>VLQ</td><td>5 バイト以上</td><td>その行を断る</td></tr>
+          <tr><td>チックの和</td><td>2 の 32 乗を越える</td><td>その行を断る、つまり全体を断る。各チャンクはチック 0 から</td></tr>
+          <tr><td>イベント数</td><td>4096 を超える</td><td><code class="code-inline">refuse_smf</code> を数え、解析は<strong>止めず</strong>、残りの行を入れない</td></tr>
+          <tr><td>running status</td><td>読むときは前の行の状態バイトを継承。SysEx・meta・system common は解除</td><td>状態なしの行は断る。書くときは毎行が自分の状態</td></tr>
+          <tr><td>system common</td><td>0xF1・F2・F3・F6 は本体長が決まり、他の系統状態は</td><td>断る</td></tr>
+          <tr><td>SysEx</td><td>読み飛ばし、数えるだけ</td><td>セッションに入らない。専用の行はない</td></tr>
+          <tr><td>tempo meta</td><td>最初の FF 51 03 の MICRO を 40..240 に換算して外れる</td><td><code class="code-inline">refuse_smf</code> を数え、セッションのテンポはそのまま</td></tr>
+          <tr><td>終端</td><td>FF 2F 00 が無い、またはバイトが先に尽きた</td><td>そのチャンクを断る</td></tr>
+          <tr><td>type 0 の着地</td><td>状態のチャンネルにトラックが無い</td><td>type 0 は選んだトラックへ、type 1 は <code class="code-inline">refuse_smf</code> して飛ばす</td></tr>
+        </tbody>
+      </table>
+      <div class="orch-ja">
+        ノートの対応は「そのチャンネルとそのキーで最後に開いた行」で閉じます（<code class="code-inline">s_pend[16][128]</code>）。閉じ行は無視（数えない）。対応が無いまま残った行の長さは 960 チック＝四分音符。program change（0xC0）は番号が登録内なら program と <code class="code-inline">gst_resolve_track</code>、外なら <code class="code-inline">refuse_program</code>。bank select・sustain・pitch bend・aftertouch・channel pressure は<strong>解析だけして何も変えません</strong>。
+      </div>
+      <div class="orch-ja">
+        読み込みの手順は <code class="code-inline">orch_cmd_smf_load</code>：PLAYING なら <code class="code-inline">refuse_smf</code>。解決 → 読む → ヘッダ検証 → <code class="code-inline">snap_take</code>（トラック・シーン・イベント・テンポ・track 数・family・拍・click・selected・ホール四つを退避）→ 空セッションなら Rock を種に置く → 全チャンク解析。解析は <code class="code-inline">gst_seq_begin</code> と <code class="code-inline">gst_seq_end</code> の中で<strong>プールを空にしてから</strong>積むので、デスクは古いセッションか新しいセッションのどちらかを見て、混ざった中間を見ません。失敗は <code class="code-inline">snap_restore</code> と <code class="code-inline">refuse_smf</code>。成功はテンポ確定・<code class="code-inline">lc_insert_reset</code>・<code class="code-inline">gst_rt_return_zero</code>・<code class="code-inline">gst_insert_touch</code>・<code class="code-inline">orch_status_ok</code>。
+      </div>
+      <div class="orch-ja">
+        書き出しは <code class="code-inline">orch_cmd_smf_save</code>：トラックが 0 枚なら何も書かず断る。チャンネルが 1..16 の外にいるトラックが<strong>一台でもあると全体を止める</strong>。各行列は program →（第一トラックだけ）tempo FF 51 03 → ノート対 → FF 2F 00 の順で、ノート対は最大 8192 行の表で、同じチックでは<strong>note-off を先に</strong>置く（キーが境界で押したままにならないため）。デルタは前の行からの差なのでチックは単調、トラックごとにカウンタは戻る。4 バイトに収まらないデルタは 268435455 に詰めます。行とトラックの前に 5000 バイトの余白を残し、チャンク長は本体のあとに書きます。<code class="code-inline">fwrite</code> が要求どおり書き、<code class="code-inline">fclose</code> が 0 を返したときだけ成功。それ以外は <code class="code-inline">refuse_smf</code>。
+      </div>
+      <div class="orch-en">
+        <b>Two different failure disciplines, and the reason for each.</b> Structural damage (bad header, chunk that does not fit, missing terminator) refuses the whole file, because a half-parsed file is not music — it is a partial instrument. Overflow (more events than 4096) does not: the file is well-formed, the desk is simply smaller than the file, so the surplus is counted and dropped. That single distinction is why <code class="code-inline">refuse_smf</code> can be nonzero on a valid load, and why the manual prints it in the status line.
+      </div>
+      <div class="orch-en">
+        <b>Round-trip is the album's test.</b> The piece that builds the four album files re-reads what it wrote and compares event counts before and after (chapter ten), so SMF is verified by a differential, not by an example. Where the channel assignment needed no splitting, the counts must match exactly — which is the check that catches a lost or duplicated note without needing a listener.
+      </div>
+
+      <h3 id="ch9-3">9.3 WAV — 書くだけで、読まない音</h3>
+      <div class="orch-ja">
+        <code class="code-inline">RIFF</code> と <code class="code-inline">WAVE</code> はヘッダに<strong>書かれるだけで、どこからも読まれません</strong>。読むものはない — WAV の読込項目も、関数も、検査も。MP3・AIFF・OGG・SF2 も無い。PCM 16-bit ステレオ、セッションのレート、ヘッダは 44 バイトの little-endian。
+        <div class="orch-formula">  0    4     RIFF
+  4    u32   ファイル長 − 8   （= 36 + 4×フレーム）
+  8    4     WAVE
+ 12    4     fmt
+ 16    u32   16
+ 20    u16   1               （PCM）
+ 22    u16   2               （チャンネル）
+ 24    u32   f_s             （44100 か 48000）
+ 28    u32   f_s × 4         （byte rate）
+ 32    u16   4               （block align）
+ 34    u16   16              （bits）
+ 36    4     data
+ 40    u32   PCM バイト数    （= 4×フレーム）</div>
+        パスは <code class="code-inline">/SYS/orchestra.wav</code> の完全一致で、SMF のような「スラッシュなし」の代替はありません。違う名前は <code class="code-inline">fopen</code> より前に断られ、ファイルは作られません（7.7 の "wav"）。
+      </div>
+      <div class="orch-ja">
+        出力は<strong>オフライン</strong>で、第四章〜第六章と同じ関数（<code class="code-inline">clock_block</code>・<code class="code-inline">slots_expire</code>・<code class="code-inline">chase_on</code>・<code class="code-inline">chase_off</code>・<code class="code-inline">render_graph</code>）を、スロット表と live 表だけを別に持って回します。<code class="code-inline">device_out</code> は入らず、<code class="code-inline">ring_apply</code> と <code class="code-inline">close_one</code> は入らない（両方とも <code class="code-inline">orch_check(s_export == 0)</code> を持つ）。PAUSED かつエンジンが起動しているときだけ動きます。
+      </div>
+      <div class="orch-ja">
+        長さは決まった式です。
+        <div class="orch-formula">  式23  終端 = 最後のノートの終わり、ただし
+        ・1 小節未満にはしない（小節長 = num × 3840 / den チック）
+        ・64 小節を超えない
+        ・(80 MiB − 44) / 4 フレームを超えない
+        上限 655360 ブロック × Q 32 = 20 971 520 フレーム（上限より 8 多い）
+        → 切るのも常に 80 MiB の壁で、ループの壁ではない。</div>
+        切り詰めが起きたら <code class="code-inline">trunc</code> が立ち、デスクの文字は "truncated"。同じ文字は <code class="code-inline">fwrite</code> が要求より少ないときにも出ます（条件はひとつ）。そのとき<strong>一部だけ書けたファイルはディスクに残ります</strong>。
+      </div>
+      <div class="orch-ja">
+        レンダのあいだ、デスクは何も教えません。メータは更新されず（第六章 6.3）、<code class="code-inline">midi_clock</code>・<code class="code-inline">steal_voice</code>・<code class="code-inline">chain_accept</code>・<code class="code-inline">chain_drop</code>・<code class="code-inline">refuse_insert</code> は動かず、REVERB の摘みは取り出したまま公開されず、ライブの tick は最初の検査で戻ります。始める前に十五のカウンタとメータと内部位相を <code class="code-inline">CtrSnap</code> に取り、スロット表を写し、<code class="code-inline">wa_set_clock_samples(0)</code> と <code class="code-inline">lc_set_score_base(0.0)</code> を置く。終わったら<strong>カウンタと N を戻してから</strong>、bus 1..65 の 128 キーを解き、ホールとインサートと時計を復元して <code class="code-inline">s_export = 0</code>。順番は意味があります — 生きているスロットが戻ってからでないと、出力中の声が見える。
+      </div>
+      <div class="orch-en">
+        <b>Export borrows the engine, not the state.</b> The exported file must be the same audio the stage would have produced, so it cannot be a second renderer with its own approximations — it calls the same five functions. But it must also leave the desk exactly where it was found, which is why it keeps a private slot table, restores fifteen counters and the transport position, and is the reason the meters freeze rather than flicker through an album take. N is never read or written by the loop; the chase index and the shim's time argument are the export's own local clock, which is why chapter five's measured queue is untouched by an export.
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 10 — THE ALBUM                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch10">
+      <h2>第10章 アルバム『Carol of the Bells』(The Album)</h2>
+      <div class="orch-uses">前提: 第九章のファイル（セッション・SMF）と全章の語。この章は新しい規則を作らず、規則で出来上がったものを見せます。</div>
+
+      <h3 id="ch10-1">10.1 四つの曲と、それを作るもの</h3>
+      <div class="orch-ja">
+        <code class="code-inline">SYS/</code> の四つのファイルは<strong>デスクが作りません</strong>。ホスト目標の <code class="code-inline">album_encode</code>（Makefile）が <code class="code-inline">piece()</code> を四度呼び、最後に bells を <code class="code-inline">orchestra.orch</code> と <code class="code-inline">orchestra.mid</code> へコピーして、デスクが第一曲で始まるようにします。
+        <table class="market-table">
+          <thead><tr><th>#</th><th>曲</th><th>BPM</th><th>拍</th><th>stem</th><th>ファイル</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Carol of the Bells</td><td>168</td><td>3/4</td><td>bells</td><td>bells.orch・bells.mid（デスクの初期値）</td></tr>
+            <tr><td>2</td><td>Green Caterpillar</td><td>120</td><td>4/4</td><td>caterpillar</td><td>caterpillar.orch・.mid</td></tr>
+            <tr><td>3</td><td>House of the Rising Sun</td><td>125</td><td>4/4</td><td>rising</td><td>rising.orch・.mid</td></tr>
+            <tr><td>4</td><td>TRON Init</td><td>93</td><td>4/4</td><td>tron</td><td>tron.orch・.mid</td></tr>
+          </tbody>
+        </table>
+        四つともヘッダは同じ — 48000 Hz、family <strong>CLASSIC</strong>、click 0、active_scene 0、master_vol 100、LIMITER、snap 1/16、ホール 42・55・18・28、パスは定数。シーンは同じ作り方（0 番目が曲の題、残り十五は <code class="code-inline">SCN_NAME</code> の名、チャンネル音量は <code class="code-inline">SCN_SCALE</code> で倍、トラックの無いチャンネルは program 255・volume 0、lighting は stem）。
+      </div>
+      <div class="orch-ja">
+        <strong>楽譜の源はエンジン自身です。</strong><code class="code-inline">capture()</code> は <code class="code-inline">lc_score_schedule(track, 0.0)</code> と <code class="code-inline">lc_cap_at</code> を取ります —第三章と同じシム、同じフレージング。<code class="code-inline">place_all</code>・<code class="code-inline">assign_channels</code>・<code class="code-inline">trim_keys</code> がトラックとチャンネルへ配ります。セッションファイルは<strong>手では書かれません</strong>。同じ楽譜の第二の記述は第二のモデルになるので、無いのです。
+      </div>
+      <div class="orch-ja">
+        符号は自分を検査します。<code class="code-inline">piece()</code> は書いたあと <code class="code-inline">orch_session_load_buf</code> を呼んで拒否が出ないことを確かめ、<code class="code-inline">orch_cmd_smf_save</code> → <code class="code-inline">&lt;stem&gt;.mid</code> へ写す → <code class="code-inline">orch_cmd_smf_load</code> → event_count を前後で比べます。チャンネル配りが分割なしで済んだ（<code class="code-inline">assign_channels</code> が 0 を返した）なら、数は<strong>ぴったり</strong>一致しなければなりません。
+      </div>
+      <div class="orch-en">
+        <b>A generated session is the only honest kind.</b> Hand-writing a 73408-byte container would put the album's music outside the desk's own rules. Instead the album comes out of the same score scheduler that plays it, so every bar in Carol of the Bells is something the engine can actually voice, and every program number in it is something chapter three's registry knows. The encode step then closes the loop through SMF, which means the exchange path of chapter nine is exercised by the shipped content on every build.
+      </div>
+
+      <h3 id="ch10-2">10.2 bells.orch — 17 トラック、325 イベント</h3>
+      <div class="orch-ja">
+        第一曲は 17 トラック・325 イベント・跨度 73535 チック。168 BPM の 3/4 なら 76.6 拍、<strong>27.36 秒・25.5 小節</strong>です。
+        <table class="market-table">
+          <thead><tr><th>#</th><th>名前</th><th>ch</th><th>pr</th><th>aux</th><th>インサート</th><th>数</th><th>鍵</th><th>開始</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>Crystal chime</td><td>1</td><td>112</td><td>24</td><td>EQ+REVERB</td><td>34</td><td>76..100</td><td>0</td></tr>
+            <tr><td>1</td><td>Crystal chime 2</td><td>2</td><td>112</td><td>24</td><td>—</td><td>34</td><td>76..100</td><td>960</td></tr>
+            <tr><td>2</td><td>Crystal chime 3</td><td>3</td><td>112</td><td>24</td><td>—</td><td>33</td><td>76..95</td><td>1440</td></tr>
+            <tr><td>3</td><td>Crystal chime 4</td><td>4</td><td>112</td><td>24</td><td>—</td><td>20</td><td>78..95</td><td>4320</td></tr>
+            <tr><td>4</td><td>Crystal chime 5</td><td>5</td><td>112</td><td>24</td><td>—</td><td>11</td><td>78..90</td><td>6720</td></tr>
+            <tr><td>5</td><td>Crystal chime 6</td><td>6</td><td>112</td><td>24</td><td>—</td><td>3</td><td>79..91</td><td>7200</td></tr>
+            <tr><td>6</td><td>Crystal chime 7</td><td>7</td><td>112</td><td>24</td><td>—</td><td>2</td><td>79..91</td><td>7200</td></tr>
+            <tr><td>7</td><td>Crystal chime 8</td><td>8</td><td>112</td><td>24</td><td>—</td><td>1</td><td>91..91</td><td>10080</td></tr>
+            <tr><td>8</td><td>Golden chi bell</td><td>9</td><td>98</td><td>25</td><td>EQ+REVERB</td><td>1</td><td>44..44</td><td>0</td></tr>
+            <tr><td>9</td><td>Hi-hat</td><td>10</td><td>118</td><td>26</td><td>GATE</td><td>59</td><td>42..42</td><td>3840</td></tr>
+            <tr><td>10</td><td>Jazz kick</td><td>11</td><td>116</td><td>27</td><td>GATE</td><td>20</td><td>37..37</td><td>5760</td></tr>
+            <tr><td>11</td><td>Snare</td><td>12</td><td>117</td><td>28</td><td>GATE</td><td>38</td><td>38..38</td><td>9600</td></tr>
+            <tr><td>12</td><td>Snare 2</td><td>13</td><td>117</td><td>28</td><td>—</td><td>3</td><td>38..38</td><td>22320</td></tr>
+            <tr><td>13</td><td>Crystal step</td><td>14</td><td>32</td><td>29</td><td>EQ+CHORUS</td><td>56</td><td>35..52</td><td>10560</td></tr>
+            <tr><td>14</td><td>Singing harmonic triad</td><td>15</td><td>80</td><td>30</td><td>EQ+REVERB</td><td>3</td><td>31..32</td><td>23040</td></tr>
+            <tr><td>15</td><td>Crystalline cascade</td><td>16</td><td>102</td><td>31</td><td>EQ+REVERB</td><td>4</td><td>65..69</td><td>34560</td></tr>
+            <tr><td>16</td><td>Jazz woodwind</td><td>1</td><td>52</td><td>32</td><td>EQ+DELAY</td><td>3</td><td>84..91</td><td>46080</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3 id="ch10-3">10.3 カノンの構造</h3>
+      <div class="orch-ja">
+        チャンネル 1..8 の八本の Crystal chime がカノンを組みます。入りの位置は 0、960、1440、4320、6720、7200、7200、10080 — 四分音符をおきに三つ、そのあとは小節おき。持つイベントは後にいくほど減って、七番目と八番目は一打ちだけになります。インサートを持つのは 0 番目とマスターバスだけで、ほかの七つの入り口は<strong>ドライのまま</strong>です。
+      </div>
+      <div class="orch-ja">
+        チャンネル 9 の Golden chi bell は 0 番目の一打ち（key 44、9408 チック）で、ファイルの<strong>最長</strong>。10..13 がリズム（Hi-hat 59 を GATE で、kick 20、snare 38、snare 2 の三打ち）。14 がベース（program 32 を EQ と CHORUS へ、鍵 35..52）。15 の三つの長い音（program 80）と 16 の四つの流れ（program 102）は中程から入り、16 枚目は<strong>第一の鐘とチャンネル 1 を分けて</strong>、46080 チックから尾で三つの音（84..91）だけ鳴らします。
+      </div>
+      <div class="orch-ja">
+        アルゴリズムあたりの枠は第四章の天井（八）より少ない — <strong>EQ 六、REVERB 四、GATE 三、DELAY 一、CHORUS 一</strong>。四つの REVERB は自分のトラックの send を書き、ホールの摘みは<strong>走査の最後に読んだ一台（チャンネル 16）</strong>がブロックまで届きます。feedback のバイト 18 はそのまま — インサートは触らないので（9.1）。
+      </div>
+      <div class="orch-en">
+        <b>One dry channel in a canon is a decision, not an oversight.</b> Only the first entering voice carries EQ and REVERB; the seven later entries are dry. Because the hall is a single shared block (chapter four), a send on every voice would stack the same room eight times and the canon would lose its depth ordering. Dry entries are what let the listener hear which bell is answering.
+      </div>
+      <div class="orch-en">
+        <b>The last open divergence.</b> The companion document <code class="code-inline">doc/txt/SOUND.txt</code> describes the same piece as "~25.8 seconds (24 Measures)", while the built <code class="code-inline">bells.orch</code> gives 27.36 seconds and 25.5 bars in 3/4. The file is normative — it is what the desk reads — and SOUND.txt describes a scene, not a container. The correction belongs in SOUND.txt, and chapter twelve lists it rather than quietly harmonising the two numbers.
+      </div>
+    </div>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 11 — POSITION AMONG DAWs                              -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch11">
+      <h2>第11章 他の DAW との位置 (Position Among DAWs)</h2>
+      <div class="orch-uses">前提: 第一章の三つの実践から第十二章までの全語彙。この章でしか言えないのは「何が無く、なぜ無いか」です。</div>
+
+      <h3 id="ch11-1">11.1 三つの証人 — Cubase・Pro Tools・Rosegarden</h3>
+      <div class="orch-ja">
+        比較できるのは、窓（第六章）・ファイル（第九章）・トラック（第三〜第八章）が揃ったあとだけです。評価は三択 — <strong>ある / 部分ある / 無い</strong>。Cubase 14 の紹介文でも、宣伝用の機能一覧でもありません。名前は三つ：業種がいちばん近いのが Steinberg Cubase Score と Cubase VST（線形 MIDI・拍・単一の譜面）、特化形の天井が Avid Pro Tools（ミキサー・インサート・センド・セッション）、そして Rosegarden — アランジメントも譜面も要求として既に決まっているからです。読み比べるのは機能の名前で、Cubase と Pro Tools の実機は触っていません。
+      </div>
+      <div class="arch-grid">
+        <div class="arch-card">
+          <h5>Cubase → Orchestra</h5>
+          <p><strong>Arrange</strong> = 部分ある（W_ARRANGE、線形 MIDI。オーディオクリップとフォルダトラックは無い）<br>
+          <strong>Key Edit</strong> = 部分ある（W_PIANO、0..127 とベロシティ。コントローラレーンは無い）<br>
+          <strong>Score</strong> = 部分ある（一段の譜面、6.1）<br>
+          <strong>Mixer</strong> = 部分ある（ストリップ・マスター・aux 一つ。四帯域 EQ はバイクヮード一つを除いて無い）<br>
+          <strong>MIDI tracks</strong> = ある（64 まで）<br>
+          <strong>Audio tracks</strong> = 無い<br>
+          <strong>Transport</strong> = 部分ある（再生・停止・MIDI 録音。scrub は無い）<br>
+          <strong>Inspector</strong> = 部分ある（W_INSERT、二スロット）<br>
+          <strong>VST insert</strong> = スロットの<em>役割</em>はある。バイナリ VST は無い</p>
+        </div>
+        <div class="arch-card">
+          <h5>Pro Tools → Orchestra</h5>
+          <p><strong>Edit window</strong> = 部分ある（arrange と piano。波形とクリップゲインは無い）<br>
+          <strong>Mix window</strong> = 部分ある（W_MIX）<br>
+          <strong>Inserts</strong> = 部分ある（2、10 ではない。AAX でもない）<br>
+          <strong>Sends</strong> = 部分ある（1、10 ではない）<br>
+          <strong>Transport</strong> = 部分ある（7.3）<br>
+          <strong>Punch-record</strong> = 無い<br>
+          <strong>Session</strong> = 部分ある（73408 バイトの一個。".ptx" ではない）</p>
+        </div>
+        <div class="arch-card">
+          <h5>Rosegarden → Orchestra</h5>
+          <p><strong>Segments</strong> = 部分ある（W_ARRANGE にセグメント模型はない）<br>
+          <strong>Matrix</strong> = 部分ある（W_PIANO）<br>
+          <strong>Notation</strong> = 部分ある（W_SCORE）<br>
+          <strong>Mixer</strong> = 部分ある<br>
+          <strong>MIDI file</strong> = ある（type 0・1、第九章の天井の内）<br>
+          <strong>LilyPond</strong> = 無い<br>
+          <strong>Studio manager</strong> = 無い。生きてるのはポート 0 の Stage MIDI In だけ（port0）で、ディスパッチャの呼出元が無い（12.1）<br>
+          <strong>Markers</strong> = 独立のオブジェクトとしては無い。十六シーンが音量とプログラムの一時的な置き名</p>
+        </div>
+        <div class="arch-card">
+          <h5>四番目にならなかった名前</h5>
+          <p><strong>Qtractor</strong> — マルチトラック・MIDI・オーディオの同世代だが、譜面が弱く、譜面は Classic と Orchestra の要求済み事項。オーディオトラックと JACK は第二章 2.1 の外。<br>
+          <strong>LMMS</strong> — プリセットのスタジオ。Rock に近く、パターンで組まれ、管弦の配席がない。<strong>パターンのシーケンサはこの机に無い</strong> — 時間は第三・第五・第七章の式どおり線形なチックです。<br>
+          <strong>Ardour</strong> — 証人に入れない。名前に留める。オーディオトラックも音の取り込みも、この記事には無い。<br>
+          <strong>FluidSynth / SoundFont</strong> — リポジトリに SF2 は無く、第二章 2.4 のゼロバイトがそれを保つ。<code class="code-inline">fluidsynth</code> という名前は工場の一行の文字列で、ライブラリではなかった。<code class="code-inline">shimsynth</code> が置き換えます。</p>
+        </div>
+      </div>
+      <div class="orch-en">
+        <b>Comparison by function name, verdicts in three words.</b> A capability table that grades "partial" endlessly cannot be checked, so each row is one of three answers, and the answer is decided by whether the desk has the object the row names — a clip, a send, an insert format. Refusing Qtractor, LMMS and Ardour as witnesses is part of the same discipline: a comparison against a machine with audio tracks would list only absences, and an absence list is not a design document.
+      </div>
+
+      <h3 id="ch11-2">11.2 意図的に無いもの</h3>
+      <div class="orch-ja">
+        <table class="market-table">
+          <thead><tr><th>無いもの</th><th>なぜ無いのか（どの章の規則がそれを閉めているか）</th></tr></thead>
+          <tbody>
+            <tr><td>オーディオトラック・録音</td><td>第一章 1.2 — 装置から読む呼出が無い。帰るのはキューの深さだけ</td></tr>
+            <tr><td>バイナリ VST / LV2 ホスト</td><td>第二章 2.4 にローダが無く、G1 は加熱路の確保を禁じる。<code class="code-inline">dlopen</code> と Steinberg SDK はそれに反する。<strong>インサートは形式でなく役割</strong>（第六章の八アルゴリズムがカタログ）</td></tr>
+            <tr><td>SoundFont / FluidSynth</td><td>上の行と同じ。手続の音源 32 が第三章、工場の名前の照合が第五章</td></tr>
+            <tr><td>ネットワーク（RTP-MIDI・WebRTC・PTP）</td><td>第三章 3.4 が除外し、Orchestra はソケットを開かない。第十二章の信頼境界</td></tr>
+            <tr><td>プラグインコードのロード</td><td><code class="code-inline">dlopen</code> なし、VST/LV2 なし、<code class="code-inline">third_party/</code> への道なし</td></tr>
+            <tr><td>パターンのシーケンサ</td><td>時間は線形なチック（第二・第五・第七章）</td></tr>
+            <tr><td>別商品の Monitor / Logger / Tuner / Router / レコーダ / シーンマネージャ</td><td>診断はプルト上の一行（6.3）。シーン管理は格子（7.5）</td></tr>
+            <tr><td>MTC・SMPTE master / DMX</td><td><code class="code-inline">tc_format</code> は巡るだけで、何も送らない（7.1 の装置メニュー）</td></tr>
+            <tr><td>redo・クリップリスト・フォルダトラック</td><td>Undo は 16 件のリングのみ（7.6）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="orch-en">
+        <b>Absences are load-bearing.</b> Each row above is closed by a rule stated in an earlier chapter, not by a preference. Remove the "no allocator on the hot path" rule and a VST host becomes possible — and the WCET sum of chapter five stops being a sum. That dependency is the reason this chapter is last-but-one: the absences can only be defended once the machinery that forbids them has been explained.
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  CHAPTER 12 — LIMITATIONS, QUICK REFERENCE, SOURCES            -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div class="section" id="ch12">
+      <h2>第12章 制約事項・早見表・出典 (Limitations, Quick Reference, Sources)</h2>
+      <div class="orch-uses">前提: 全章。この章は新しい仕組みを導入しません。前の章が「そう動く」と言ったところのうち、今このビルドで未完成・自己矛盾・未証明のものを集めます。</div>
+
+      <h3 id="ch12-1">12.1 既知の限界</h3>
+      <div class="orch-ja">
+        <table class="market-table">
+          <thead><tr><th>#</th><th>限界</th><th>今いくつで、どこで読めるか</th><th>扱い</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>行数の天井を超えている</td><td>窓とコマンドの八ファイルは <strong>4000 行</strong>が天井で、実測 <strong>4634 行</strong>（第一章 1.3）。セッション 1761 は 1800 内、SMF 1317 は 1400 内</td><td>切る対象は paint とコメントで、表でもアルゴリズムでもインサートでもない。超えていることが既知の状態で出荷している</td></tr>
+            <tr><td>2</td><td>メニューへシーン名を足す関数が死んでいる</td><td><code class="code-inline">orch_menu_scenes</code> は自分のガード（見出しの下に十六行）を scene 見出しの二行が満たさず、最初の書き込み前に戻る。呼出元（メニュー構築・ファイルコマンド・UI 一周）は三つとも何も変えない</td><td>第七章 7.1 のとおり、301..316 は格子から呼ぶ。関数は残っているが効かない</td></tr>
+            <tr><td>3</td><td>MIDI 入力のディスパッチャに呼出元が無い</td><td>CC7・CC10・program change をセッションへ写す <code class="code-inline">orchestra_dispatch_midi_event</code> は、このビルドで呼ばれない（第七章 7.4）</td><td>実機の鍵盤では録音されない。配るのは入力の仕事で、第七章の規則は先に書けている</td></tr>
+            <tr><td>4</td><td>snap のラベルが三重</td><td>四つの表示文字列が <code class="code-inline">snap_name</code> としてアレンジ・ピアノ・スコアに一つずつ（第七章 7.6）</td><td>一箇所へ寄せるまでラベルの変更は三回必要。機能の欠陥ではなく表示の重複</td></tr>
+            <tr><td>5</td><td>譜面は部分ある</td><td>選択トラック一段（第六章）。多声部・歌詞・パート譜の書き出しは無い（第十一章）</td><td>Classic と Orchestra の要求としては一段が下限。以上は未着手</td></tr>
+            <tr><td>6</td><td>別個のオーディオ面が無い</td><td>音は UI の一周から回る（第五章 5.3、第七章）。<code class="code-inline">async_rt.h</code> の表は INPUT（1000 µs／500 µs）と UI（8333 µs／4000 µs）だけを知り、オーディオアクターも「優先度 100」もツリーに無い</td><td>保証は公開した合計（632 µs ≤ T）と追い付き上限（64）。SCHED_FIFO の文は RTOS 級の契約として残り、NuttX の連はこのツリーにない</td></tr>
+            <tr><td>7</td><td><code class="code-inline">qos_drops</code> が動かない</td><td>遅延試験の旗がリセットされるだけで立つ経路が無い（第五章 5.2）</td><td>カウンタの一覧に在るが、常時 0。読み方を誤らないこと</td></tr>
+            <tr><td>8</td><td>隣の文書と食い違う</td><td><code class="code-inline">SOUND.txt</code> は第一曲を「~25.8 秒・24 小節」と書き、ビルドされた <code class="code-inline">bells.orch</code> は 27.36 秒・25.5 小節（3/4）（第十章 10.3）</td><td>規範はファイル（デスクが読むのはそれ）。直す先は SOUND.txt 側で、この案内書は二つの数を並べたままにする</td></tr>
+            <tr><td>9</td><td>狭い窓で編集道具が消える</td><td>スコアの道具列は幅 700 以上、ピアノの MIN には snap も Undo も無い（第六章 6.2）</td><td>細いときはアレンジ／ピアノから道具を回す。クリックは常に <code class="code-inline">v-&gt;tool</code> を読むので、見えないだけで効く</td></tr>
+            <tr><td>10</td><td>テンプレートの声の上限が家族で決まる</td><td>Rock は全トラック 1 声（第八章 8.1）。プログラム 0 の六声が使えない</td><td>設計どおり。だが「六声出る音色に見える」罠なので、第八章に書いた</td></tr>
+            <tr><td>11</td><td>未証明の音楽的性質</td><td>シムのサンプル単位の決定性、声の盗みの連続性、音と映像時計の関係は証明されていない。Coq の模型は <code class="code-inline">gst_rt</code> に無い（第一章 1.1、第五章）</td><td><code class="code-inline">media_smp_properties.v</code> は面の予算の証言で、音色の錠前ではない。この記事は証明を名乗らない</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h4>12.1.1 受け入れ検査（Coq なし・章ごと）</h4>
+      <div class="orch-ja">
+        規則を既に含む節だけを使って、次のとおり検査します。モデル検査の受け入れは第三章 5 のカウンタと第五章の合計の天井です。
+        <table class="market-table">
+          <thead><tr><th>章</th><th>検査</th></tr></thead>
+          <tbody>
+            <tr><td>第5・7章</td><td>工場は <code class="code-inline">fluidsynth</code> の行を断り、<code class="code-inline">shimsynth</code> を通す。状態行に定数 0.8 は出ない。一見出しに二十項目まで</td></tr>
+            <tr><td>第8・9章</td><td>登録外の program change はシムを変えない。73408 バイトでないファイルは状態を変えない。Rock のプログラム 0 は単声のまま</td></tr>
+            <tr><td>第3章</td><td>21〜23 番を移植したあとは断りではなく、バイオリンが peaking 節を作らない</td></tr>
+            <tr><td>第2章</td><td>48 kHz・128 BPM・4/4 でチック 40 → サンプル 938、サンプル 938 → チック 40。96 BPM・6/8 で T_bar = 3.75 秒、八分に MIDI パルス 12、四分に 24。イベントは N が sample(start_tick) を越えたとき始まり、ev_live があれば二度始まらない。最初の Stop でも record を下ろしたあとの note-off でも、行は dur_tick ≥ q かつ ev_live = 0 で閉じる。第二段 Stop は N = 0 と wa_time = 0。ブロックの終わりはカウンタを写さない</td></tr>
+            <tr><td>第4・8章</td><td>Tutti は十六枠、ピアノは六まで、四十九番目の声は奪って数える。同じサンプルの二つのキーは別々に離れる</td></tr>
+            <tr><td>第9章</td><td>256 KiB を超える SMFはこの長さのバッファへ読めない。WAV 出力は N を変えない。出力中は chase と <code class="code-inline">lc_shim_note</code> が自分だけの s_clock を読み、<code class="code-inline">wa_set_clock_samples(saved)</code> のあと再び s_clock = N</td></tr>
+            <tr><td>第一章</td><td>プルトの三ファイル合わせて五千行まで（<code class="code-inline">lilcu64_insert.c</code> とシムの移植は数えない）</td></tr>
+          </tbody>
+        </table>
+        <p class="orch-fig">開いている開発の枝は残っていません。名前の出た場所で閉じた（比較の証人、コントラバス、ハープ、声、FM 対 八つの正弦、周期 1024、一つのホール、/SYS のパス、管弦の単声、Piano シーン＝ハープ、chase 対 二度の note-off、短縮したバイオリン、テンポは停止中だけ、ホールのバイト、出力の共通指数、録音したノートの閉じ方、P1..P4 の外の feedback、hat と bass の二つのフィルタ、零への戻り、メニュー六見出し、三つの層）。</p>
+      </div>
+      <div class="orch-en">
+        <b>Every limitation names where its own rule already lives.</b> A risk whose mitigation invents a new policy is a redesign; these ten point back at a chapter that already states the rule and record what the tree has not yet done about it. That is also why the ceiling breach in row one is printed rather than quietly raised — the number 4000 is the rule, 4634 is the fact, and the manual is the place where the difference is allowed to be visible.
+      </div>
+
+      <h3 id="ch12-2">12.2 数値早見表</h3>
+      <div class="orch-ja">
+        <table class="market-table">
+          <thead><tr><th>数</th><th>何</th><th>定義</th><th>どこに出るか</th></tr></thead>
+          <tbody>
+            <tr><td>48000 / 44100</td><td>Hz。二択、既定 48000</td><td>1.2・9.1 の検証</td><td>状態行の先頭</td></tr>
+            <tr><td>1024</td><td>ホスト周期（フレーム）</td><td>1.2（<code class="code-inline">wanted.samples</code>）</td><td>装置メニュー「Q 32 | host 1024」</td></tr>
+            <tr><td>21.3 / 23.2 ms</td><td>周期の秒</td><td>式21</td><td>DSP 項目「wcet … T …」</td></tr>
+            <tr><td>Q = 32</td><td>合成量子</td><td>1.2・5.1</td><td>同じ（装置メニュー）</td></tr>
+            <tr><td>666 / 725 µs</td><td>一周期 T</td><td>式21</td><td>DSP 項目</td></tr>
+            <tr><td>632 µs</td><td>WCET の合計</td><td>5.2 の表</td><td><code class="code-inline">gst_rt_wcet_us</code></td></tr>
+            <tr><td>500 µs</td><td>INPUT 面の予算</td><td>5.4（面の表）</td><td>出ない（面は配線待ち）</td></tr>
+            <tr><td>73408</td><td>セッションのバイト</td><td>式22</td><td>読込前に stat で比べる</td></tr>
+            <tr><td>64 / 16 / 4096</td><td>トラック / シーン / イベント</td><td>9.1</td><td>診断「elem n」は要素数</td></tr>
+            <tr><td>32 / 48</td><td>プログラム / スロット</td><td>3.1・3.2</td><td>steal_voice</td></tr>
+            <tr><td>8 / 2 / 8</td><td>インサート種 / 一トラック / 一アルゴリズム</td><td>4.1・9.1</td><td>refuse_insert</td></tr>
+            <tr><td>960</td><td>チック／四分音符</td><td>式2・9.2 の division</td><td>SMF ヘッダ</td></tr>
+            <tr><td>40..240 / 1..12 / 2,4,8,16</td><td>テンポ / 分子 / 分母</td><td>2.1・9.1</td><td>refuse_tempo</td></tr>
+            <tr><td>16</td><td>Undo のリング</td><td>7.6</td><td>ピアノ窓の Undo ボタン</td></tr>
+            <tr><td>262144</td><td>SMF の天井（バイト）</td><td>9.2</td><td>refuse_smf</td></tr>
+            <tr><td>44 / 80 MiB / 64</td><td>WAV ヘッダ / 上限 / 小節</td><td>式23</td><td>"truncated"</td></tr>
+            <tr><td>6 / 20 / 8</td><td>見出し / 一見出しの項目 / 見出しの天井</td><td>7.1</td><td>バーはステージのみ</td></tr>
+            <tr><td>608 / 642 / 662</td><td>見出し幅合計 / 右端 / 右文字の開始</td><td>7.1</td><td>バーのレイアウト</td></tr>
+            <tr><td>780×520 … 520×270</td><td>七窓の初期寸法</td><td>6.1</td><td>ウィンドウメニュー</td></tr>
+            <tr><td>4634 / 4000</td><td>実測 / 天井（行数）</td><td>1.3・12.1</td><td>この表のみ</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="ch12-3">12.3 出典</h3>
+      <div class="orch-ja">
+        ここに並べるのは、前の章で既に名前の出た場所です。新しい主張は加えません。一次資料はツリーの中のコードと仕様の文書、二次資料は外部の規格と二冊の文献です。
+        <div class="bib-featured">
+          <h4>doc/txt/ORCHESTRA.txt — 規範となる仕様</h4>
+          <p>この案内書の数字・表・拒否の一覧は、すべて同文書の対応する節から取っています（全十七章）。読み方の違いは一つだけ — 仕様書は規則を置き、案内書は前章の語で読みます。</p>
+          <p style="margin-bottom:0;">対応: 1章↔§1–2、2章↔§3.2–3.3、3章↔§5、4章↔§6、5章↔§9、6章↔§12.1・12.4、7章↔§10・§12.2–12.3、8章↔§8、9章↔§7.1・§11、10章↔§7.2、11章↔§13–14、12章↔§15–17。</p>
+        </div>
+        <ul class="bib-list">
+          <li class="bib-item"><span class="bib-num">01</span><span>ツリー一次：src/media/orchestra*.c（九ファイル）、src/media/gst_rt.c、include/media/gst_rt.h、src/demo/lilcu64_synth.c・lilcu64_wa.c・lilcu64_score.c・lilcu64_insert.c、include/device/virtio.h、src/drivers/virtio/virtio.c、include/btron/app_menu.h・async_rt.h、src/font/troncode.c、src/desktop/main.c</span></li>
+          <li class="bib-item"><span class="bib-num">02</span><span>doc/txt/SOUND.txt（§3・5・6・7・8・9）— 音の式の系列。第十章 12.1 の食い違いはこの側にある</span></li>
+          <li class="bib-item"><span class="bib-num">03</span><span>doc/pdf/btron-sound.tex — 信号の数式と 1A–1C・2–23 の番号。eq:stft は用紙の色の段で、この DAW のアルゴリズムではない</span></li>
+          <li class="bib-item"><span class="bib-num">04</span><span>doc/md/GST-SYNC-RTP.md §4 — 実時間の属性の一覧（要素の本体ではない）、doc/md/GUI.md — 幅ごとの個別ビルドを持たない窓</span></li>
+          <li class="bib-item"><span class="bib-num">05</span><span>b-media/index.html（25 の shim* と面）、b-media/sound.html（証明の切れ目と FM 2.76 対 1.8）、b-media/audio.html（周期 1024 と Control Panel の 128 フレーム目標）</span></li>
+          <li class="bib-item"><span class="bib-num">06</span><span>Makefile — §2.4 と §3.1 の一覧、album_encode（737–742・823–833）</span></li>
+          <li class="bib-item"><span class="bib-num">07</span><span>外部規格：MMA, <em>Standard MIDI Files 1.0</em>（MThd・MTrk・VLQ、第九章）</span></li>
+          <li class="bib-item"><span class="bib-num">08</span><span>外部文献：Robert Bristow-Johnson, <em>Audio EQ Cookbook</em> — バイクヮードの係数（第三章 3.4・第四章）</span></li>
+          <li class="bib-item"><span class="bib-num">09</span><span>比較の対象：Steinberg Cubase（Score／VST の系譜）、Avid Pro Tools、Rosegarden — 名前のみの対照で、実機・実文の再読はしていない（第十一章）</span></li>
+          <li class="bib-item"><span class="bib-num">10</span><span>画面：../img/screens/Orchestra_*.png — 実機の描画バッファから自動抽出した七枚（第一曲を読み込んだ状態）</span></li>
+        </ul>
+        <p class="orch-fig">この案内書の行は「コードが印字する数」だけを印字します。印字できない数は、この十二章に集めました。</p>
       </div>
     </div>
   </div>
-
   <footer class="app-footer">
     <div class="app-footer-top">
       <a href="../../index.html">← B-System</a>

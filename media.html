@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>メディア — 創作アプリケーションとゲームの機 | B-System (BTRON3 3.20)</title>
     <meta name="description"
-        content="B-System のメディア環境の入口。創作側は DAW のオーケストラ、DPS のクラリティ、3DS のスタジオ、NLE のカットの四題。遊び側はクロスメディアバー、Game SDK、MSX、メガドライブ、アミーガ、Iris (PS2)、Ares (N64) の七つの席。公開中・実機稼働・準備中を分けて掲げます。">
+        content="B-System は BeOS のメディア OS の設計を BTRON3 3.20 上に作り直したオペレーティングシステムです。1 MB 以下の組み込み機から SMP ワークステーションまで同じ C99 出典で動き、机の上の窓としてシステム五題、CLU スイート、創作四題、ゲーム八席を掲げます。公開中・実機稼働・準備中を分けて示します。">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -186,6 +186,7 @@
             line-height: 1.18;
             letter-spacing: -0.015em;
             text-shadow: none;
+            white-space: nowrap;
         }
 
         .hero-rule {
@@ -460,6 +461,144 @@
         .diptych figure:hover {
             box-shadow: var(--shadow-lift);
             transform: translateY(-5px);
+        }
+
+        /* ── Compact plate row (three secondary products) ────────────────── */
+        .plate-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: clamp(1.4rem, 3vw, 2.4rem);
+            border-top: 1px solid var(--rule);
+            padding-top: clamp(2.6rem, 6vw, 4rem);
+        }
+
+        .plate-row .cell {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .plate-row .plate {
+            padding: clamp(0.8rem, 1.6vw, 1.2rem);
+            margin-bottom: 1.5rem;
+        }
+
+        .plate-row .field {
+            padding: clamp(0.6rem, 1.4vw, 1rem);
+        }
+
+        .plate-row .role {
+            margin-bottom: 0.7rem;
+            font-size: 0.68rem;
+        }
+
+        .plate-row h4 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: 1.3rem;
+            line-height: 1.4;
+            color: var(--ink);
+            margin: 0 0 0.8rem;
+        }
+
+        .plate-row p {
+            margin: 0 0 1.1rem;
+            font-size: 0.87rem;
+            line-height: 1.95;
+            color: var(--ink-2);
+        }
+
+        .plate-row .en {
+            font-size: 0.82rem;
+            color: var(--ink-3);
+            line-height: 1.85;
+        }
+
+        .plate-row .entry {
+            margin-top: auto;
+            align-self: flex-start;
+        }
+
+        /* ── Cartridge library grid (MSX titles) ──────────────────────────── */
+        .library {
+            margin-top: clamp(3.2rem, 7vw, 5rem);
+        }
+
+        .library-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.6rem 2rem;
+            border-top: 1px solid var(--rule);
+            padding-top: 1.15rem;
+            margin-bottom: clamp(1.4rem, 3vw, 2rem);
+        }
+
+        .library-head h4 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: 1.28rem;
+            line-height: 1.5;
+            color: var(--ink);
+            margin: 0;
+        }
+
+        .library-head span {
+            font-family: var(--mono-font);
+            font-size: 0.68rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--ink-3);
+        }
+
+        .msx-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: clamp(0.8rem, 1.7vw, 1.3rem);
+        }
+
+        .msx-grid figure {
+            margin: 0;
+            background: var(--plate);
+            border: 1px solid var(--rule);
+            border-radius: 2px;
+            box-shadow: 0 1px 2px rgba(20, 23, 26, 0.05),
+                0 14px 26px -20px rgba(20, 23, 26, 0.28);
+            padding: 0.5rem 0.5rem 0.4rem;
+            transition: box-shadow 380ms cubic-bezier(0.23, 1, 0.32, 1),
+                transform 380ms cubic-bezier(0.23, 1, 0.32, 1);
+        }
+
+        .msx-grid figure:hover {
+            box-shadow: var(--shadow-lift);
+            transform: translateY(-5px);
+        }
+
+        .msx-grid .field {
+            padding: 0.4rem;
+            border-bottom: 0;
+        }
+
+        .msx-grid figcaption {
+            display: block;
+            padding: 0.5rem 0.15rem 0;
+            font-family: var(--mono-font);
+            font-size: 0.6rem;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            line-height: 1.7;
+            color: var(--ink-3);
+        }
+
+        .msx-grid figcaption b {
+            display: block;
+            color: var(--ink);
+            font-weight: 500;
+            letter-spacing: 0.1em;
+        }
+
+        .msx-grid .field img {
+            image-rendering: pixelated;
         }
 
         /* ── Copy column ──────────────────────────────────────────────────── */
@@ -899,7 +1038,8 @@
             }
 
             .plate:hover,
-            .diptych figure:hover {
+            .diptych figure:hover,
+            .msx-grid figure:hover {
                 transform: none;
             }
         }
@@ -943,9 +1083,17 @@
                 padding-top: 1.4rem;
                 border-top: 1px solid var(--rule);
             }
+
+            .msx-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
         }
 
         @media (max-width: 620px) {
+            .hero-content h1 {
+                font-size: clamp(2rem, 9.5vw, 2.9rem);
+            }
+
             .band-head {
                 grid-template-columns: minmax(0, 1fr);
                 gap: 0.7rem;
@@ -962,6 +1110,10 @@
 
             .diptych {
                 grid-template-columns: minmax(0, 1fr);
+            }
+
+            .msx-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             .entry+.entry {
@@ -1000,25 +1152,28 @@
     <!-- Hero -->
     <header>
         <div class="hero-content">
-            <p class="hero-kicker">B-System · BTRON 3.20 · Media</p>
-            <h1 class="jp-title">つくる人の、OS。</h1>
+            <p class="hero-kicker">B-System · BTRON 3.20 · Media OS</p>
+            <h1 class="jp-title">メディアのOS。</h1>
             <div class="hero-rule"></div>
             <p class="hero-lede">
-                音をとりに、紙を組み、立体をつくり、映像を切る。<br>
-                そのための四つのアプリケーションと、ゲームのための七つの席。<br>
-                どちらも、標準 C99 でクリーンルームに書き直した一つの BTRON3 の上で動いています。
+                メディアは、後から載せるものではありません。OS の約束の、いちばん前にあるものです。<br>
+                BeOS が示したメディア OS の設計を、BTRON3 の実身／仮身モデルの上で作り直しました。平面ごとの CPU 予算とハードリアルタイムの約束を、カーネルの最初の一行から数えています。<br>
+                1 MB 以下の組み込み機から SMP のワークステーションまでを走らせるのは、同じ標準 C99 の出典です。速いのは、軽いから。軽いのは、はじめからメディアのためだけに設計したからです。
             </p>
             <p class="hero-lede-en">
-                Two families, one machine. The authoring side of B-System is a digital audio workstation, a desktop
-                publishing system, a 3D system and a non-linear editor. The playing side is a launcher, a game SDK and
-                five machine environments. Every plate below says plainly whether the product ships today, runs on real
-                console silicon, or is only announced.
+                Multimedia is not something you bolt on. It is something you design in. B-System is a media operating
+                system in the sense BeOS showed — one kernel, one hypermedia document model, and hard CPU budgets per
+                plane, counted from the first line of the kernel instead of forgiven at the last. The same standard C99
+                sources boot an embedded MCU under a megabyte, where interrupt determinism holds below five
+                microseconds and nothing is allocated after boot, and a 64-bit UEFI symmetric-multiprocessing
+                workstation, where every process keeps its own address space and messages still cross without a context
+                switch. Fast, because it is lean. Lean, because it was never anything but media.
             </p>
             <div class="hero-marks">
-                <span>48 kHz / 44.1 kHz</span>
-                <span>8 windows · 32 programs</span>
-                <span>1024-frame host period</span>
-                <span>4 products · 7 seats</span>
+                <span>Tier 1 · ≤ 1 MB MCU · Δt &lt; 5 µs</span>
+                <span>Tier 2 · UEFI SMP · per-process PML4</span>
+                <span>48 kHz · 1024-frame period</span>
+                <span>19 windows on one desk</span>
             </div>
         </div>
         <a class="scroll-cue" href="#opening">Scroll<i></i></a>
@@ -1044,7 +1199,7 @@
                     </figcaption>
                 </figure>
                 <p class="opening-note reveal">
-                    下のすべての窓は、この机の上にあります。十一の札は別々の製品ではなく、同じ約束の十一の使い方です。
+                    下のすべての窓は、この机の上にあります。十九の札は別々の製品ではなく、同じ約束の十九の使い方です。
                     Every window on this page is cut from the framebuffer of one operating system, on this desk,
                     at this resolution.
                 </p>
@@ -1052,13 +1207,332 @@
         </section>
 
         <!-- ═══════════════════════════════════════════════════════════ -->
-        <!-- PART 1: AUTHORING APPLICATIONS                              -->
+        <!-- PART 1: SYSTEM APPLICATIONS                                 -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <section id="system">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">01 / System</span>
+                    <h2 class="jp-title">第一部：システムアプリケーション</h2>
+                    <p class="band-eyebrow">Editor · Terminal · Browser · Cabinet · Volumes</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+メディアの前に、机には五つの標準窓があります。文書編集、端末、ブラウザ、キャビネット、ボリューム — 書く、起動する、読む、並べる、載せるという五つの基本動作が、そのまま五つの窓になりました。創作アプリもゲームもこの上に載っています。オーケストラのセッションファイルは文書編集が読む文書であり、キャビネットが並べる実身であり、ボリュームが載せるブロックの上にあります。だからこの部を最初の部に据えました。なお窓枠には二つの様式があります。既定は BeOS と CWM 調のスライディングタブ、もう一方が PMC Cho-Kanji の立体ベベルで、下の図版はその両方から採っています。
+                    </p>
+                    <p class="en">
+                        Five standard windows come before the media products: write, launch, read, file, mount. An
+                        operating system that cannot show its own editor and terminal has nothing to put media on.
+                        Every plate is that window as it drew on the running desk, in either of the two compiled
+                        window-chrome styles.
+                    </p>
+                </div>
+
+                <!-- 1. Editor -->
+                <div class="showcase reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Editor_Menu_Opened.png" width="770" height="516"
+                                    alt="文書編集 (Editor) — ファイルメニュー展開と本文、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Editor</b> — File menu opened</span>
+                                <span>770 × 516 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                        <div class="strip">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/TEditor_Application.png" width="770" height="516"
+                                        alt="T-Editor 基本文章編集の本文窓">
+                                </div>
+                                <figcaption>T-Editor</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Editor_Chokanji.png" width="770" height="516"
+                                        alt="PMC Cho-Kanji 様式の窓枠で描いた同じ文書">
+                                </div>
+                                <figcaption>Cho-Kanji frame</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Editor_About.png" width="530" height="306"
+                                        alt="バージョン情報ダイアログ、透過実身抽出">
+                                </div>
+                                <figcaption>About</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">01 — Editor / TAD word processor</p>
+                        <h3 class="jp-title">文書編集 (Editor) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+TRON Application Databox 準拠の標準マルチメディア・リッチテキストエディタです。TRON 多言語文字コードとインラインの図形プリミティブと仮身の埋め込みリンクを、ひとつの文書の内で混ぜて編集します。創作四題が書き出すものの読み手がこれなので、机の一等席に置いています。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>文書形式</strong><span>TAD 準拠。図もリンクも本文と同じレコード列</span></li>
+                            <li><strong>混植</strong><span>多言語文字コード・図形・仮身リンクを単一文書で</span></li>
+                            <li><strong>入力</strong><span>TIP 経由の Mozc 連携</span></li>
+                            <li><strong>窓枠</strong><span>既定の BeOS 調タブと Cho-Kanji 立体ベベルの二様式</span></li>
+                        </ul>
+                        <p class="en">
+                            The same document under the second chrome style is the middle plate: the frame changes, the
+                            text, figures and embedded virtual bodies do not.
+                        </p>
+                        <a class="entry" href="b-system/apps/Editor.html">文書形式と編集操作 →</a>
+                    </div>
+                </div>
+
+                <!-- 2. Terminal -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Terminal_Menu_Opened.png" width="570" height="396"
+                                    alt="端末 (Terminal) — GTerm のファイルメニュー展開とシェル対話、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>GTerm</b> — File menu opened</span>
+                                <span>570 × 396 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                        <div class="strip">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Terminal_Application.png" width="570" height="396"
+                                        alt="端末の実行窓">
+                                </div>
+                                <figcaption>Console</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Terminal_Settings.png" width="550" height="486"
+                                        alt="端末の設定窓、配色とパレット">
+                                </div>
+                                <figcaption>Settings</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Terminal_Chokanji.png" width="570" height="396"
+                                        alt="PMC Cho-Kanji 様式の窓枠で描いた端末窓">
+                                </div>
+                                <figcaption>Cho-Kanji frame</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">02 — Terminal / console</p>
+                        <h3 class="jp-title">端末 (Terminal) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+POSIX の CLI シェルと T-Kernel のコンソールをひとつにまとめた端末エミュレータです。ANSI 制御シーケンスと UTF-8／TRON Code、多重のカラーパレット、リング状のスクロールバックを持ちます。次の部の CLU は、この窓の中の dispatch 呼び出しから実身を駆動します。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>文字体系</strong><span>UTF-8 と TRON Code、ANSI 制御シーケンスを同じバッファで</span></li>
+                            <li><strong>履歴</strong><span>可変長のリングバッファスクロールバック</span></li>
+                            <li><strong>配色</strong><span>多重パレット。設定窓から切り替えます</span></li>
+                            <li><strong>つながり</strong><span>shell_execute_cmd が CLU の動詞を呼ぶ</span></li>
+                        </ul>
+                        <p class="en">
+                            The terminal is where the two halves of the desk meet: media products write real bodies,
+                            and the console names them.
+                        </p>
+                        <a class="entry" href="b-system/apps/Terminal.html">端末エミュレータの仕様 →</a>
+                    </div>
+                </div>
+
+                <!-- 3, 4, 5 — the reading, filing and mounting row -->
+                <div class="plate-row reveal">
+                    <div class="cell">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Browser_Menu_Opened.png" width="730" height="536"
+                                    alt="ブラウザ (Browser) — TAD 文書の閲覧とファイルメニュー、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>730 × 536 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">03 — Browser / TAD reader</p>
+                        <h4 class="jp-title">ブラウザ (Browser) <span class="stamp stamp-live">公開中</span></h4>
+                        <p>
+BTRON3 準拠の TAD ハイパーテキスト・電子ブック閲覧器です。ふせん移動と履歴スタックと埋め込み図形を、このページの仕様書と同じ文書モデルの上で描きます。
+                        </p>
+                        <p class="en">
+                            The document viewer that reads this site's own specification pages as native TAD records.
+                        </p>
+                        <a class="entry" href="b-system/apps/Browser.html">閲覧器の仕様 →</a>
+                    </div>
+                    <div class="cell">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Cabinet_Menu_Opened.png" width="570" height="396"
+                                    alt="キャビネット (Cabinet) — 実身一覧とファイルメニュー、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>570 × 396 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">04 — Cabinet / filing</p>
+                        <h4 class="jp-title">キャビネット (Cabinet) <span class="stamp stamp-live">公開中</span></h4>
+                        <p>
+実身と仮身を、階層に縛られずに辿るファイリングマネージャです。双方向リンクの多重構造を机の上で見せ、属性インスペクタでレコードまで降ります。
+                        </p>
+                        <p class="en">
+                            Path-free filing: the hypermedia graph itself is the directory.
+                        </p>
+                        <a class="entry" href="b-system/apps/Cabinet.html">実身・仮身の探索 →</a>
+                    </div>
+                    <div class="cell">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/DriveSetup_Menu_Opened.png" width="750" height="548"
+                                    alt="ボリューム (Volumes) — ディスクメニューと区画操作、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>750 × 548 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">05 — Volumes / storage</p>
+                        <h4 class="jp-title">ボリューム (Volumes) <span class="stamp stamp-live">公開中</span></h4>
+                        <p>
+POSIX の生デバイスを見つけて、MBR／GPT の区画表を初期化し、B-FS V1／V2 でフォーマットし、マウントとアンマウントをノンブロッキングで回す、純粋 C99 のストレージ管理窓です。
+                        </p>
+                        <p class="en">
+                            Everything above this row is ultimately a block on a volume this window mounted.
+                        </p>
+                        <a class="entry" href="b-system/apps/Volumes.html">区画とフォーマットの仕様 →</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- PART 2: CLU APPLICATIONS                                    -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <section id="clu">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">02 / CLU</span>
+                    <h2 class="jp-title">第二部：CLU アプリケーション</h2>
+                    <p class="band-eyebrow">Sokhatsky Commander Suite · CLU Commands</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+コマンドラインから机を駆動するのが第二の部です。端末窓の中で動く四面 — Sokhatsky Commander の sc、Terminal Vision の tv、逆アセンブルを備えた Binary Editor の be、単体のシェル sh — と、gterm の dispatch が呼ぶ二十の実身動詞が、同じツリーに同じ C99 で置かれています。BusyBox や chimerautils の移植層ではありません。実身と仮身のマルチレコード構造を直接読むので、パスの代わりにふせんを一覧に出せます。
+                    </p>
+                    <p class="en">
+                        The second family is command-line: four terminal panes and twenty verbs, in the same tree as
+                        the kernel they file into. Nothing here is a port of a Unix toolbox, and that is the point — a
+                        tool that reads real-body records can show a document; a tool that reads inodes cannot.
+                    </p>
+                </div>
+
+                <!-- 6. Sokhatsky Commander suite -->
+                <div class="showcase reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Commander_SC.png" width="1130" height="511"
+                                    alt="ファイル管理 (Commander) — Sokhatsky Commander の二面パネルと終了確認、端末窓の実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>sc</b> — Dual-pane file manager</span>
+                                <span>1130 × 511 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                        <div class="strip">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Commander_TV.png" width="1130" height="511"
+                                        alt="Terminal Vision の検索ダイアログ">
+                                </div>
+                                <figcaption>tv — find</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Commander_BE.png" width="1130" height="511"
+                                        alt="Binary Editor のアーキテクチャ選択ダイアログ">
+                                </div>
+                                <figcaption>be — architecture</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Commander_BE_X64.png" width="1130" height="511"
+                                        alt="Binary Editor の EM64T 逆アセンブル表示">
+                                </div>
+                                <figcaption>be — EM64T disasm</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">06 — Suite / Sokhatsky Commander</p>
+                        <h3 class="jp-title">ファイル管理 (Commander) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+キーボード駆動の左右二面パネルです。sc が実身を並べ、tv が多言語と禁則処理つきで文書を読み、be が hex と五つの命令体系の逆アセンブルを同じ窓に出します。純粋 C99・NASA/JPL Power of Ten 準拠・依存ゼロで、POSIX ホストには bin/sc と bin/tv のターゲットが立っています。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>sc</strong><span><code>sc.c</code>、<code>files.c</code>、<code>input.c</code>、<code>menus.c</code> の二面パネル</span></li>
+                            <li><strong>tv</strong><span>CJK 全角とチベット合字、禁則改行、2048 行のバッファ</span></li>
+                            <li><strong>be</strong><span>x86-64 / AArch64 / AArch32 / RISC-V / PowerPC の disassembler</span></li>
+                            <li><strong>sh</strong><span><code>src/clu/sh/sh.c</code> — まだ机のリンクに載らない単体出典</span></li>
+                        </ul>
+                        <ul class="missing">
+                            <li>図版は実行中の端末窓からそのまま採ったものです</li>
+                            <li>窓の内側の termios 組み込みは、clu 側がまだ未提供と申告しています</li>
+                        </ul>
+                        <p class="en">
+                            The panes are honest about their own status: the frames came out of the running terminal
+                            window, and in-window termios embedding is still declared unavailable by the command that
+                            would start it.
+                        </p>
+                        <a class="entry" href="b-system/apps/Commander.html">ファイル管理の仕様 →</a>
+                    </div>
+                </div>
+
+                <!-- 7. CLU verbs -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="spec-plate">
+<pre>gterm <b>shell_execute_cmd</b>  →  clu_verb(args, out, ud)
+
+  <b>cd ls fs stat info finfo</b>     traverse &amp; inspect
+  <b>tp mkf cp ln rm ren empf</b>     move &amp; refile
+  <b>apd chmod touch chtime</b>       attributes
+  <b>df sync quake</b>                volume · clock · launch
+
+apps   <em>clu_launch_app</em>  xmb | glgears | lilcu
+recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
+                            <figcaption>CLU — twenty verbs, one dispatch, zero ports</figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">07 — CLU / Command Line Utilities</p>
+                        <h3 class="jp-title">CLU コマンド (BTRON Commands) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+実身／仮身のマルチレコードを直接駆動するネイティブのコマンド群です。二十の動詞が gterm の一列の dispatch から呼ばれ、各コマンドは将来、独立したワンショット ELF（型 9 の実行プログラムレコード RT_PROG）として /SYS/bin に置かれます。MIPS R5900、ARM32／64、x86-64、M68k で同じ決定論的な動きをねらう設計です。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>呼び出し</strong><span>端末窓の dispatch 一行から二十の動詞へ</span></li>
+                            <li><strong>レコード</strong><span>RT_PROG（型 9）と OBJ_EXEC フラグの実身</span></li>
+                            <li><strong>依存</strong><span>BusyBox も chimerautils も移植していません</span></li>
+                            <li><strong>約束</strong><span>ゼロヒープと NASA/JPL Power of Ten</span></li>
+                        </ul>
+                        <p class="en">
+                            The rationale page puts the choice plainly: a general-purpose toolbox would have to flatten
+                            the document model before it could list it.
+                        </p>
+                        <a class="entry" href="b-system/apps/Commands.html">動詞の一覧と設計理由 →</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- PART 3: AUTHORING APPLICATIONS                             -->
         <!-- ═══════════════════════════════════════════════════════════ -->
         <section id="applications">
             <div class="wrap">
                 <div class="band-head reveal">
-                    <span class="band-index">01 / Authoring</span>
-                    <h2 class="jp-title">第一部：創作アプリケーション</h2>
+                    <span class="band-index">03 / Authoring</span>
+                    <h2 class="jp-title">第三部：創作アプリケーション</h2>
                     <p class="band-eyebrow">DAW · DPS · 3DS · NLE</p>
                 </div>
 
@@ -1076,7 +1550,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                     </p>
                 </div>
 
-                <!-- 1. Orchestra — DAW -->
+                <!-- 8. Orchestra — DAW -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1114,7 +1588,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">01 — DAW / Digital Audio Workstation</p>
+                        <p class="role">08 — DAW / Digital Audio Workstation</p>
                         <h3 class="jp-title">管弦楽 (Orchestra) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 ステージのための DAW。使い手を Rock（生バンド）、Classic（声と古典楽器）、Orchestra（フィルハーモニー配置）の三つに固定し、三十二のプログラムをすべて手書きの合成手続きで鳴らします。
@@ -1135,7 +1609,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                     </div>
                 </div>
 
-                <!-- 2. Clarity — DPS -->
+                <!-- 9. Clarity — DPS -->
                 <div class="showcase flip reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1150,7 +1624,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">02 — DPS / Desktop Publishing System</p>
+                        <p class="role">09 — DPS / Desktop Publishing System</p>
                         <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 DTP 出版組版環境。和式の伝統判型十四種と、チベット横長ペーチャ経典の組版仕様を、同じエンジン上の二つの紙として扱います。画面の像素ではなく頁の幾何が正しさの単位になる分野で、原稿リンクから印刷所入稿用 PDF までを一手順で通します。
@@ -1169,10 +1643,10 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                     </div>
                 </div>
 
-                <!-- 3 & 4 — announced, no screenshots -->
+                <!-- 10 & 11 — announced, no screenshots -->
                 <div class="announced reveal">
                     <div class="announced-card">
-                        <p class="role">03 — 3DS / 3D System</p>
+                        <p class="role">10 — 3DS / 3D System</p>
                         <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 立体をつくる 3D システム。まだお届けしていません。この札に載っているのは宣言だけです。ただしかに床は動いています。B-GL は TinyGL のソフトウェアラスタライザと VirtIO-GPU（virgl）の二つを本番バックエンドとして持ち、ローポリのシーングラフは Lil Cu 64 と MSX の Geo3D が毎日すでに走らせています。
@@ -1190,7 +1664,7 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                         <a class="entry" href="b-media/gl.html">基盤 B-GL の仕様 →</a>
                     </div>
                     <div class="announced-card">
-                        <p class="role">04 — NLE / Non-Linear Editor</p>
+                        <p class="role">11 — NLE / Non-Linear Editor</p>
                         <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
                             映像を切る非線形エディタ。こちらも届け前です。消費する側の図面はすでに書かれています。
@@ -1214,30 +1688,30 @@ B-Video は表示経路とフレームバッファと再生契約を、B-Media �
         </section>
 
         <!-- ═══════════════════════════════════════════════════════════ -->
-        <!-- PART 2: CROSS MEDIA BAR, SDK AND MACHINES                   -->
+        <!-- PART 4: CROSS MEDIA BAR, SDK, QUAKE AND MACHINES            -->
         <!-- ═══════════════════════════════════════════════════════════ -->
         <section id="machines">
             <div class="wrap">
                 <div class="band-head reveal">
-                    <span class="band-index">02 / Playing</span>
-                    <h2 class="jp-title">第二部：クロスメディアバーとゲームの機</h2>
-                    <p class="band-eyebrow">XMB · B-Game SDK · MSX · Genesis · Amiga · Iris · Ares</p>
+                    <span class="band-index">04 / Playing</span>
+                    <h2 class="jp-title">第四部：クロスメディアバーとゲームの機</h2>
+                    <p class="band-eyebrow">XMB · B-Game SDK · Quake · MSX · Iris · Genesis · Amiga · Ares</p>
                 </div>
 
                 <div class="band-intro reveal">
                     <p>
-遊び側は七つの席です。起動のバー（XMB）、ゲームをつくる SDK、そして五つの機械 — MSX、メガドライブ、アミーガ、Iris（PS2）、Ares（N64）。この中でいちばん出来ているのは MSX です。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個のコアとして書き、ウィンドウマネージャに組み込み、カートリッジを窓の中の実身として読みます。Iris はエミュレータではなく、B-System が
+遊び側は八つの席です。起動のバー（XMB）、ゲームをつくる SDK、クリーンルームで書き直した軽量クライアント（Quake）、そして五つの機械 — MSX、Iris（PS2）、メガドライブ、アミーガ、Ares（N64）。この中でいちばん出来ているのは MSX です。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個のコアとして書き、ウィンドウマネージャに組み込み、カートリッジを窓の中の実身として読みます。Iris はエミュレータではなく、B-System が
 PlayStation 2 の実機そのものに起動する席です。メガドライブとアミーガと Ares は、席だけを置いています。
                     </p>
                     <p class="en">
-                        One launcher, one SDK, five machine environments. One machine emulates today, one is the
-                        operating system booting on real console silicon, and three are placeholders with a directory
-                        and a name. A launcher that pretends to boot a cartridge nobody has written is worse than a
+                        One launcher, one SDK, one cleanroom game client, five machine environments. One machine
+                        emulates today, one is the operating system booting on real console silicon, and three are
+                        placeholders with a directory and a name. A launcher that pretends to boot a cartridge nobody has written is worse than a
                         launcher with fewer tiles, so the tiles are labelled.
                     </p>
                 </div>
 
-                <!-- 5. XMB -->
+                <!-- 12. XMB -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1252,7 +1726,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">05 — Launcher</p>
+                        <p class="role">12 — Launcher</p>
                         <h3 class="jp-title">クロスメディアバー (XMB) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 水平のカテゴリ軸と垂直のアイテム軸で行き来する、二軸クロスの統合メディアランチャーです。背景ではリアルタイムの正弦波シェーダーがうねり、実身／仮身のハイパーメディア空間を大画面・ゲームパッド・キーボードで速く閲覧し、速く実行します。
@@ -1270,7 +1744,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                 </div>
 
-                <!-- 6. Game SDK -->
+                <!-- 13. Game SDK -->
                 <div class="showcase flip reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1285,7 +1759,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">06 — B-Game SDK / B-Sound DSP</p>
+                        <p class="role">13 — B-Game SDK / B-Sound DSP</p>
                         <h3 class="jp-title">リル・キューブ 64 (SDK) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーングラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓の中で時間を共有しています。創作側と遊び側が出会うのはここです。
@@ -1305,8 +1779,65 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                 </div>
 
-                <!-- 7. MSX -->
+                <!-- 14. Quake -->
                 <div class="showcase reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/apps/img/Quake_Start.png" width="672" height="288"
+                                    alt="Quake Light Sport — スタートハブ、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Quake</b> — Entrance hub</span>
+                                <span>672 × 288 · 21:9</span>
+                            </figcaption>
+                        </figure>
+                        <div class="strip">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/apps/img/Quake_E1M1.png" width="672" height="288"
+                                        alt="E1M1 The Slipgate Complex の出発視点">
+                                </div>
+                                <figcaption>E1M1 — Slipgate</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/apps/img/Quake_E1M5.png" width="672" height="288"
+                                        alt="E1M5 の出発視点">
+                                </div>
+                                <figcaption>E1M5</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/apps/img/Quake_Enemy_Demon.png" width="672" height="288"
+                                        alt="敵モデルの描画確認">
+                                </div>
+                                <figcaption>Enemy — Demon</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">14 — Light client / Episode 1</p>
+                        <h3 class="jp-title">Quake Light Sport <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+id Software の Quake 1 に対して、クリーンルームで書き直した C99 の軽量クライアントです。約五千行をエンジン本体、VirtIO-GPU レンダラ、QuakeC のバイトコード VM、BSP ワールドの四つに分け、共有データの pak0.pak はそのまま読みます。下の図版はすべて spawn 視点から <code>make quake-screens</code> が自動で採ったものです。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>行数</strong><span>約 5 000 行の C99、四つのまとまり</span></li>
+                            <li><strong>読み込み</strong><span>BSP 一本あたり 2 ms 未満（1 GHz の POSIX ホスト）</span></li>
+                            <li><strong>描画</strong><span>OpenGL ES 1.1 と VirGL のソフトウェアラスタ。エミュレーションも VM もブラウザもない</span></li>
+                            <li><strong>的</strong><span>T-Kernel 2.02、UEFI の x86-64、AArch64、POSIX。PS2 はダイヤルで退避中</span></li>
+                        </ul>
+                        <p class="en">
+                            A cleanroom client rather than a port, and the nine levels of Episode 1 are the regression
+                            suite: every frame here is produced by the build, not chosen by hand.
+                        </p>
+                        <a class="entry" href="b-system/apps/Quake.html">エンジンとレベルの仕様 →</a>
+                    </div>
+                </div>
+
+                <!-- 15. MSX -->
+                <div class="showcase flip reveal">
                     <div class="plate-column">
                         <div class="diptych">
                             <figure>
@@ -1318,15 +1849,15 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                             </figure>
                             <figure>
                                 <div class="field">
-                                    <img src="b-system/img/screens/MSX_BadApple.png" width="538" height="543"
-                                        alt="MSX 上で実行中の Bad Apple デモ、V9938 描画の実機抽出">
+                                    <img src="b-system/img/screens/B_MSX_Menu_Opened.png" width="538" height="543"
+                                        alt="ゲームシステム (MSX) — メニュー展開、実機フレームバッファから自動抽出">
                                 </div>
-                                <figcaption>Bad Apple — V9938 output</figcaption>
+                                <figcaption><b>MSX</b> — File menu opened</figcaption>
                             </figure>
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">07 — Machine / MSX1 … MSX2</p>
+                        <p class="role">15 — Machine / MSX1 … turboR</p>
                         <h3 class="jp-title">ゲームシステム (MSX) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
                             カートリッジ実行環境。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個の C
@@ -1350,8 +1881,88 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                 </div>
 
-                <!-- 8. Iris (PS2) -->
-                <div class="showcase flip reveal">
+                <!-- 15a. Cartridge library — every title the machine draws -->
+                <div class="library reveal">
+                    <div class="library-head">
+                        <h4 class="jp-title">カートリッジ・ライブラリ — 十の札、すべて実行中の窓から</h4>
+                        <span>10 titles · 538 × 543 · headless capture</span>
+                    </div>
+                    <div class="msx-grid">
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_XRacing.png" width="538" height="543"
+                                    alt="XRacing — MSX1 / TMS9918A の起動画面">
+                            </div>
+                            <figcaption><b>XRacing</b>MSX1 · TMS9918A</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_Yazzier.png" width="538" height="543"
+                                    alt="YAZZIER — MSX1 のタイトルカード">
+                            </div>
+                            <figcaption><b>YAZZIER</b>MSX1 · title card</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_C0man.png" width="538" height="543"
+                                    alt="c0man — MSX1 のハイスコア表">
+                            </div>
+                            <figcaption><b>c0man</b>MSX1 · high scores</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_LodeRunner.png" width="538" height="543"
+                                    alt="Lode Runner — カートリッジ実行の画面">
+                            </div>
+                            <figcaption><b>Lode Runner</b>cartridge</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_LodeRunner2.png" width="538" height="543"
+                                    alt="Lode Runner II — カートリッジ実行の画面">
+                            </div>
+                            <figcaption><b>Lode Runner II</b>cartridge</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_DynamiteGoGo.png" width="538" height="543"
+                                    alt="Dynamite Go! Go! — MSX2 JP / V9938 のタイトル">
+                            </div>
+                            <figcaption><b>Dynamite Go! Go!</b>MSX2 JP · V9938</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_BadApple.png" width="538" height="543"
+                                    alt="Bad Apple — MSX2+ / V9958 のシルエット描画">
+                            </div>
+                            <figcaption><b>Bad Apple</b>MSX2+ · V9958</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_Bullrush.png" width="538" height="543"
+                                    alt="BULLRUSH — MegaROM 実行の画面">
+                            </div>
+                            <figcaption><b>BULLRUSH</b>MegaROM</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_NeonRevenant.png" width="538" height="543"
+                                    alt="NEON REVENANT — Geo3D エンジンの画面">
+                            </div>
+                            <figcaption><b>Neon Revenant</b>Geo3D engine</figcaption>
+                        </figure>
+                        <figure>
+                            <div class="field">
+                                <img src="b-system/img/screens/MSX_NightRaven.png" width="538" height="543"
+                                    alt="NIGHT RAVEN GEO3D — Geo3D Hardware Pipeline の画面">
+                            </div>
+                            <figcaption><b>Night Raven</b>Geo3D hardware</figcaption>
+                        </figure>
+                    </div>
+                </div>
+
+                <!-- 16. Iris (PS2) -->
+                <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="spec-plate">
 <pre>src/drivers/ps2/
@@ -1371,7 +1982,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">08 — Console / native target</p>
+                        <p class="role">16 — Console / native target</p>
                         <h3 class="jp-title">イリス (Iris PS2) <span class="stamp stamp-silicon">実機稼働</span></h3>
                         <p>
                             Iris はエミュレータではありません。B-System が PlayStation 2 の実機そのものに起動します。
@@ -1393,10 +2004,10 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     </div>
                 </div>
 
-                <!-- 9, 10, 11 — reserved seats -->
+                <!-- 17, 18, 19 — reserved seats -->
                 <div class="announced reveal">
                     <div class="announced-card">
-                        <p class="role">09 — Machine / announced</p>
+                        <p class="role">17 — Machine / announced</p>
                         <h4 class="jp-title">メガドライブ (Genesis) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 席だけの宣言です。<code>src/emulators/sega/</code> はツリーにありますが、中には空の目印だけが置いてあります。68000 のコアも、VDP の再現も、まだ書かれていません。
@@ -1408,7 +2019,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         <p class="en">Genesis is a reserved seat. No core, no frame, no screenshot.</p>
                     </div>
                     <div class="announced-card">
-                        <p class="role">10 — Machine / announced</p>
+                        <p class="role">18 — Machine / announced</p>
                         <h4 class="jp-title">アミーガ (Amiga) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 同じく席だけです。<code>src/emulators/amiga/</code> は空の目印を持つプレースホルダです。なお 68000 系の CPU そのものはカーネルの側に存在します。<code>src/cores/core_m68k.c</code>
@@ -1425,7 +2036,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         </p>
                     </div>
                     <div class="announced-card">
-                        <p class="role">11 — Machine / plan only</p>
+                        <p class="role">19 — Machine / plan only</p>
                         <h4 class="jp-title">アレス (Ares N64) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェアバックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
@@ -1446,33 +2057,33 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
         </section>
 
         <!-- ═══════════════════════════════════════════════════════════ -->
-        <!-- PART 3: THE GROUND UNDER BOTH FAMILIES                      -->
+        <!-- PART 5: THE GROUND UNDER THE FOUR BANDS                     -->
         <!-- ═══════════════════════════════════════════════════════════ -->
         <section id="ground" class="ledger">
             <div class="wrap">
                 <div class="band-head reveal">
-                    <span class="band-index">03 / Substrate</span>
-                    <h2 class="jp-title">第三部：同じ床</h2>
+                    <span class="band-index">05 / Substrate</span>
+                    <h2 class="jp-title">第五部：同じ床</h2>
                     <p class="band-eyebrow">Four constants · one audio path · one window contract</p>
                 </div>
 
                 <div class="band-intro reveal">
                     <p>
-十一の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。創作アプリもゲームも、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。だから「四つのアプリと七つの席」は別々の製品の寄せ集めではなく、同じ約束の十一の使い方です。
+十九の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。システム五窓もコマンドライン二席も創作四題もゲーム八席も、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。だから十九は別々の製品の寄せ集めではなく、同じ約束の十九の使い方です。
                     </p>
                     <p class="en">
-                        The eleven tiles are made of four constants, one audio path and one window contract. Authoring
-                        and playing share the per-plane CPU and buffer budgets, the same interleaved PCM written to the
-                        same device, and the same real-body / virtual-body document model. That is why the two families
-                        are one operating system rather than a bundle — and every number on this page is readable in the
-                        sources it comes from.
+                        The nineteen tiles are made of four constants, one audio path and one window contract. System
+                        windows, command line, authoring and playing all share the per-plane CPU and buffer budgets, the
+                        same interleaved PCM written to the same device, and the same real-body / virtual-body document
+                        model. That is why four bands are one operating system rather than a bundle — and every number
+                        on this page is readable in the sources it comes from.
                     </p>
                 </div>
 
                 <div class="code-snippet reveal">sample rates   48000 | 44100 Hz          host period 1024 frames     render quantum Q = 32
 plane budgets  UI   8333 µs / 4000 µs       INPUT  1000 µs /  500 µs
 one audio path virtiosnd — AUDIO_S16LSB, interleaved       session file 73,408 bytes
-two families   4 authoring products  +  7 seats on the launcher</div>
+four parts     5 system + 2 CLU  +  4 authoring  +  8 playing  =  19</div>
 
                 <div class="foundation-marks reveal">
                     <a class="entry" href="b-media/index.html">B-Media：パイプラインと予算 →</a>
@@ -1488,17 +2099,22 @@ two families   4 authoring products  +  7 seats on the launcher</div>
             <div class="wrap wrap-narrow">
                 <h2 class="jp-title reveal">一枚のデスクから始める</h2>
                 <p class="reveal">
-どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれにも、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
+どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。文書編集で一行書き、端末で sc を呼んで二面パネルを開き、オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれにも、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
                 </p>
                 <p class="en reveal">
-                    Every tile is a window on one desk. Open the Workbench, choose one thing, and the specification
-                    behind that tile is ordered the same way: what the window is, how it is operated, and how it is built.
+                    Every tile is a window on one desk. Open the Workbench and choose one thing — write a line, call
+                    sc from the terminal, record a piece, set a page, run a cartridge — and the specification behind
+                    that tile is ordered the same way: what the window is, how it is operated, and how it is built.
                 </p>
                 <div class="closing-entries reveal">
+                    <a class="entry" href="b-system/apps/Editor.html">文書編集 →</a>
+                    <a class="entry" href="b-system/apps/Terminal.html">端末 →</a>
+                    <a class="entry" href="b-system/apps/Commander.html">Commander →</a>
                     <a class="entry" href="b-system/apps/Orchestra.html">管弦楽 →</a>
                     <a class="entry" href="b-system/apps/Clarity.html">電子帳票 →</a>
                     <a class="entry" href="b-system/apps/XMB.html">XMB →</a>
                     <a class="entry" href="b-system/apps/MSX.html">MSX →</a>
+                    <a class="entry" href="b-system/apps/Quake.html">Quake →</a>
                     <a class="entry" href="index.html">B-System 全体 →</a>
                     <a class="entry" href="releases.html">リリース →</a>
                 </div>
@@ -1517,6 +2133,19 @@ two families   4 authoring products  +  7 seats on the launcher</div>
             </div>
 
             <div>
+                <h4>System &amp; CLU</h4>
+                <ul>
+                    <li><a href="b-system/apps/Editor.html"><b>Editor:</b> TAD Word Processor</a></li>
+                    <li><a href="b-system/apps/Terminal.html"><b>Terminal:</b> ANSI Console</a></li>
+                    <li><a href="b-system/apps/Browser.html"><b>Browser:</b> TAD Reader</a></li>
+                    <li><a href="b-system/apps/Cabinet.html"><b>Cabinet:</b> Real &amp; Virtual Bodies</a></li>
+                    <li><a href="b-system/apps/Volumes.html"><b>Volumes:</b> MBR/GPT &amp; B-FS</a></li>
+                    <li><a href="b-system/apps/Commander.html"><b>Commander:</b> sc · tv · be · sh</a></li>
+                    <li><a href="b-system/apps/Commands.html"><b>Commands:</b> 20 CLU Verbs</a></li>
+                </ul>
+            </div>
+
+            <div>
                 <h4>Media Products</h4>
                 <ul>
                     <li><a href="b-system/apps/Orchestra.html"><b>Orchestra:</b> Stage DAW</a></li>
@@ -1524,6 +2153,7 @@ two families   4 authoring products  +  7 seats on the launcher</div>
                     <li><a href="b-system/apps/SDK.html"><b>Lil Cu 64:</b> Game SDK &amp; B-Sound</a></li>
                     <li><a href="b-system/apps/XMB.html"><b>XMB:</b> Cross Media Bar</a></li>
                     <li><a href="b-system/apps/MSX.html"><b>MSX:</b> Cartridge Machine</a></li>
+                    <li><a href="b-system/apps/Quake.html"><b>Quake:</b> Cleanroom Light Client</a></li>
                     <li><a href="b-media/gl.html"><b>B-GL:</b> 3D Graphics Subsystem</a></li>
                 </ul>
             </div>

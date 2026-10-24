@@ -1332,6 +1332,19 @@ $(shell mkdir -p ./.build && echo '$(PS2_QUAKE)' >$(PS2_QUAKE_STAMP) && \
         rm -f $(QUAKE_SRCS:.c=.ps2.o) $(QUAKE_SRCS:.c=.pbench.o))
 $(info [PS2] PS2_QUAKE is now $(PS2_QUAKE) (was $(if $(PS2_QUAKE_PREV),$(PS2_QUAKE_PREV),unset)) -- the Quake units will rebuild)
 endif
+# PS2_NV is the same shape and the bigger half of the answer: 27 units, 3,414,308 B, and no
+# caller at all in this link.  Read the reason where the `$(filter-out)` sits, at
+# CLU_TERMIO_SRCS above.  The stamp is here because a park the objects do not know about is a
+# park that still charges 3.4 MB of .data -- mostly gm107.c's 1,382,528 B of opcode tables -- to
+# the image-budget ASSERT.
+PS2_NV         ?= 0
+PS2_NV_STAMP    = .build/ps2-nv.stamp
+PS2_NV_PREV    := $(shell cat $(PS2_NV_STAMP) 2>/dev/null)
+ifneq ($(PS2_NV_PREV),$(PS2_NV))
+$(shell mkdir -p ./.build && echo '$(PS2_NV)' >$(PS2_NV_STAMP) && \
+        rm -f $(NV_SRCS:.c=.ps2.o) $(NV_SRCS:.c=.pbench.o))
+$(info [PS2] PS2_NV is now $(PS2_NV) (was $(if $(PS2_NV_PREV),$(PS2_NV_PREV),unset)) -- the nvidia decoder units will rebuild)
+endif
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \

@@ -1,7 +1,9 @@
 #include "orchestra_desk.h"
 #include <apps/orch_chk.h>
 #include <btron/app_menu.h>
+#include <btron/event.h>
 #include <btron/troncode.h>
+#include <stdint.h>
 
 static APP_MENU_BAR s_menu;
 static int s_menu_ok;
@@ -567,39 +569,66 @@ static int add_hdr(const char *title, int w)
     return h;
 }
 
-static void add_item(int h, const char *label, int cmd)
+static void add_item(int h, const char *label, const char *accel, int cmd)
 {
     orch_check(h >= 0 && h < 8, __LINE__);
     orch_check(cmd > 0 && cmd < 1000, __LINE__);
-    if (h < 0) return;
-    (void)app_menu_add_item(&s_menu, h, label, "", cmd, TRUE);
+    if (h < 0 || !label || !accel) return;
+    (void)app_menu_add_item(&s_menu, h, label, accel, cmd, TRUE);
 }
 
 static void menu_file(void)
 {
-    int h = add_hdr("ファイル(F)", 96);
-    orch_check(h >= 0, __LINE__);
-    orch_check(h < 8, __LINE__);
-    add_item(h, "新規", 101);
-    add_item(h, "開く", 102);
-    add_item(h, "保存", 103);
-    add_item(h, "SMFを読み込む", 104);
-    add_item(h, "SMFを書き出す", 105);
-    add_item(h, "WAVを書き出す", 106);
-    add_item(h, "閉じる", 107);
+    int h = add_hdr("ファイル(F)", 104);
+    orch_check(h == 0, __LINE__);
+    orch_check(s_menu.header_count == 1, __LINE__);
+    add_item(h, "新規作成 (New)", "Ctrl+N", 101);
+    add_item(h, "開く (Open)", "Ctrl+O", 102);
+    add_item(h, "上書き保存 (Save)", "Ctrl+S", 103);
+    (void)app_menu_add_separator(&s_menu, h);
+    add_item(h, "SMFを読み込む (Load SMF)", "Ctrl+L", 104);
+    add_item(h, "SMFを書き出す (Save SMF)", "Ctrl+M", 105);
+    add_item(h, "WAVを書き出す (Export WAV)", "", 106);
+    (void)app_menu_add_separator(&s_menu, h);
+    add_item(h, "閉じる (Close)", "Ctrl+W", 107);
+}
+
+static void menu_concert(void)
+{
+    int h = add_hdr("コンサート(C)", 120);
+    orch_check(h == 1, __LINE__);
+    orch_check(s_menu.header_count == 2, __LINE__);
+    add_item(h, "再生 (Play)", "Space", 320);
+    add_item(h, "停止 (Stop)", "", 321);
+    add_item(h, "録音 (Record)", "Ctrl+R", 322);
+    add_item(h, "パニック (Panic)", "Ctrl+K", 317);
+    (void)app_menu_add_separator(&s_menu, h);
+    add_item(h, "クリック (Click)", "", 323);
+    add_item(h, "ロック (Rock)", "", 801);
+    add_item(h, "クラシック (Classic)", "", 802);
+    add_item(h, "オーケストラ (Orchestra)", "", 803);
+}
+
+static void menu_scene(void)
+{
+    int h = add_hdr("シーン(S)", 88);
+    orch_check(h == 2, __LINE__);
+    orch_check(s_menu.header_count == 3, __LINE__);
+    add_item(h, "送信 (Send)", "", 318);
+    add_item(h, "オクターブ (Octave)", "", 319);
 }
 
 static void menu_track(void)
 {
-    int h = add_hdr("トラック(T)", 96);
-    orch_check(h > 0, __LINE__);
-    orch_check(h < 8, __LINE__);
-    add_item(h, "追加", 201);
-    add_item(h, "削除", 205);
-    add_item(h, "AUX", 206);
-    add_item(h, "分割", 202);
-    add_item(h, "ベロシティ", 208);
-    add_item(h, "チャンネル", 204);
+    int h = add_hdr("トラック(T)", 104);
+    orch_check(h == 3, __LINE__);
+    orch_check(s_menu.header_count == 4, __LINE__);
+    add_item(h, "追加 (Add)", "Ctrl+T", 201);
+    add_item(h, "削除 (Delete)", "Ctrl+D", 205);
+    add_item(h, "分割 (Split)", "Ctrl+E", 202);
+    add_item(h, "ベロシティ (Velocity)", "", 208);
+    add_item(h, "チャンネル (Channel)", "", 204);
+    add_item(h, "リターン (AUX)", "", 206);
 }
 
 static void menu_num(char *b, int n)
@@ -616,57 +645,34 @@ static void menu_num(char *b, int n)
     b[2] = 0;
 }
 
-static void menu_stage(void)
+static void menu_device(void)
 {
-    int h = add_hdr("ステージ(S)", 96);
-    int i;
-    char b[4];
-    orch_check(h > 0, __LINE__);
-    orch_check(h < 8, __LINE__);
-    for (i = 1; i <= 16; i++) {
-        menu_num(b, i);
-        add_item(h, b, 300 + i);
-    }
-    add_item(h, "送信", 318);
-    add_item(h, "パニック", 317);
-    add_item(h, "オクターブ", 319);
+    int h = add_hdr("装置(D)", 72);
+    orch_check(h == 4, __LINE__);
+    orch_check(s_menu.header_count == 5, __LINE__);
+    add_item(h, "バッファ (Buffer)", "", 404);
+    add_item(h, "DSP", "", 405);
+    add_item(h, "診断 (Diag)", "", 406);
+    (void)app_menu_add_separator(&s_menu, h);
+    add_item(h, "SMPTE", "", 501);
+    add_item(h, "クロック (Clock)", "", 502);
+    (void)app_menu_add_separator(&s_menu, h);
+    add_item(h, "ポート (Port)", "", 902);
+    add_item(h, "遅延 (Latency)", "", 903);
 }
 
-static void menu_rest(void)
+static void menu_window(void)
 {
-    int p;
-    int y;
-    int r;
-    int w;
-    int h;
-    orch_check(s_menu.header_count >= 3, __LINE__);
-    orch_check(s_menu.header_count < 8, __LINE__);
-    p = add_hdr("パイプライン(P)", 120);
-    add_item(p, "READY", 401);
-    add_item(p, "PAUSED", 402);
-    add_item(p, "PLAYING", 403);
-    add_item(p, "バッファ", 404);
-    add_item(p, "DSP", 405);
-    add_item(p, "診断", 406);
-    y = add_hdr("同期(Y)", 72);
-    add_item(y, "SMPTE", 501);
-    add_item(y, "マスタークロック", 502);
-    r = add_hdr("プリセット(R)", 104);
-    add_item(r, "Rock", 801);
-    add_item(r, "Classic", 802);
-    add_item(r, "Orchestra", 803);
-    w = add_hdr("ウィンドウ(W)", 104);
-    add_item(w, "Stage", 701);
-    add_item(w, "Arrange", 702);
-    add_item(w, "Piano", 703);
-    add_item(w, "Score", 704);
-    add_item(w, "Mix", 705);
-    add_item(w, "Insert", 706);
-    add_item(w, "About", 707);
-    h = add_hdr("ヘルプ(H)", 72);
-    add_item(h, "About", 901);
-    add_item(h, "Port", 902);
-    add_item(h, "Latency", 903);
+    int h = add_hdr("ウィンドウ(W)", 120);
+    orch_check(h == 5, __LINE__);
+    orch_check(s_menu.header_count == 6, __LINE__);
+    add_item(h, "ステージ (Stage)", "", 701);
+    add_item(h, "アレンジ (Arrange)", "", 702);
+    add_item(h, "ピアノ (Piano)", "", 703);
+    add_item(h, "スコア (Score)", "", 704);
+    add_item(h, "ミキサー (Mix)", "", 705);
+    add_item(h, "インサート (Insert)", "", 706);
+    add_item(h, "アバウト (About)", "", 707);
 }
 
 static void menu_build(void)
@@ -676,9 +682,11 @@ static void menu_build(void)
     if (s_menu_ok) return;
     app_menu_init(&s_menu, APP_MENU_STYLE_CLASSIC_3D);
     menu_file();
+    menu_concert();
+    menu_scene();
     menu_track();
-    menu_stage();
-    menu_rest();
+    menu_device();
+    menu_window();
     app_menu_set_right_text(&s_menu, "0 ms");
     s_menu_ok = 1;
     orch_menu_scenes();
@@ -787,14 +795,21 @@ static void cmd_stage(int cmd)
     else if (cmd == 319) (void)orch_cmd_octave();
 }
 
+static void cmd_concert(int cmd)
+{
+    orch_check(cmd >= 320 && cmd <= 323, __LINE__);
+    orch_check(gst_view() != 0, __LINE__);
+    if (cmd == 320) (void)orch_cmd_play();
+    else if (cmd == 321) (void)orch_cmd_stop();
+    else if (cmd == 322) orch_desk_rec_flip();
+    else (void)orch_cmd_click();
+}
+
 static void cmd_pipe(int cmd)
 {
-    orch_check(cmd >= 401 && cmd <= 406, __LINE__);
+    orch_check(cmd >= 404 && cmd <= 406, __LINE__);
     orch_check(gst_view() != 0, __LINE__);
-    if (cmd == 401) (void)gst_rt_set_state(ORCH_GST_READY);
-    else if (cmd == 402) (void)gst_rt_set_state(ORCH_GST_PAUSED);
-    else if (cmd == 403) (void)gst_rt_set_state(ORCH_GST_PLAYING);
-    else if (cmd == 404) orch_cmd_buffer_text();
+    if (cmd == 404) orch_cmd_buffer_text();
     else if (cmd == 405) orch_cmd_dsp_text();
     else orch_cmd_diag_text();
 }
@@ -820,7 +835,8 @@ static void run_cmd(int cmd)
     if (cmd >= 101 && cmd <= 107) cmd_file(cmd);
     else if (cmd >= 201 && cmd <= 208) cmd_track(cmd);
     else if (cmd >= 301 && cmd <= 319) cmd_stage(cmd);
-    else if (cmd >= 401 && cmd <= 406) cmd_pipe(cmd);
+    else if (cmd >= 320 && cmd <= 323) cmd_concert(cmd);
+    else if (cmd >= 404 && cmd <= 406) cmd_pipe(cmd);
     else if (cmd == 501) orch_cmd_tc_cycle();
     else if (cmd == 502) orch_cmd_master_clock();
     else if (cmd >= 801 && cmd <= 803) (void)orch_cmd_family(cmd - 801);
@@ -829,6 +845,29 @@ static void run_cmd(int cmd)
     else if (cmd == 902) orch_cmd_port_text();
     else if (cmd == 903) orch_cmd_latency_text();
     orch_inval_all();
+}
+
+int orch_menu_key(UW key, VW data)
+{
+    int cmd = 0;
+    uint16_t mod;
+    OrchView *v;
+    orch_check(s_menu_ok == 0 || s_menu_ok == 1, __LINE__);
+    orch_check(s_menu.header_count <= APP_MENU_MAX_HEADERS, __LINE__);
+    if (!s_menu_ok) return 0;
+    mod = (uint16_t)(uintptr_t)data;
+    if (app_menu_handle_key(&s_menu, key, mod, &cmd)) {
+        if (cmd > 0) run_cmd(cmd);
+        return 1;
+    }
+    if (key != (UW)' ' && key != (UW)BTRON_KEY_SPACE) return 0;
+    if ((mod & (BTRON_KMOD_CTRL | BTRON_KMOD_ALT)) != 0) return 0;
+    v = gst_view();
+    if (!v) return 0;
+    if (v->state == ORCH_GST_PLAYING) (void)orch_cmd_stop();
+    else (void)orch_cmd_play();
+    orch_inval_all();
+    return 1;
 }
 
 void orch_inval_all(void)

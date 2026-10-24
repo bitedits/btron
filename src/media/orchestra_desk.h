@@ -32,6 +32,7 @@ void orch_desk_snap_cycle(void);
 void orch_desk_rec_flip(void);
 void orch_inval_all(void);
 int orch_menu_down(int x, int y);
+int orch_menu_key(UW key, VW data);
 int orch_menu_move(int x, int y);
 int orch_menu_is_open(void);
 void orch_menu_paint(GDEV *dev);

@@ -53,6 +53,23 @@ void     lc_set_score_base(double t0);
 void     lc_shim_note(int shim_no, double t, float hz, float vol, float duration);
 uint32_t lc_shim_refusals(void);
 
+/* Capture is off until lc_cap_begin. The live score then runs unchanged.
+ * Art 0 is a tone, 1 is a gesture or a drum articulation, 2 is a dance
+ * phrase tone. Hammer and swoosh are capture-only ids 24 and 25. */
+enum {
+    LC_CAP_TONE = 0,
+    LC_CAP_MARK = 1,
+    LC_CAP_PHRASE = 2,
+    LC_CAP_HAMMER = 24,
+    LC_CAP_SWOOSH = 25
+};
+
+void lc_cap_begin(void);
+void lc_cap_end(void);
+int  lc_cap_count(void);
+int  lc_cap_overflow(void);
+int  lc_cap_at(int i, int *shim, int *art, double *t, float *hz, float *vol, float *dur);
+
 #ifdef __cplusplus
 }
 #endif

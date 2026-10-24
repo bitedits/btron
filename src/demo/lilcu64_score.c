@@ -45,10 +45,66 @@ typedef struct { float f, d, v, t, slide; } Note;
 #define CHORD(...)  (const float[]){ __VA_ARGS__ }, \
                     (int)(sizeof((const float[]){ __VA_ARGS__ }) / sizeof(float))
 
+/* Album capture. Armed only by lc_cap_begin; the demo path does not enter. */
+enum { CAP_MAX = 4096, CAP_NOTES = 64 };
+
+typedef struct {
+    uint8_t shim;
+    uint8_t art;
+    float hz, vol, dur;
+    double t;
+} CapEv;
+
+static CapEv s_cap[CAP_MAX];
+static int s_cap_n;
+static int s_cap_on;
+static int s_cap_over;
+
+static void cap_add(int shim, int art, double t, float hz, float vol, float dur)
+{
+    CapEv *e;
+    if (!s_cap_on) return;
+    if (s_cap_n >= CAP_MAX) {
+        s_cap_over = 1;
+        return;
+    }
+    if (t < 0.0) t = 0.0;
+    if (dur < 0.01f) dur = 0.01f;
+    e = &s_cap[s_cap_n];
+    e->shim = (uint8_t)shim;
+    e->art = (uint8_t)art;
+    e->hz = hz;
+    e->vol = vol;
+    e->dur = dur;
+    e->t = t;
+    s_cap_n++;
+}
+
+static void cap_notes(int shim, int art, double t, const Note *ph, int np, float volMul, int use_mul)
+{
+    int i, n;
+    if (!s_cap_on) return;
+    if (!ph) return;
+    n = np;
+    if (n < 0) n = 0;
+    if (n > CAP_NOTES) {
+        s_cap_over = 1;
+        n = CAP_NOTES;
+    }
+    for (i = 0; i < n; i++) {
+        float v = use_mul ? ph[i].v * volMul : ph[i].v;
+        cap_add(shim, art, t + (double)ph[i].t, ph[i].f, v, ph[i].d);
+    }
+}
+
 /* ── WebAudio shims (index.html lines 3248–4053) ──────────────────── */
 
 /* [SHIM 1A] Singing harmonic triad */
 static void shimPulseSquash(double t, float volMul, float pitchMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_SQUASH, LC_CAP_MARK, t, 440.0f * pitchMul, volMul, 2.4f);
+        return;
+    }
     static const float fv[6][3] = {
         { 261.63f, 0.055f, 2.2f }, { 523.25f, 0.070f, 2.4f }, { 659.25f, 0.048f, 2.0f },
         { 783.99f, 0.052f, 2.1f }, { 1046.50f, 0.040f, 1.7f }, { 1318.51f, 0.025f, 1.4f }
@@ -102,6 +158,12 @@ static void emitSingleCroak(double S, float pitchMul, float volMul,
 }
 
 static void shimFrogCroak(double t, float pitchMul, float volMul, int isDouble) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_FROG, LC_CAP_TONE, t, 125.0f * pitchMul, volMul, 0.19f);
+        if (isDouble)
+            cap_add(LC_SHIM_FROG, LC_CAP_TONE, t + 0.25, 155.0f * pitchMul, volMul * 0.85f, 0.095f);
+        return;
+    }
     double S = s_T + t;
     emitSingleCroak(S, pitchMul, volMul, 0.00, 125.0f, 0.19f, 1.0f);   /* "Gwaaa-rk" */
     if (isDouble) emitSingleCroak(S, pitchMul, volMul, 0.25, 155.0f, 0.095f, 0.85f); /* "gwuk!" */
@@ -109,6 +171,10 @@ static void shimFrogCroak(double t, float pitchMul, float volMul, int isDouble) 
 
 /* [SHIM 1B] Golden chi bell / sub drone */
 static void shimPulseBell(double t, float volMul, float pitchMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_ADD_BELL, LC_CAP_MARK, t, 440.0f * pitchMul, volMul, 3.5f);
+        return;
+    }
     static const float fv[8][3] = {
         { 130.81f, 0.065f, 3.5f }, { 196.00f, 0.050f, 3.2f }, { 261.63f, 0.070f, 3.4f },
         { 392.00f, 0.055f, 3.0f }, { 523.25f, 0.060f, 2.8f }, { 659.25f, 0.040f, 2.5f },
@@ -128,6 +194,10 @@ static void shimPulseBell(double t, float volMul, float pitchMul) {
 
 /* [SHIM 2] Crystal step / Fukui walking bass */
 static void shimWaddleD(double t, float pitch, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_WADDLE, LC_CAP_TONE, t, pitch, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_TRIANGLE, S, S + duration);
     wa_freq(o, WA_SET, pitch, S);
@@ -140,6 +210,28 @@ static void shimWaddle(double t, float pitch, float volMul) { shimWaddleD(t, pit
 /* [SHIM 3] Glass harp / Imada Rhodes chords (numeric chordNotes form) */
 static void shimFloatEx(double t, float baseFreq, float volMul, const float *chord, int nc,
                         float stagger, float noteDuration) {
+    if (s_cap_on) {
+        float ratio = baseFreq / 523.25f;
+        int count = chord ? nc : 4;
+        int i;
+        static const float ff[4] = { 523.25f, 659.25f, 783.99f, 1046.50f };
+        static const float dd[4] = { 0.55f, 0.50f, 0.65f, 0.75f };
+        static const float vv[4] = { 0.12f, 0.10f, 0.11f, 0.08f };
+        static const float tt[4] = { 0.00f, 0.06f, 0.12f, 0.18f };
+        if (count < 0) count = 0;
+        if (count > CAP_NOTES) {
+            s_cap_over = 1;
+            count = CAP_NOTES;
+        }
+        for (i = 0; i < count; i++) {
+            float f = chord ? chord[i] : ff[i] * ratio;
+            float d = chord ? noteDuration : dd[i];
+            float v = chord ? 0.11f * volMul : vv[i] * volMul;
+            float off = chord ? (float)i * stagger : tt[i];
+            cap_add(LC_SHIM_FLOAT, LC_CAP_TONE, t + (double)off, f, v, d);
+        }
+        return;
+    }
     double S = s_T + t;
     float ratio = baseFreq / 523.25f;
     Note def[4] = {
@@ -166,6 +258,14 @@ static void shimFloat(double t, float baseFreq, float volMul, const float *chord
 
 /* [SHIM 4] Crystalline cascade / blues runs. With a phrase, volMul is ignored (as in JS). */
 static void shimDance(double t, float pitchScale, float volMul, const Note *phrase, int np) {
+    if (s_cap_on) {
+        if (!phrase) {
+            cap_add(LC_SHIM_DANCE, LC_CAP_MARK, t, 440.0f * pitchScale, volMul, 0.82f);
+            return;
+        }
+        cap_notes(LC_SHIM_DANCE, LC_CAP_PHRASE, t, phrase, np, volMul, 0);
+        return;
+    }
     double S = s_T + t;
     Note def[5] = {
         N(587.33f * pitchScale, 0.20f, 0.16f * volMul, 0.000f),
@@ -188,6 +288,10 @@ static void shimDance(double t, float pitchScale, float volMul, const Note *phra
 
 /* [SHIM 5] Crystal chime / swing ride cymbal */
 static void shimDing(double t, float freq, float volMul, float decay) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_DING, LC_CAP_TONE, t, freq, volMul, decay);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_SINE, S, S + decay);
     wa_freq(o, WA_SET, freq, S);
@@ -198,6 +302,10 @@ static void shimDing(double t, float freq, float volMul, float decay) {
 
 /* [SHIM 6] Jazz kick */
 static void shimKickD(double t, float pitch, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_KICK, LC_CAP_TONE, t, pitch, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_SINE, S, S + duration);
     wa_freq(o, WA_SET, pitch * 2.2f, S);
@@ -209,6 +317,11 @@ static void shimKick(double t, float pitch, float volMul) { shimKickD(t, pitch, 
 
 /* [SHIM 7] Snare / rimshot / brush */
 static void shimSnare(double t, float volMul, int isRimshot) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_SNARE, isRimshot ? LC_CAP_MARK : LC_CAP_TONE, t, 0.0f, volMul,
+                isRimshot ? 0.09f : 0.15f);
+        return;
+    }
     double S = s_T + t;
     float baseF = isRimshot ? 220.0f : 175.0f;
     WaNode *o = osc_take(WA_TRIANGLE, S, S + 0.12);
@@ -226,6 +339,11 @@ static void shimSnare(double t, float volMul, int isRimshot) {
 
 /* [SHIM 8] Hi-hat chick / sizzle */
 static void shimHiHat(double t, int open, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_HAT, open ? LC_CAP_MARK : LC_CAP_TONE, t, 0.0f, volMul,
+                open ? 0.28f : 0.055f);
+        return;
+    }
     double S = s_T + t;
     float dur = open ? 0.28f : 0.055f;
     WaNode *n = osc_take(WA_NOISE, S, S + dur);
@@ -241,6 +359,10 @@ static void shimHiHat(double t, int open, float volMul) {
 
 /* [SHIM 9] Kazumi Watanabe clean jazz guitar */
 static void shimGuitar(double t, const Note *ph, int np, float volMul) {
+    if (s_cap_on) {
+        cap_notes(LC_SHIM_GUITAR, LC_CAP_TONE, t, ph, np, volMul, 1);
+        return;
+    }
     double S = s_T + t;
     for (int i = 0; i < np; i++) {
         const Note *n = &ph[i];
@@ -259,6 +381,10 @@ static void shimGuitar(double t, const Note *ph, int np, float volMul) {
 
 /* [SHIM 10] Concert grand piano */
 static void shimGrandPiano(double t, float freq, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_PIANO, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
     static const float harm[3] = { 1.0f, 2.002f, 3.006f };
     static const float hv[3]   = { 0.16f, 0.08f, 0.035f };
     double S = s_T + t;
@@ -274,6 +400,10 @@ static void shimGrandPiano(double t, float freq, float volMul, float duration) {
 
 /* [SHIM 11] Sub-bass acoustic pedal */
 static void shimPedalBass(double t, float freq, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_PEDAL, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_TRIANGLE, S, S + duration);
     wa_freq(o, WA_SET, freq, S);
@@ -284,6 +414,10 @@ static void shimPedalBass(double t, float freq, float volMul, float duration) {
 
 /* [SHIM 18] Breathy jazz woodwind / melodica */
 static void shimSaxFlute(double t, const Note *ph, int np, float volMul) {
+    if (s_cap_on) {
+        cap_notes(LC_SHIM_SAX, LC_CAP_TONE, t, ph, np, volMul, 1);
+        return;
+    }
     double S = s_T + t;
     for (int i = 0; i < np; i++) {
         const Note *n = &ph[i];
@@ -305,6 +439,10 @@ static void shimSaxFlute(double t, const Note *ph, int np, float volMul) {
 
 /* [SHIM 12] Industrial Cyber Kick (Trent Reznor / Nine Inch Nails Heavy Distorted Sub-Punch) */
 static void shimIndustrialKickEx(double t, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_IND_KICK, LC_CAP_TONE, t, 55.0f, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *sub = osc_take(WA_SINE, S, S + duration);
     if (sub) {
@@ -328,6 +466,11 @@ static void shimIndustrialKick(double t, float volMul) {
 
 /* [SHIM 13] Industrial Metallic Snare / Cyber Clank */
 static void shimIndustrialSnare(double t, float volMul, int isClank) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_IND_SNARE, isClank ? LC_CAP_MARK : LC_CAP_TONE, t, 0.0f, volMul,
+                isClank ? 0.08f : 0.17f);
+        return;
+    }
     double S = s_T + t;
     float dur = isClank ? 0.08f : 0.17f;
     float bpF = isClank ? 3600.0f : 2600.0f;
@@ -350,6 +493,10 @@ static void shimIndustrialSnare(double t, float volMul, int isClank) {
 
 /* [SHIM 14] Industrial Sawtooth Synth Bass (Trent Reznor 16th-Note Analog Overdrive Ostinato) */
 static void shimIndustrialBassSlide(double t, float freq, float duration, float volMul, float slideFreq) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_IND_BASS, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     static const int types[2] = { WA_SAWTOOTH, WA_SQUARE };
     static const float fmul[2] = { 1.0f, 1.005f };
@@ -375,6 +522,10 @@ static void shimIndustrialBass(double t, float freq, float duration, float volMu
 
 /* [SHIM 15] Dewan Swarmatron Drone (Trent Reznor & Atticus Ross Signature 8-Voice Ribbon Cluster) */
 static void shimSwarmatron(double t, float centerFreq, float duration, float volMul, float spreadCents) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_SWARM, LC_CAP_TONE, t, centerFreq, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     static const float mults[8] = { -1.0f, -0.65f, -0.35f, -0.12f, 0.12f, 0.35f, 0.65f, 1.0f };
     float perOscAmp = (0.18f * volMul) / 8.0f;
@@ -405,6 +556,10 @@ static void shimSwarmatron(double t, float centerFreq, float duration, float vol
 
 /* [SHIM 16] Cyber Glitch Zap / Terminal Data Pulse */
 static void shimGlitchZap(double t, float baseFreq, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_ZAP, LC_CAP_TONE, t, baseFreq, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_SAWTOOTH, S, S + duration);
     if (!o) return;
@@ -417,6 +572,10 @@ static void shimGlitchZap(double t, float baseFreq, float volMul, float duration
 
 /* [SHIM 17] Nine Inch Nails TRON Cyber Lead */
 static void shimCyberLead(double t, const Note *ph, int np, float volMul) {
+    if (s_cap_on) {
+        cap_notes(LC_SHIM_CYBER, LC_CAP_TONE, t, ph, np, volMul, 1);
+        return;
+    }
     double S = s_T + t;
     for (int i = 0; i < np; i++) {
         const Note *n = &ph[i];
@@ -443,6 +602,10 @@ static void shimCyberLead(double t, const Note *ph, int np, float volMul) {
 
 /* [SHIM 19] Concert Grand Piano Wooden Felt Hammer Impact */
 static void shimPianoHammer(double t, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_CAP_HAMMER, LC_CAP_TONE, t, 120.0f, volMul, 0.035f);
+        return;
+    }
     double S = s_T + t;
     WaNode *o = osc_take(WA_TRIANGLE, S, S + 0.035);
     if (!o) return;
@@ -454,6 +617,10 @@ static void shimPianoHammer(double t, float volMul) {
 
 /* [SHIM 20] Concert Grand Damper Pedal Lift & String Sympathetic Resonance */
 static void shimPedalSwoosh(double t, float volMul, float duration) {
+    if (s_cap_on) {
+        cap_add(LC_CAP_SWOOSH, LC_CAP_MARK, t, 450.0f, volMul, duration);
+        return;
+    }
     double S = s_T + t;
     WaNode *n = osc_take(WA_NOISE, S, S + duration);
     if (!n) return;
@@ -1677,6 +1844,10 @@ void lc_score_schedule(int track, double t0) {
 static void shimViolin(double t, const Note *ph, int np, float volMul)
 {
     int i;
+    if (s_cap_on) {
+        cap_notes(LC_SHIM_VIOLIN, LC_CAP_TONE, t, ph, np, volMul, 1);
+        return;
+    }
     orch_check(ph != 0, __LINE__);
     orch_check(np >= 0, __LINE__);
     if (np > 8) np = 8;
@@ -1724,6 +1895,10 @@ static float cello_qdb(void)
 static void shimCello(double t, const Note *ph, int np, float volMul, int isPizz)
 {
     int i;
+    if (s_cap_on) {
+        cap_notes(LC_SHIM_CELLO, LC_CAP_TONE, t, ph, np, volMul, 1);
+        return;
+    }
     float qdb = cello_qdb();
     float fc = isPizz ? 1200.0f : 520.0f;
     orch_check(ph != 0, __LINE__);
@@ -1779,6 +1954,11 @@ static void timp_head(double S, float freq, float vol, float dur)
 static void shimTimpani(double t, float freq, float volMul, float duration)
 {
     double S = s_T + t;
+    if (s_cap_on) {
+        float dur = duration > 0.05f ? duration : 1.2f;
+        cap_add(LC_SHIM_TIMPANI, LC_CAP_TONE, t, freq, volMul, dur);
+        return;
+    }
     WaNode *nz;
     float dur = duration > 0.05f ? duration : 1.2f;
     orch_check(freq > 0.0f, __LINE__);

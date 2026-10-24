@@ -222,6 +222,10 @@
             text-wrap: pretty;
         }
 
+        .nw {
+            white-space: nowrap;
+        }
+
         /* Headings keep Japanese words whole: no 管 / 理 splits. */
         h1.jp-title,
         h2.jp-title,
@@ -1491,7 +1495,7 @@ POSIX の生デバイスを見つけて、MBR／GPT の区画表を初期化し�
                     </div>
                     <div class="copy">
                         <p class="role">06 — Suite / Sokhatsky Commander</p>
-                        <h3 class="jp-title">ファイル管理 (Commander) <span class="stamp stamp-live">公開中</span></h3>
+                        <h3 class="jp-title">ファイル (Commander) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 キーボード駆動の左右二面パネルです。sc が実身を並べ、tv が多言語と禁則処理つきで文書を読み、be が hex と五つの命令体系の逆アセンブルを同じ窓に出します。純粋 C99・NASA/JPL Power of Ten 準拠・依存ゼロで、POSIX ホストには bin/sc と bin/tv のターゲットが立っています。
                         </p>
@@ -1532,7 +1536,7 @@ recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
                     </div>
                     <div class="copy">
                         <p class="role">07 — CLU / Command Line Utilities</p>
-                        <h3 class="jp-title">CLU コマンド (BTRON Commands) <span class="stamp stamp-live">公開中</span></h3>
+                        <h3 class="jp-title">CLU コマンド <span class="nw">(BTRON&nbsp;Commands)</span> <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 実身／仮身のマルチレコードを直接駆動するネイティブのコマンド群です。二十の動詞が gterm の一列の dispatch から呼ばれ、各コマンドは将来、独立したワンショット ELF（型 9 の実行プログラムレコード RT_PROG）として /SYS/bin に置かれます。MIPS R5900、ARM32／64、x86-64、M68k で同じ決定論的な動きをねらう設計です。
                         </p>
@@ -1787,7 +1791,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                     <div class="copy">
                         <p class="role">13 — B-Game SDK / B-Sound DSP</p>
-                        <h3 class="jp-title">リル・キューブ 64 (SDK) <span class="stamp stamp-live">公開中</span></h3>
+                        <h3 class="jp-title"><span class="nw">リル・キューブ 64</span> (SDK) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーングラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓の中で時間を共有しています。創作側と遊び側が出会うのはここです。
                         </p>
@@ -1845,7 +1849,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                     <div class="copy">
                         <p class="role">14 — Light client / Episode 1</p>
-                        <h3 class="jp-title">Quake Light Sport <span class="stamp stamp-live">公開中</span></h3>
+                        <h3 class="jp-title"><span class="nw">Quake Light Sport</span> <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 id Software の Quake 1 に対して、クリーンルームで書き直した C99 の軽量クライアントです。約五千行をエンジン本体、VirtIO-GPU レンダラ、QuakeC のバイトコード VM、BSP ワールドの四つに分け、共有データの pak0.pak はそのまま読みます。下の図版はすべて spawn 視点から <code>make quake-screens</code> が自動で採ったものです。
                         </p>
@@ -2010,7 +2014,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     </div>
                     <div class="copy">
                         <p class="role">16 — Console / native target</p>
-                        <h3 class="jp-title">イリス (Iris PS2) <span class="stamp stamp-silicon">実機稼働</span></h3>
+                        <h3 class="jp-title">イリス <span class="nw">(Iris&nbsp;PS2)</span> <span class="stamp stamp-silicon">実機稼働</span></h3>
                         <p>
                             Iris はエミュレータではありません。B-System が PlayStation 2 の実機そのものに起動します。
                             GS（グラフィックスシンセサイザー）へ GIF を組む道、VU0 と VU1 の幾何パイプライン、パッドと
@@ -2064,7 +2068,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     </div>
                     <div class="announced-card">
                         <p class="role">19 — Machine / plan only</p>
-                        <h4 class="jp-title">アレス (Ares N64) <span class="stamp stamp-soon">準備中</span></h4>
+                        <h4 class="jp-title">アレス <span class="nw">(Ares&nbsp;N64)</span> <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェアバックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
                         </p>

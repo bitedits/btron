@@ -222,6 +222,15 @@
             text-wrap: pretty;
         }
 
+        /* Headings keep Japanese words whole: no 管 / 理 splits. */
+        h1.jp-title,
+        h2.jp-title,
+        h3.jp-title,
+        h4.jp-title {
+            word-break: keep-all;
+            overflow-wrap: break-word;
+        }
+
         .hero-lede-en {
             max-width: 720px;
             margin: 1.7rem auto 0;
@@ -1194,7 +1203,7 @@
                 <span>48 kHz · 1024-frame period</span>
             </div>
         </div>
-        <a class="scroll-cue" href="#opening">Scroll<i></i></a>
+        <a class="scroll-cue" href="#opening"><i></i></a>
     </header>
 
     <main>

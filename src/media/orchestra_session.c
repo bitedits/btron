@@ -43,7 +43,11 @@ typedef struct UndoSlot {
     uint8_t before[48];
 } UndoSlot;
 
+enum { ORCH_PATH_N = 128 };
+
 static uint8_t s_file[ORCH_FILE_BYTES];
+static char s_orch_path[ORCH_PATH_N];
+static char s_orch_alt[ORCH_PATH_N];
 static UndoSlot s_undo[UNDO_CAP];
 static uint8_t s_undo_len;
 static uint8_t s_undo_at;
@@ -216,8 +220,8 @@ static int refuse_tempo(void)
 {
     OrchView *v = gst_view();
     orch_check(v != 0, __LINE__);
-    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     if (!v) return 0;
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     orch_count_sat(&v->refuse_tempo);
     orch_status_hold("tempo");
     return 0;
@@ -226,16 +230,18 @@ static int playing(void)
 {
     OrchView *v = gst_view();
     orch_check(v != 0, __LINE__);
-    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     if (!v) return 0;
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     return v->state == ORCH_GST_PLAYING;
 }
 static int path_arg(const char *p)
 {
     const char *lit = ORCH_PATH_ORCH;
-    int i;
+    int i = 0;
+    int n = 0;
     orch_check(p != 0, __LINE__);
-    orch_check(lit != 0, __LINE__);
+    while (lit[n] != 0 && n < 64) n++;
+    orch_check(n > 0 && n < 64, __LINE__);
     for (i = 0; i < 64; i++) {
         if (p[i] != lit[i]) return 0;
         if (p[i] == 0) return 1;
@@ -336,9 +342,12 @@ static int tracks_ok(const uint8_t *b)
 }
 static int scenes_ok(const uint8_t *b)
 {
+    OrchView *v = gst_view();
     int i, k;
     orch_check(b != 0, __LINE__);
-    orch_check(gst_view()->state <= ORCH_GST_PLAYING, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!v) return 0;
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     for (i = 0; i < 16; i++) {
         const uint8_t *p = b + OFF_SCN + i * SCN_N;
         unsigned tempo = rd16(p, 32);
@@ -508,8 +517,10 @@ static void commit_buf(const uint8_t *b)
 }
 static int accept_buf(const uint8_t *b)
 {
+    OrchView *v = gst_view();
     orch_check(b != 0, __LINE__);
-    orch_check(gst_view()->state <= ORCH_GST_PLAYING, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!v) return 0;
     if (!hdr_ok(b) || !tracks_ok(b) || !scenes_ok(b) || !events_ok(b)) {
         return refuse_session();
     }
@@ -626,8 +637,10 @@ static void pack_view(uint8_t *b)
 }
 int orch_session_load_buf(const uint8_t *buf, uint32_t n)
 {
-    orch_check(gst_view() != 0, __LINE__);
-    orch_check(gst_view()->state <= ORCH_GST_PLAYING, __LINE__);
+    OrchView *v = gst_view();
+    orch_check(v != 0, __LINE__);
+    if (!v) return 0;
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     if (playing()) return refuse_session();
     if (!buf || n != ORCH_FILE_BYTES) return refuse_session();
     memcpy(s_file, buf, ORCH_FILE_BYTES);
@@ -635,12 +648,47 @@ int orch_session_load_buf(const uint8_t *buf, uint32_t n)
 }
 int orch_session_save_buf(uint8_t *buf, uint32_t cap)
 {
-    orch_check(gst_view() != 0, __LINE__);
-    orch_check(gst_view()->state <= ORCH_GST_PLAYING, __LINE__);
+    OrchView *v = gst_view();
+    orch_check(v != 0, __LINE__);
+    if (!v) return 0;
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     if (playing()) return refuse_session();
     if (!buf || cap < ORCH_FILE_BYTES) return refuse_session();
     pack_view(buf);
     return 1;
+}
+/* Hosted desktop: "/SYS/x" is also "SYS/x" beside the binary. Runtime only. */
+static void copy_path(char *dst, const char *src)
+{
+    uint32_t i = 0;
+    orch_check(dst != 0, __LINE__);
+    orch_check(src != 0, __LINE__);
+    for (i = 0; i + 1u < ORCH_PATH_N; i++) {
+        dst[i] = src[i];
+        if (src[i] == 0) return;
+    }
+    dst[ORCH_PATH_N - 1u] = 0;
+}
+static int path_stat(const char *p, struct stat *st)
+{
+    orch_check(p != 0, __LINE__);
+    orch_check(st != 0, __LINE__);
+    return stat(p, st) == 0;
+}
+static void resolve_orch_path(void)
+{
+    const char *alt = 0;
+    struct stat st;
+    uint32_t n = 0;
+    while (ORCH_PATH_ORCH[n] != 0 && n < ORCH_PATH_N) n++;
+    orch_check(n >= 2u, __LINE__);
+    orch_check(n + 1u < ORCH_PATH_N, __LINE__);
+    copy_path(s_orch_path, ORCH_PATH_ORCH);
+    alt = (ORCH_PATH_ORCH[0] == '/') ? &ORCH_PATH_ORCH[1] : ORCH_PATH_ORCH;
+    copy_path(s_orch_alt, alt);
+    if (path_stat(s_orch_path, &st)) return;
+    if (s_orch_path[0] != '/') return;
+    copy_path(s_orch_path, s_orch_alt);
 }
 static int load_path(const char *path)
 {
@@ -648,15 +696,18 @@ static int load_path(const char *path)
     struct stat st;
     size_t n;
     int closed;
+    OrchView *v = gst_view();
     orch_check(path != 0, __LINE__);
-    orch_check(gst_view()->state <= ORCH_GST_PLAYING, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!v) return 0;
     if (playing()) return refuse_session();
     if (!path_arg(path)) return refuse_session();
-    if (stat(path, &st) != 0) return refuse_session();
+    resolve_orch_path();
+    if (!path_stat(s_orch_path, &st)) return refuse_session();
     if ((unsigned long long)st.st_size != (unsigned long long)ORCH_FILE_BYTES) {
         return refuse_session();
     }
-    fp = fopen(path, "rb");
+    fp = fopen(s_orch_path, "rb");
     if (!fp) return refuse_session();
     n = fread(s_file, 1, ORCH_FILE_BYTES, fp);
     closed = fclose(fp);
@@ -667,6 +718,7 @@ int orch_cmd_open(void)
 {
     OrchView *v = gst_view();
     orch_check(v != 0, __LINE__);
+    if (!v) return 0;
     orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     return load_path(ORCH_PATH_ORCH);
 }
@@ -677,10 +729,12 @@ int orch_cmd_save(void)
     int closed;
     OrchView *v = gst_view();
     orch_check(v != 0, __LINE__);
+    if (!v) return 0;
     orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     if (playing()) return refuse_session();
+    resolve_orch_path();
     pack_view(s_file);
-    fp = fopen(ORCH_PATH_ORCH, "wb");
+    fp = fopen(s_orch_path, "wb");
     if (!fp) return refuse_session();
     n = fwrite(s_file, 1, ORCH_FILE_BYTES, fp);
     closed = fclose(fp);

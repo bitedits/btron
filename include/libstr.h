@@ -55,6 +55,7 @@ extern void* tkl_memcpy( void *dst, const void *src, size_t n );
 extern void* tkl_memmove( void *dst, const void *src, size_t n );
 
 extern size_t tkl_strlen( const char *s );
+extern size_t tkl_strnlen( const char *s, size_t n );
 extern int tkl_strcmp( const char *s1, const char *s2 );
 extern int tkl_strncmp( const char *s1, const char *s2, size_t n );
 extern char* tkl_strcpy( char *dst, const char *src );
@@ -62,6 +63,7 @@ extern char* tkl_strncpy( char *dst, const char *src, size_t n );
 extern char* tkl_strcat( char *dst, const char *src );
 extern char* tkl_strncat( char *dst, const char *src, size_t n );
 extern char* tkl_strstr( const char *haystack, const char *needle );
+extern char* tkl_strchr( const char *s, int c );
 extern char* tkl_strrchr( const char *s, int c );
 extern char* tkl_strpbrk( const char *s, const char *accept );
 extern int tkl_snprintf( char *str, size_t size, const char *format, ... );
@@ -69,6 +71,7 @@ extern int tkl_snprintf( char *str, size_t size, const char *format, ... );
 extern int tkl_vsnprintf( char *str, size_t size, const char *format, va_list ap );
 
 extern unsigned long int tkl_strtoul( const char *nptr, char **endptr, int base );
+extern unsigned long long tkl_strtoull( const char *nptr, char **endptr, int base );
 extern int tkl_atoi( const char *nptr );
 
 #define	MEMSET	tkl_memset

@@ -8,7 +8,10 @@
 #include "../demo/lilcu64_insert.h"
 #include <stdio.h>
 #include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <sys/stat.h>
+#endif
 
 enum {
     OFF_TRK = 128,

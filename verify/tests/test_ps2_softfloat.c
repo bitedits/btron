@@ -7,8 +7,12 @@
  * exercises that file: it is reached only through names the compiler invents, so
  * a bug in it shows up as a black window on a real PS2 and as nothing at all on a
  * host.  This is the instrument: the same source is compiled into this program and
- * every one of its 32 symbols is thrown against the host's own hardware FPU on
- * millions of inputs, comparing the returned IEEE-754 bit pattern exactly.
+ * every one of its symbols is thrown against the host's own hardware FPU on
+ * millions of inputs, comparing the returned IEEE-754 bit pattern exactly.  The
+ * six integer libcalls at the end of that file -- the 64-bit divide, remainder and
+ * the unsigned 64-bit conversions -- are thrown against the host's hardware integer
+ * arithmetic in the same program, for the same reason: clang invented the names, so
+ * nothing but this test can see them.
  *
  * The compares are checked the way the generated MIPS code checks them -- the four
  * caller tests measured out of a disassembly of -msoft-float (`< 0` for lt, `< 1`
@@ -29,7 +33,7 @@
 #include <math.h>
 
 /* The runtime's own source, not a link against it: its format table and engine are
- * file-static, and only the definitions of the 32 libcalls are exported. */
+ * file-static, and only the definitions of the libcalls are exported. */
 #include "../../src/drivers/ps2/ps2_builtins.c"
 
 static uint64_t s_state = 0x20261009ABCDEFull;
@@ -449,6 +453,106 @@ static void cop1_compare_form(void)
     }
 }
 
+/*
+ * The six integer libcalls -- __udivdi3, __umoddi3, __divdi3, __floatundidf,
+ * __floatundisf, __fixunssfdi -- are the ones the DAW asks for, and the reason
+ * they are here rather than narrowed out of the callers is in ps2_builtins.c.
+ * They are checked the same way as the float ones: against the host's own
+ * hardware arithmetic, which on this machine is a real instruction and not a
+ * libcall, so the host is an independent oracle rather than a second copy.
+ *
+ * Three shapes, because each catches a different mistake:
+ *  - random 64-bit pairs, for the mantissa interiors of the long division;
+ *  - divisors that are powers of two and dividends that are all-ones, which is
+ *    where a shift-by-one or a missing borrow in the compare/subtract shows up;
+ *  - the fast path's edges (both operands under 2^32), because that branch has to
+ *    agree with the loop it short-circuits, and it is the branch the transport
+ *    actually takes most often.
+ *
+ * Division by zero and signed overflow (INT64_MIN / -1) are skipped: both are
+ * undefined on the host, so there is nothing to compare against.
+ */
+static uint64_t rnd64(void)
+{
+    return ((uint64_t)rnd32() << 32) ^ (uint64_t)rnd32();
+}
+
+static void integer_runtime(void)
+{
+    static const uint64_t edge[] = {
+        1ULL, 2ULL, 3ULL, 255ULL, 256ULL, 65535ULL, 65536ULL,
+        0x7FFFFFFFULL, 0x80000000ULL, 0xFFFFFFFFULL, 0x100000000ULL,
+        0xFFFFFFFFFFFFFFFFULL, 0x8000000000000000ULL, 0x7FFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFEULL, 0x1000000000000000ULL, 0x00000000FFFFFFFFULL,
+    };
+    const int ne = (int)(sizeof(edge) / sizeof(edge[0]));
+    int i, j;
+
+    for (i = 0; i < ne; i++) {
+        for (j = 0; j < ne; j++) {
+            const uint64_t a = edge[i], b = edge[j];
+            if (b == 0) continue;
+            check("udivdi3 edge", a, b, __udivdi3(a, b), a / b);
+            check("umoddi3 edge", a, b, __umoddi3(a, b), a % b);
+        }
+    }
+
+    for (i = 0; i < ne; i++) {
+        const uint64_t b = edge[i];
+        int k;
+        for (k = 0; k < 64; k++) {
+            const uint64_t a = (uint64_t)1 << (uint32_t)k;   /* every bit position */
+            if (b == 0) continue;
+            check("udivdi3 pow2", a, b, __udivdi3(a, b), a / b);
+            check("umoddi3 pow2", a, b, __umoddi3(a, b), a % b);
+            check("udivdi3 a|b", a | b, b, __udivdi3(a | b, b), (a | b) / b);
+        }
+    }
+
+    for (i = 0; i < 300000; i++) {
+        const uint64_t a = rnd64(), b = rnd64();
+        const uint64_t sm = b ? (b >> (rnd32() & 63u)) : 1u;   /* spread the widths */
+        const int64_t sa = (int64_t)a, sb = (int64_t)(sm ? sm : 1u);
+        if (sm == 0) continue;
+        check("udivdi3 rnd", a, b, __udivdi3(a, b), a / b);
+        check("umoddi3 rnd", a, b, __umoddi3(a, b), a % b);
+        if (sm < b) check("udivdi3 narrow", a, sm, __udivdi3(a, sm), a / sm);
+        if (sb != 0 && !(sa == INT64_MIN && sb == -1))
+            check("divdi3 rnd", (uint64_t)sa, (uint64_t)sb, (uint64_t)__divdi3(sa, sb),
+                  (uint64_t)(sa / sb));
+    }
+
+    /* The three conversions, on the same inputs the division sweep uses plus the
+     * powers of two, because a packer that is right for a mantissa of all ones and
+     * wrong for exactly 2^53 is the classic failure and random draws find it late. */
+    for (i = 0; i < ne; i++) {
+        const uint64_t v = edge[i];
+        check("floatundidf", v, 0, __floatundidf(v), d_bits((double)v));
+        check("floatundisf", v, 0, (uint64_t)__floatundisf(v), (uint64_t)f_bits((float)v));
+    }
+    for (i = 0; i < 64; i++) {
+        const uint64_t v = (uint64_t)1 << (uint32_t)i;
+        check("floatundidf 2^i", v, 0, __floatundidf(v), d_bits((double)v));
+        check("floatundisf 2^i", v, 0, (uint64_t)__floatundisf(v), (uint64_t)f_bits((float)v));
+        check("floatundidf 2^i-1", v - 1u, 0, __floatundidf(v - 1u), d_bits((double)(v - 1u)));
+    }
+    for (i = 0; i < 200000; i++) {
+        const uint64_t v = rnd64() >> (rnd32() & 63u);
+        check("floatundidf rnd", v, 0, __floatundidf(v), d_bits((double)v));
+        check("floatundisf rnd", v, 0, (uint64_t)__floatundisf(v), (uint64_t)f_bits((float)v));
+
+        {   const uint32_t fb = rnd_float();
+            const float x = f_val(fb);
+            if (x == x && x >= 0.0f && x < 18446744073709551616.0f)
+                check("fixunssfdi", fb, 0, __fixunssfdi(fb), (uint64_t)x);
+            else if (x == x)
+                check("fixunssfdi sat", fb, 0, __fixunssfdi(fb),
+                      (x < 0.0f) ? 0ULL : 0xFFFFFFFFFFFFFFFFULL);
+            else check("fixunssfdi nan", fb, 0, __fixunssfdi(fb), 0ULL);
+        }
+    }
+}
+
 int main(void)
 {
     int round;
@@ -462,6 +566,7 @@ int main(void)
     conversions();
     fix_bands();
     cop1_compare_form();
+    integer_runtime();
     for (round = 0; round < 3; round++) {
         doubles_one_round(round);
         floats_one_round(round);
@@ -472,6 +577,6 @@ int main(void)
         printf("[CI-TEST] FAIL - ps2_builtins.c disagrees with IEEE-754\n");
         return 1;
     }
-    printf("[CI-TEST] SUCCESS - all 32 libcalls match the host FPU\n");
+    printf("[CI-TEST] SUCCESS - all 32 float libcalls and the 6 integer ones match the host\n");
     return 0;
 }

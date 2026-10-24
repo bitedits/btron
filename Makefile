@@ -224,21 +224,30 @@ BE_DASM_SRCS = src/clu/be/native_dasm.c \
                src/clu/be/arch/arm64/utils.c src/clu/be/arch/arm32/armv7.c \
                src/clu/be/arch/riscv/riscv-disas.c src/clu/be/arch/ppc/ppc_disasm.c \
                src/clu/be/arch/m68k/dis68k.c src/clu/be/arch/sh4/sh4.c \
-               src/clu/be/arch/nv/core-as.c src/clu/be/arch/nv/ctx.c \
-               src/clu/be/arch/nv/falcon.c src/clu/be/arch/nv/gk110.c \
-               src/clu/be/arch/nv/macro.c src/clu/be/arch/nv/vp1.c \
-               src/clu/be/arch/nv/hash.c src/clu/be/arch/nv/g80.c \
-               src/clu/be/arch/nv/gm107.c src/clu/be/arch/nv/nv.c \
-               src/clu/be/arch/nv/vuc.c src/clu/be/arch/nv/xtensa.c \
-               src/clu/be/arch/nv/astr.c src/clu/be/arch/nv/colors.c \
-               src/clu/be/arch/nv/core-dis.c src/clu/be/arch/nv/core.c \
-               src/clu/be/arch/nv/gf100.c src/clu/be/arch/nv/hwsq.c \
-               src/clu/be/arch/nv/vcomp.c src/clu/be/arch/nv/mask.c \
-               src/clu/be/arch/nv/varinfo.c src/clu/be/arch/nv/vardata.c \
-               src/clu/be/arch/nv/symtab.c src/clu/be/arch/nv/easm.c \
-               src/clu/be/arch/nv/aprintf.c src/clu/be/arch/nv/easm_xfrm.c \
-               src/clu/be/arch/nv/easm_print.c src/clu/be/arch/mips/mips-rsp.c \
+               src/clu/be/arch/mips/mips-rsp.c \
                src/clu/be/arch/pdp11/pdp11.c
+
+# The nvidia half of the `be` editor's decoders -- the assembler and disassembler of the
+# G80..Maxwell microcode, 27 units carried over from the nvclock/nvd3d9 tooling.  It is its own
+# list because of what it costs: 3,338,516 B of initialized .data plus 74,648 B of text, which
+# in the PS2 link is 44% of every byte spent on .data (gm107.c alone is 1,382,528).  Naming it
+# separately changes no list that is in use -- the `+=` below puts it back exactly where it was
+# for every lane -- and only gives a lane a way to answer for it.  See PS2_NV.
+NV_SRCS = src/clu/be/arch/nv/core-as.c src/clu/be/arch/nv/ctx.c \
+          src/clu/be/arch/nv/falcon.c src/clu/be/arch/nv/gk110.c \
+          src/clu/be/arch/nv/macro.c src/clu/be/arch/nv/vp1.c \
+          src/clu/be/arch/nv/hash.c src/clu/be/arch/nv/g80.c \
+          src/clu/be/arch/nv/gm107.c src/clu/be/arch/nv/nv.c \
+          src/clu/be/arch/nv/vuc.c src/clu/be/arch/nv/xtensa.c \
+          src/clu/be/arch/nv/astr.c src/clu/be/arch/nv/colors.c \
+          src/clu/be/arch/nv/core-dis.c src/clu/be/arch/nv/core.c \
+          src/clu/be/arch/nv/gf100.c src/clu/be/arch/nv/hwsq.c \
+          src/clu/be/arch/nv/vcomp.c src/clu/be/arch/nv/mask.c \
+          src/clu/be/arch/nv/varinfo.c src/clu/be/arch/nv/vardata.c \
+          src/clu/be/arch/nv/symtab.c src/clu/be/arch/nv/easm.c \
+          src/clu/be/arch/nv/aprintf.c src/clu/be/arch/nv/easm_xfrm.c \
+          src/clu/be/arch/nv/easm_print.c
+BE_DASM_SRCS += $(NV_SRCS)
 
 COMMON_SRCS = src/graphics/dp_core.c   \
               src/graphics/image_decode.c \
@@ -595,6 +604,7 @@ COMMON_NO_SDL_SRCS = \
     src/fs/blk_mem.c       \
     src/fs/vol.c           \
     src/fs/file.c          \
+    src/fs/fs_stdio.c      \
     src/clu/vfs.c          \
     $(CLU_APPS_SRCS)       \
     src/clu/clu.c
@@ -1198,9 +1208,18 @@ CLU_TERMIO_SRCS = src/clu/lang.c           \
                   src/clu/sc/sc.c          \
                   src/clu/tv/tv.c          \
                   src/clu/be/native.c
-CLU_TERMIO_SRCS += $(BE_DASM_SRCS)
+# PS2_NV parks the nvidia decoder island (NV_SRCS, named just above BE_DASM_SRCS) out of this
+# link: `nm` over every `*.ps2.o` reads zero undefined references into those 27 units, because
+# the only caller of their entry point -- `case ARCH_NVIDIA: decodeNV(...)` in
+# src/clu/be/dasm/dasm.c -- is not in any PS2 source list at all.  It is therefore 3,414,308 B
+# of unreachable statics, not a feature this image loses; the host and POSIX lanes still get it
+# through the `+=` that puts it back.  The dial and its stamp are here for the same reason as
+# PS2_QUAKE's: an un-park is the control, and a stale object is the failure mode.
+CLU_TERMIO_SRCS += $(if $(filter 1,$(PS2_NV)),$(BE_DASM_SRCS),$(filter-out $(NV_SRCS),$(BE_DASM_SRCS)))
 # The GL layer this port links, minus the app bundle GL_SRCS also carries.  Quake's
-# hunk arena alone is a 64 MiB static array and the Lil Cu demo's node table 3 MiB
+# hunk arena alone is a 64 MiB static array -- 1 MiB under the PS2 branch of mem.c's
+# HUNK_TOTAL_SIZE, but 3,911,851 B across its 22 units either way -- and the Lil Cu demo's
+# node table 3 MiB
 # more, against an Emotion Engine with 32 MB of RDRAM: an image that big does not
 # fail to build, it simply puts every later .bss object -- the event queue, the
 # deskbar, the tracker -- past the end of memory, where a write to them is accepted
@@ -1221,7 +1240,7 @@ PS2_GL_SRCS    = src/gl/gl_dispatch.c     \
                  src/apps/xmb_wave.c      \
                  src/apps/glgears.c       \
                  $(DEMO_SRCS)             \
-                 $(QUAKE_SRCS)
+                 $(PS2_QUAKE_SRCS)
 # B-MSX rides in the image when PS2_MSX=1: the tronMSX core reads no float, no host
 # clock and no libc beyond what src/kernel/libstr.c provides, and its two pieces of
 # media -- C-BIOS and the cartridge catalogue -- are bodies of the /SYS volume the
@@ -1273,6 +1292,46 @@ else
 PS2_MSX         ?= 1
 endif
 PS2_MSX_SRCS    = $(if $(filter 1,$(PS2_MSX)),$(MSX_SRCS) src/emulators/msx/msx_app.c,)
+# Quake is PARKED at 0 as of 2026-10-24 by the operator, for the same reason B-MSX is and with
+# the same shape: it is a Games-band row, and the image it lives in is over ps2.ld's budget.
+# The measurement, taken against a link with both ASSERTs relaxed (`_end = 0x02621700`):
+#
+#   the image needs                          38,934,272 B under the stack top
+#   RDRAM under the stack, with reserve      32,178,176 B  (0x01FB0000 - 0x00100000)
+#   over by                                  6,756,096 B
+#   $(QUAKE_SRCS) is                         3,911,851 B of that  (145,304 text + 104 data
+#                                                + 3,766,443 .bss across 22 objects; the three
+#                                                1 MiB arrays are mem.c's hunk buffer, r_alias's
+#                                                skin plane and texture.c's RGBA scratch)
+#
+# The other 2,842,496 B is not Quake's, and this dial does not pretend to have paid it -- it is
+# what the remaining levers are for.  What it does pay is the single largest app bundle in the
+# link, and it pays it because the machine's purpose is the DAW: CLU, Lil Cu and the orchestra
+# are what this image is for, and a brush model of E1M1 is not.
+#
+# Parking is safe here in a way B-MSX's park was not quite: the twenty-two units take no call
+# from anywhere else in the image.  Measured with `nm` over every `*.ps2.o`: 437 symbols
+# defined among them, zero of them named as an undefined reference by any other unit.  The one
+# name the desktop does ask for -- `open_quake_window()` -- is answered by src/clu/clu.c's weak
+# stub, which the strong definition in quake_app.c has been overriding all along; the four
+# consumers (desktop.c, global_menu.c, tracker.c, xmb.c) already null-test it, and core_ps2.c's
+# `quake` console command does not, so at PS2_QUAKE=0 it runs the stub and then prints
+# `[PS2-UI] Opened Quake 3D.`, which is the same silent lie the MSX park already prints and is
+# left alone rather than patched into a lane that is not being measured.
+#
+# The stamp is the law that a source-list change is not a recompile: without it the twenty-two
+# objects of the last un-parked build survive into the parked link, and the ASSERT then charges
+# 3.9 MB of .bss to an app nobody can call.  `make -n PS2_QUAKE=0` purges them too, because
+# `$(shell ...)` runs while parsing.
+PS2_QUAKE      ?= 0
+PS2_QUAKE_SRCS = $(if $(filter 1,$(PS2_QUAKE)),$(QUAKE_SRCS),)
+PS2_QUAKE_STAMP = .build/ps2-quake.stamp
+PS2_QUAKE_PREV := $(shell cat $(PS2_QUAKE_STAMP) 2>/dev/null)
+ifneq ($(PS2_QUAKE_PREV),$(PS2_QUAKE))
+$(shell mkdir -p ./.build && echo '$(PS2_QUAKE)' >$(PS2_QUAKE_STAMP) && \
+        rm -f $(QUAKE_SRCS:.c=.ps2.o) $(QUAKE_SRCS:.c=.pbench.o))
+$(info [PS2] PS2_QUAKE is now $(PS2_QUAKE) (was $(if $(PS2_QUAKE_PREV),$(PS2_QUAKE_PREV),unset)) -- the Quake units will rebuild)
+endif
 PS2_SRCS       = $(PS2_STARTUP)           \
                  src/cores/core_init.c    \
                  src/drivers/ps2/ps2_gs.c \
@@ -1366,6 +1425,21 @@ $(PS2_SYS_VOL_OBJ): $(PS2_SYS_VOL_SOURCE) btron_sys.vol
 %.ps2.o: %.c
 	$(PS2_CC) $(PS2_CFLAGS) -MMD -MP -c $< -o $@
 
+# src/media/gst_rt.c crashes LLVM 22.1.8 in MachineFunction's ShrinkWrap pass, on
+# `Shrink Wrapping analysis' against @clock_block: the same file at commit 544425f, with the
+# flags at commit 544425f, dies identically, so this is the toolchain and not the lane.
+# Reproduce with `make ps2`, or by compiling that revision's copy with PS2_CFLAGS.
+# -mllvm -enable-shrink-wrap=false is the suppression, measured rather than guessed: with
+# the base flags the compile crashes, adding this one emits a 71420-byte object.  The
+# clang-native spelling is -fno-shrink-wrap and this build of clang does not accept it;
+# -mllvm -no-shrink-wrap is likewise unknown.  Nothing here moves the ISA, the 32-bit GPR
+# O32 ABI or the soft-float contract in doc/txt/PS2.txt -- shrink-wrap only decides where
+# a function's prologue and epilogue go -- and `make test-ps2` measures that on the object
+# instead of trusting this comment.
+# Scoped to the one object on purpose: PS2_CFLAGS is what every [BENCH] row was measured
+# under, and widening it here would silently re-baseline the numbers the bench reports.
+src/media/gst_rt.ps2.o: PS2_CFLAGS += -mllvm -enable-shrink-wrap=false
+
 # `PS2_GL=` changes the flags three translation units compile under, and make does not see a
 # flag change: their objects stay newer than their sources and get linked into the image built
 # for the other value, which is worse than a build failure because the `[GL]` row then describes
@@ -1413,6 +1487,26 @@ $(shell mkdir -p ./.build && echo '$(PS2_PW)' >$(PS2_PW_STAMP) && \
               src/drivers/ps2/ps2_paint_worker.ps2.o)
 $(info [PS2] PS2_PW is now $(PS2_PW) (was $(if $(PS2_PW_PREV),$(PS2_PW_PREV),unset)) -- the paint worker's units will rebuild)
 endif
+
+# The PS2 lane owns its allocator: src/cores/core_ps2.c defines Imalloc, Icalloc, Ifree and
+# Irealloc strong against `s_ps2_heap`, and libstr.c's four weak versions only ever answer a
+# link that has nothing else.  libstr's fallback arena is therefore dead weight here, but dead
+# weight make can still see: 1,048,576 B of .bss in a 32 MB machine whose image was over
+# ps2.ld's budget by 2,842,496 B with Quake already parked.  The define shrinks it to the 64 B
+# stub the ARM lanes use.
+#
+# It is a per-object flag rather than a PS2_CFLAGS one because the lane cannot afford the
+# difference: a flag on the whole recipe is a change every `*.ps2.o` has to answer, and the
+# staleness law (see PS2_MSX above) would have me purge the entire image to move one array.
+# Same shape as the gst_rt shrink-wrap override above and the bench TU's defines below, and it
+# needs the one-time purge only the first time, because make compares file dates and a Makefile
+# is not a prerequisite of an object.
+#
+# The define is its own name and not the lane's existing -DBTRON_PS2_TARGET because that one is
+# also handed to host suites' rules (see the note above TEST_PTRACCUM_OBJ: "must not reach any
+# other suite's object through a pattern rule").  A hosted test that uses the fallback allocator
+# and finds a 64-byte arena is a failure nobody could read off the console.
+src/kernel/libstr.ps2.o: PS2_CFLAGS += -DBTRON_LIBSTR_NO_HEAP=1
 
 # PS2 measurement build: the present/pointer bench lives only in core_ps2.c, so one
 # object is rebuilt with the define and the shipped btron-ps2.elf keeps its own

@@ -5,10 +5,15 @@ static WND *s_wnd;
 static int s_bar;
 static int s_pick = -1;
 static int s_hold;
+static int s_fit_tr = -2;
+static int s_dy = 5;
+static int s_dy_tr = -3;
+static int s_dy_h;
+static int s_dy_mode = -1;
 static uint32_t s_home;
 static uint8_t s_seen_state;
 
-enum { ND = 48 };
+enum { ND = 160 };
 
 typedef struct Nd {
     int x, y, step, up, val, dot, idx, sharp;
@@ -101,6 +106,225 @@ static int bar_count(int mode, int inner)
     return bars;
 }
 
+/* Head plus stem stays inside the client for this part's own reach. */
+static int staff_dy(int mode, int h, int reach)
+{
+    int room;
+    int dy;
+    int need;
+    orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
+    orch_check(h > 0 && h < 8000, __LINE__);
+    if (mode == ORCH_LAY_MIN) return 3;
+    if (reach < 8) reach = 8;
+    if (reach > 40) reach = 40;
+    room = h / 2 - 16;
+    if (room < 24) room = 24;
+    need = reach + 7;
+    dy = room / need;
+    if (dy < 4) dy = 4;
+    if (dy > 8) dy = 8;
+    return dy;
+}
+
+static int step_reach(const OrchView *v, int track, int bass)
+{
+    uint32_t n;
+    uint32_t i;
+    int reach = 8;
+    int any = 0;
+    orch_check(v != 0, __LINE__);
+    orch_check(bass == 0 || bass == 1, __LINE__);
+    if (!v || track < 0) return 8;
+    n = v->event_count;
+    if (n > 4096u) n = 4096u;
+    for (i = 0; i < n; i++) {
+        const OrchEvent *e = &v->ev[i];
+        int step;
+        int mag;
+        uint8_t tr = e->track;
+        uint8_t vel = e->vel;
+        uint8_t key;
+        if ((int)tr != track || vel == 0) continue;
+        key = e->key;
+        if (key > 127) key = 127;
+        step = staff_step((int)key, bass);
+        mag = step < 0 ? -step : step;
+        if (!any || mag > reach) reach = mag;
+        any = 1;
+    }
+    if (reach < 8) reach = 8;
+    if (reach > 40) reach = 40;
+    return reach;
+}
+
+static int dy_now(const OrchView *v, int mode, int h, int track, int bass)
+{
+    int reach = 8;
+    orch_check(v != 0, __LINE__);
+    orch_check(bass == 0 || bass == 1, __LINE__);
+    if (v && track >= 0) reach = step_reach(v, track, bass);
+    return staff_dy(mode, h, reach);
+}
+
+static int dy_held(const OrchView *v, int mode, int h, int track, int bass)
+{
+    orch_check(v != 0, __LINE__);
+    orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
+    if (!v) return s_dy;
+    if (track == s_dy_tr && h == s_dy_h && mode == s_dy_mode) return s_dy;
+    s_dy_tr = track;
+    s_dy_h = h;
+    s_dy_mode = mode;
+    s_dy = dy_now(v, mode, h, track, bass);
+    if (s_dy < 3) s_dy = 3;
+    return s_dy;
+}
+
+static int span_w(int w, int mode, int *bars)
+{
+    int inner;
+    int bw;
+    orch_check(bars != 0, __LINE__);
+    orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
+    if (!bars) return 8;
+    *bars = bar_count(mode, w - 64);
+    inner = w - 56;
+    if (inner < 40) inner = 40;
+    bw = inner / *bars;
+    if (bw < 1) bw = 1;
+    return bw;
+}
+
+static void fit_name(char *dst, int cap, const char *src, int px)
+{
+    int i = 0;
+    int n = 0;
+    int w = 0;
+    orch_check(dst != 0, __LINE__);
+    orch_check(cap >= 2 && cap <= 48, __LINE__);
+    dst[0] = 0;
+    if (!src || px < 8 || cap < 2) return;
+    while (src[n] && i < cap - 1 && n < 46) {
+        unsigned char c = (unsigned char)src[n];
+        int adv = 8;
+        int step = 1;
+        if (c >= 0x80u) {
+            adv = 16;
+            while (step < 3 && src[n + step] != 0) {
+                if (((unsigned char)src[n + step] & 0xC0u) != 0x80u) break;
+                step++;
+            }
+        }
+        if (w + adv > px || i + step >= cap) break;
+        while (step > 0 && i < cap - 1) {
+            dst[i] = src[n];
+            i++;
+            n++;
+            step--;
+        }
+        w += adv;
+    }
+    dst[i] = 0;
+}
+
+static void part_text(char *dst, int cap, const OrchView *v, int px)
+{
+    char raw[48];
+    char num[8];
+    const char *nm;
+    int track;
+    int i;
+    int k;
+    orch_check(dst != 0, __LINE__);
+    orch_check(cap >= 2 && cap <= 48, __LINE__);
+    dst[0] = 0;
+    if (!v || cap < 2) return;
+    track = (int)v->selected;
+    if (track < 0 || track >= (int)v->track_count || track > 63) return;
+    (void)orch_fmt_u(num, 8, (unsigned)(track + 1));
+    i = 0;
+    for (k = 0; num[k] && i < 46 && k < 4; k++) raw[i++] = num[k];
+    if (i < 46) raw[i++] = ' ';
+    nm = v->trk[track].name;
+    for (k = 0; nm[k] && i < 47 && k < 46; k++) raw[i++] = nm[k];
+    raw[i] = 0;
+    fit_name(dst, cap, raw, px);
+}
+
+static void step_track(const OrchView *v, int dir)
+{
+    int n;
+    int t;
+    orch_check(v != 0, __LINE__);
+    orch_check(dir == -1 || dir == 1, __LINE__);
+    if (!v) return;
+    n = (int)v->track_count;
+    if (n < 1 || n > 64) return;
+    t = (int)v->selected;
+    if (t < 0 || t >= n) t = 0;
+    if (dir < 0) t = (t == 0) ? n - 1 : t - 1;
+    else t = (t + 1 >= n) ? 0 : t + 1;
+    s_hold = 0;
+    orch_desk_sel(t);
+}
+
+static const char *snap_name(int snap)
+{
+    orch_check(snap >= 0, __LINE__);
+    orch_check(snap < 8, __LINE__);
+    if (snap == ORCH_SNAP_BAR) return "Bar";
+    if (snap == ORCH_SNAP_BEAT) return "Beat";
+    if (snap == ORCH_SNAP_8TH) return "1/8";
+    return "1/16";
+}
+
+static uint32_t first_tick(const OrchView *v, int track, int *any)
+{
+    uint32_t n;
+    uint32_t i;
+    uint32_t best = 0;
+    orch_check(v != 0, __LINE__);
+    orch_check(any != 0, __LINE__);
+    if (any) *any = 0;
+    if (!v || !any || track < 0) return 0;
+    n = v->event_count;
+    if (n > 4096u) n = 4096u;
+    for (i = 0; i < n; i++) {
+        const OrchEvent *e = &v->ev[i];
+        uint32_t a;
+        uint8_t tr = e->track;
+        uint8_t vel = e->vel;
+        if ((int)tr != track || vel == 0) continue;
+        a = e->start_tick;
+        if (*any == 0 || a < best) best = a;
+        *any = 1;
+    }
+    return best;
+}
+
+static void seek_part(const OrchView *v, uint32_t bar)
+{
+    int track;
+    int any = 0;
+    uint32_t a;
+    orch_check(v != 0, __LINE__);
+    orch_check(bar > 0u, __LINE__);
+    if (!v || bar == 0u) return;
+    track = (int)v->selected;
+    if (track == s_fit_tr) return;
+    s_fit_tr = track;
+    s_pick = -1;
+    if (track < 0 || track >= (int)v->track_count) {
+        s_bar = 0;
+        return;
+    }
+    a = first_tick(v, track, &any);
+    if (!any) s_bar = 0;
+    else s_bar = (int)(a / bar);
+    if (s_bar < 0) s_bar = 0;
+    if (s_bar > 400) s_bar = 400;
+}
+
 static void draw_clef(GDEV *dev, int x, int mid, int dy, int bass)
 {
     orch_check(dev != 0, __LINE__);
@@ -109,11 +333,12 @@ static void draw_clef(GDEV *dev, int x, int mid, int dy, int bass)
         orch_fill(dev, x + 4, mid - dy * 2, 10, dy * 3, ORCH_COL_SILVER);
         orch_fill(dev, x + 16, mid - dy, 3, 3, ORCH_COL_WHITE);
         orch_fill(dev, x + 16, mid + dy, 3, 3, ORCH_COL_WHITE);
-        return;
+    } else {
+        orch_fill(dev, x + 10, mid - dy * 5, 2, dy * 8, ORCH_COL_SILVER);
+        orch_fill(dev, x + 2, mid - dy, 12, dy * 3, ORCH_COL_WHITE);
+        orch_fill(dev, x + 4, mid - dy * 3, 8, dy * 2, ORCH_COL_SILVER);
     }
-    orch_fill(dev, x + 10, mid - dy * 5, 2, dy * 8, ORCH_COL_SILVER);
-    orch_fill(dev, x + 2, mid - dy, 12, dy * 3, ORCH_COL_WHITE);
-    orch_fill(dev, x + 4, mid - dy * 3, 8, dy * 2, ORCH_COL_SILVER);
+    orch_text(dev, x + 1, mid - dy - 2, bass ? "F" : "G", ORCH_COL_AMBER);
 }
 
 static void ledgers(GDEV *dev, int x, int mid, int dy, int step)
@@ -121,7 +346,7 @@ static void ledgers(GDEV *dev, int x, int mid, int dy, int step)
     int k;
     orch_check(dev != 0, __LINE__);
     orch_check(dy > 0 && dy < 40, __LINE__);
-    for (k = 6; k <= 16; k += 2) {
+    for (k = 6; k <= 24; k += 2) {
         if (step >= k)
             orch_fill(dev, x - 4, mid - k * dy, 18, 1, ORCH_COL_SILVER);
         if (step <= -k)
@@ -372,6 +597,8 @@ static void take_home(const OrchView *v)
     s_bar = 0;
     s_hold = 0;
     s_pick = -1;
+    s_fit_tr = -2;
+    s_dy_tr = -3;
 }
 
 static void time_follow(const OrchView *v, int bars, uint32_t bar)
@@ -383,6 +610,7 @@ static void time_follow(const OrchView *v, int bars, uint32_t bar)
     orch_check(bar > 0u && bars > 0 && bars <= 8, __LINE__);
     if (!v || bar == 0u || bars < 1) return;
     take_home(v);
+    seek_part(v, bar);
     if (v->state == ORCH_GST_PLAYING && s_seen_state != ORCH_GST_PLAYING)
         s_hold = 0;
     s_seen_state = v->state;
@@ -403,6 +631,101 @@ static void time_follow(const OrchView *v, int bars, uint32_t bar)
     }
 }
 
+static void paint_staff(GDEV *dev, int w, int mid, int dy)
+{
+    int i;
+    orch_check(dev != 0, __LINE__);
+    orch_check(dy > 0 && dy < 40, __LINE__);
+    if (!dev || dy < 1) return;
+    for (i = -4; i <= 4; i += 2)
+        orch_fill(dev, 8, mid - i * dy, w - 16, 1, ORCH_COL_SILVER);
+}
+
+static void paint_barlines(GDEV *dev, int gx, int mid, int dy, int bar_w, int bars, int mode)
+{
+    int i;
+    orch_check(dev != 0, __LINE__);
+    orch_check(bars > 0 && bars <= 8, __LINE__);
+    if (!dev || bars < 1) return;
+    for (i = 1; i < bars && i < 8; i++)
+        orch_fill(dev, gx + i * bar_w, mid - 4 * dy, 1, 8 * dy, ORCH_COL_SILVER);
+    orch_fill(dev, gx + bars * bar_w, mid - 4 * dy, 2, 8 * dy, ORCH_COL_WHITE);
+    if (mode == ORCH_LAY_MIN) return;
+    for (i = 0; i < bars && i < 8; i++) {
+        char nb[8];
+        (void)orch_fmt_u(nb, 8, (unsigned)(s_bar + i + 1));
+        orch_text(dev, gx + i * bar_w + 2, mid - 4 * dy - 14, nb, ORCH_COL_DIM);
+    }
+}
+
+static void paint_heads(GDEV *dev, int dy)
+{
+    int i;
+    orch_check(dev != 0, __LINE__);
+    orch_check(dy > 0 && dy < 40, __LINE__);
+    if (!dev) return;
+    for (i = 0; i < s_nn && i < ND; i++) {
+        int x = s_nd[i].x;
+        int y = s_nd[i].y;
+        if (s_nd[i].idx == s_pick)
+            orch_fill(dev, x - 1, y - dy, dy + 6, dy, ORCH_COL_CYAN);
+        draw_head(dev, &s_nd[i], dy);
+    }
+}
+
+static void paint_now(GDEV *dev, const OrchView *v, int gx, int mid, int dy, int bar_w, int bars, uint32_t bar)
+{
+    uint32_t now;
+    uint32_t t0;
+    uint32_t vis;
+    orch_check(dev != 0, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!dev || !v || bar == 0u || bars < 1) return;
+    now = orch_now_tick(v);
+    t0 = (uint32_t)s_bar * bar;
+    vis = bar * (uint32_t)bars;
+    if (now < t0 || now >= t0 + vis) return;
+    orch_fill(dev, gx + (int)(((now - t0) * (uint32_t)(bars * bar_w)) / vis),
+              mid - 4 * dy, 2, 8 * dy, ORCH_COL_PLAYHEAD);
+}
+
+static void paint_chrome(GDEV *dev, const OrchView *v, int w, int mode)
+{
+    char name[32];
+    int name_x;
+    int x0;
+    int px;
+    orch_check(dev != 0, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!dev || !v) return;
+    if (mode == ORCH_LAY_MIN) {
+        if (w < 80) return;
+        orch_btn(dev, 8, 4, 24, 22, "[", 0);
+        orch_btn(dev, 36, 4, 24, 22, "]", 0);
+        return;
+    }
+    orch_btn(dev, 8, 4, 24, 22, "<", 0);
+    orch_btn(dev, 36, 4, 24, 22, ">", 0);
+    name_x = 72;
+    if (w >= 700) {
+        orch_btn(dev, 68, 4, 52, 22, "Sel", v->tool == ORCH_TOOL_SELECT);
+        orch_btn(dev, 124, 4, 52, 22, "Pen", v->tool == ORCH_TOOL_PENCIL);
+        orch_btn(dev, 180, 4, 52, 22, "Era", v->tool == ORCH_TOOL_ERASE);
+        orch_btn(dev, 236, 4, 56, 22, snap_name((int)v->snap), 0);
+        orch_btn(dev, 296, 4, 56, 22, "Undo", 0);
+        name_x = 360;
+    }
+    if (w < 400) return;
+    x0 = w - 64;
+    px = x0 - name_x - 8;
+    if (px >= 48) {
+        part_text(name, 32, v, px);
+        if (name[0]) orch_text(dev, name_x, 8, name, ORCH_COL_WHITE);
+    }
+    orch_btn(dev, x0, 4, 24, 22, "[", 0);
+    orch_btn(dev, x0 + 32, 4, 24, 22, "]", 0);
+}
+
 static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
 {
     int bass;
@@ -411,56 +734,33 @@ static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
     int mid;
     int bars;
     int gx;
-    int inner;
     int bar_w;
-    int i;
     uint32_t bar;
-    uint32_t now;
     orch_check(dev != 0, __LINE__);
     orch_check(v != 0, __LINE__);
     if (!dev || !v) return;
     track = (int)v->selected;
     bass = 0;
-    if (track >= 0 && track < (int)v->track_count) bass = v->trk[track].clef ? 1 : 0;
-    dy = (mode == ORCH_LAY_MIN) ? 3 : 5;
+    if (track >= 0 && track < (int)v->track_count) {
+        uint8_t clef = v->trk[track].clef;
+        bass = clef ? 1 : 0;
+    }
+    dy = dy_held(v, mode, h, track, bass);
     mid = h / 2;
-    bars = bar_count(mode, w - 64);
     gx = 48;
-    inner = w - gx - 8;
-    if (inner < 40) inner = 40;
-    bar_w = inner / bars;
+    bar_w = span_w(w, mode, &bars);
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
     time_follow(v, bars, bar);
-    for (i = -4; i <= 4; i += 2)
-        orch_fill(dev, 8, mid - i * dy, w - 16, 1, ORCH_COL_SILVER);
+    paint_staff(dev, w, mid, dy);
     draw_clef(dev, 8, mid, dy, bass);
-    for (i = 1; i < bars && i < 8; i++)
-        orch_fill(dev, gx + i * bar_w, mid - 4 * dy, 1, 8 * dy, ORCH_COL_SILVER);
-    orch_fill(dev, gx + bars * bar_w, mid - 4 * dy, 2, 8 * dy, ORCH_COL_WHITE);
-    if (mode == ORCH_LAY_WIDE) {
-        for (i = 0; i < bars && i < 8; i++) {
-            char nb[8];
-            (void)orch_fmt_u(nb, 8, (unsigned)(s_bar + i + 1));
-            orch_text(dev, gx + i * bar_w + 2, mid - 4 * dy - 14, nb, ORCH_COL_DIM);
-        }
-    }
+    paint_barlines(dev, gx, mid, dy, bar_w, bars, mode);
     collect(v, track, bass, gx, bar_w, bars, mid, dy, bar);
-    for (i = 0; i < s_nn && i < ND; i++) {
-        if (s_nd[i].idx == s_pick) orch_fill(dev, s_nd[i].x - 1, s_nd[i].y - dy, dy + 6, dy, ORCH_COL_CYAN);
-        draw_head(dev, &s_nd[i], dy);
-    }
+    paint_heads(dev, dy);
     draw_beams(dev, dy);
     draw_rests(dev, v, track, gx, bar_w, bars, mid, bar);
-    now = orch_now_tick(v);
-    if (bar > 0u && now >= (uint32_t)s_bar * bar && now < (uint32_t)(s_bar + bars) * bar) {
-        int bx = gx + (int)(((now - (uint32_t)s_bar * bar) * (uint32_t)(bars * bar_w)) / (bar * (uint32_t)bars));
-        orch_fill(dev, bx, mid - 4 * dy, 2, 8 * dy, ORCH_COL_PLAYHEAD);
-    }
-    if (mode != ORCH_LAY_MIN) {
-        orch_btn(dev, 8, 4, 24, 22, "<", 0);
-        orch_btn(dev, 36, 4, 24, 22, ">", 0);
-    }
+    paint_now(dev, v, gx, mid, dy, bar_w, bars, bar);
+    paint_chrome(dev, v, w, mode);
 }
 
 static void score_paint(WND *wnd, GDEV *dev)
@@ -480,11 +780,16 @@ static void score_paint(WND *wnd, GDEV *dev)
     (void)wnd;
 }
 
-static int turn_page(int x, int y, int mode)
+static int head_click(const OrchView *v, int x, int y, int w, int mode)
 {
+    orch_check(v != 0, __LINE__);
     orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
-    orch_check(y > -4000 && y < 8000, __LINE__);
-    if (mode == ORCH_LAY_MIN || y >= 28) return 0;
+    if (!v || y >= 28) return 0;
+    if (mode == ORCH_LAY_MIN) {
+        if (w >= 80 && x < 36) step_track(v, -1);
+        else if (w >= 80 && x < 64) step_track(v, 1);
+        return 1;
+    }
     if (x < 64) {
         s_hold = 1;
         if (x < 36) {
@@ -492,7 +797,17 @@ static int turn_page(int x, int y, int mode)
         } else if (s_bar < 400) {
             s_bar++;
         }
+        return 1;
     }
+    if (w >= 700 && x < 352) {
+        if (x < 124) orch_desk_tool(ORCH_TOOL_SELECT);
+        else if (x < 180) orch_desk_tool(ORCH_TOOL_PENCIL);
+        else if (x < 236) orch_desk_tool(ORCH_TOOL_ERASE);
+        else if (x < 296) orch_desk_snap_cycle();
+        else (void)orch_undo_apply();
+        return 1;
+    }
+    if (w >= 400 && x >= w - 64) step_track(v, x < w - 32 ? -1 : 1);
     return 1;
 }
 
@@ -515,19 +830,18 @@ static void score_edit(const OrchView *v, int x, int y, int w, int h, int mode)
     int hit;
     orch_check(v != 0, __LINE__);
     orch_check(w > 0 && h > 0, __LINE__);
-    if (turn_page(x, y, mode)) return;
+    if (head_click(v, x, y, w, mode)) return;
     track = (int)v->selected;
     if (track < 0 || track >= (int)v->track_count) return;
     bass = v->trk[track].clef ? 1 : 0;
-    dy = (mode == ORCH_LAY_MIN) ? 3 : 5;
+    dy = dy_held(v, mode, h, track, bass);
     mid = h / 2;
     if (dy == 0) return;
     step = (mid - y) / dy;
-    if (step < -16) step = -16;
-    if (step > 16) step = 16;
-    bars = bar_count(mode, w - 64);
+    if (step < -30) step = -30;
+    if (step > 30) step = 30;
     gx = 48;
-    bar_w = (w - gx - 8) / bars;
+    bar_w = span_w(w, mode, &bars);
     if (bar_w < 8) return;
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;

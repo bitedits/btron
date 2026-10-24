@@ -9,12 +9,29 @@
 extern void* Imalloc(size_t size);
 extern void* Icalloc(size_t nmemb, size_t size);
 extern void  Ifree(void *ptr);
+extern void* Irealloc(void *ptr, size_t size);
 
 static inline void* malloc(size_t size) { return Imalloc(size); }
 static inline void* calloc(size_t nmemb, size_t size) { return Icalloc(nmemb, size); }
 static inline void  free(void *ptr) { Ifree(ptr); }
+static inline void* realloc(void *ptr, size_t size) { return Irealloc(ptr, size); }
 static inline void  exit(int status) { (void)status; }
-static inline void  abort(void) { for (;;) { __asm__ volatile("hlt"); } }
+/* hlt is an x86 halt.  Every other freestanding target, including the
+ * Emotion Engine, rejects that mnemonic, so the spin has to be empty. */
+static inline void  abort(void) {
+#if defined(__i386__) || defined(__x86_64__)
+    for (;;) { __asm__ volatile("hlt"); }
+#else
+    for (;;) { __asm__ volatile(""); }
+#endif
+}
+/* No process environment on a freestanding image.  Callers treat NULL
+ * as "the variable is unset". */
+static inline char *getenv(const char *name) { (void)name; return 0; }
+
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+#define strtoull tkl_strtoull
 
 /* Hosted builds get rand() from libc; the Quake sources call it for weapon
  * spread.  Same 24-bit LCG as the QC random() builtin so both targets jitter

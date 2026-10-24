@@ -468,6 +468,44 @@ void* calloc(size_t n, size_t sz)
 }
 void  free(void *p) { Ifree(p); }
 
+/* The disassemblers grow tables with realloc.  libstr's weak Irealloc reads
+ * a HeapBlock header this pool does not use, so the copy length comes from
+ * the ps2_blk in front of the payload. */
+void *Irealloc(void *ptr, size_t size)
+{
+    ps2_blk *b;
+    void *n;
+    size_t old;
+    unsigned steps;
+
+    if (!ptr)
+        return ps2_heap_take(size, __builtin_return_address(0));
+    if (size == 0) {
+        Ifree(ptr);
+        return NULL;
+    }
+    b = NULL;
+    steps = 0;
+    for (ps2_blk *c = s_heap_list; c && steps < PS2_HEAP_BLOCKS_MAX; c = c->next) {
+        steps++;
+        if ((void *)(c + 1) == ptr) {
+            b = c;
+            break;
+        }
+    }
+    if (!b || !b->used)
+        return NULL;
+    old = b->size;
+    if (size <= old)
+        return ptr;
+    n = ps2_heap_take(size, __builtin_return_address(0));
+    if (!n)
+        return NULL;
+    tkl_memcpy(n, ptr, old);
+    Ifree(ptr);
+    return n;
+}
+
 /* ── Framebuffer & Color Conversion ─────────────────────────────── */
 
 /* 32-bit BTRON Desktop Backbuffer (800x600 @ 32-bit ARGB COLOR) */

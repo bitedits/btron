@@ -188,6 +188,17 @@ size_t tkl_strlen(const char *s) {
     return len;
 }
 
+/* strnlen -- the bounded length.  The assembler front-end (src/clu/be/arch/x86)
+ * uses it to size a strndup, and the bound is the point: a caller that already
+ * knows the buffer may not be terminated asks for at most n bytes, so this never
+ * reads past them the way strlen() would. */
+size_t tkl_strnlen(const char *s, size_t n) {
+    size_t len = 0;
+    if (!s) return 0;
+    while (len < n && s[len]) len++;
+    return len;
+}
+
 char* tkl_strcpy(char *dst, const char *src) {
     char *ret = dst;
     while ((*dst++ = *src++));
@@ -276,7 +287,25 @@ typedef struct HeapBlock {
     uint8_t pad[16];
 } __attribute__((aligned(16))) HeapBlock;
 
-#if defined(__mips__)
+/* Three sizes, one per kind of lane.
+ *
+ * A lane that answers Imalloc/Icalloc/Ifree/Irealloc with an allocator of its own still
+ * compiles the four weak fallbacks below, and nothing in the recipe runs --gc-sections, so
+ * this array is charged to .bss whatever the link resolves.  The PS2 image is that lane:
+ * src/cores/core_ps2.c defines all four names strong against its own static pool, and `nm`
+ * on the linked image reads core_ps2's definitions as the winners every time.  Measured
+ * 2026-10-24, s_heap_pool was 1,048,576 B of the 2,842,496 B by which that image exceeded
+ * ps2.ld's budget -- a megabyte of RDRAM kept for an allocator the linker had already
+ * replaced.  Such a lane says so with -DBTRON_LIBSTR_NO_HEAP and takes the 64 B stub the ARM
+ * lanes already take: the weak functions stay compilable, and they are provably unreachable
+ * because no name in them is the one the calls bind to.
+ *
+ * The gate is a define and not the architecture on purpose.  The `__mips__` branch is the
+ * bare-metal Malta image -- src/cores/core_mips.c, mips_uart.c and this file, three units in
+ * all -- which has no allocator of its own and does spend the 1 MiB arena. */
+#if defined(BTRON_LIBSTR_NO_HEAP)
+static uint8_t s_heap_pool[64] __attribute__((aligned(16)));
+#elif defined(__mips__)
 static uint8_t s_heap_pool[1024 * 1024] __attribute__((aligned(16)));
 #elif !defined(_RPI_BCM283x_) && !defined(__arm__) && !defined(__aarch64__)
 static uint8_t s_heap_pool[1024 * 1024 * 16] __attribute__((aligned(16)));
@@ -382,6 +411,30 @@ __attribute__((weak)) void Ifree(void *ptr) {
     }
 }
 
+/* Matches this file's HeapBlock header.  A target that replaces Imalloc
+ * (the PS2 pool, the ARM bump pointer) replaces Irealloc with it. */
+__attribute__((weak)) void *Irealloc(void *ptr, size_t size)
+{
+    HeapBlock *blk;
+    void *n;
+    size_t old;
+
+    if (!ptr) return Imalloc(size);
+    if (size == 0) {
+        Ifree(ptr);
+        return NULL;
+    }
+    blk = (HeapBlock *)ptr - 1;
+    if (blk->magic != HEAP_MAGIC) return NULL;
+    old = blk->size;
+    if (size <= old) return ptr;
+    n = Imalloc(size);
+    if (!n) return NULL;
+    tkl_memcpy(n, ptr, old);
+    Ifree(ptr);
+    return n;
+}
+
 #if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
 /* Standard aliases only for freestanding mode */
 void* memset(void *s, int c, size_t n) __attribute__((weak, alias("tkl_memset")));
@@ -389,6 +442,7 @@ void* memcpy(void *dst, const void *src, size_t n) __attribute__((weak, alias("t
 void* memmove(void *dst, const void *src, size_t n) __attribute__((weak, alias("tkl_memmove")));
 int   memcmp(const void *s1, const void *s2, size_t n) __attribute__((weak, alias("tkl_memcmp")));
 size_t strlen(const char *s) __attribute__((weak, alias("tkl_strlen")));
+size_t strnlen(const char *s, size_t n) __attribute__((weak, alias("tkl_strnlen")));
 char*  strcpy(char *dst, const char *src) __attribute__((weak, alias("tkl_strcpy")));
 char*  strncpy(char *dst, const char *src, size_t n) __attribute__((weak, alias("tkl_strncpy")));
 int    strcmp(const char *s1, const char *s2) __attribute__((weak, alias("tkl_strcmp")));
@@ -577,6 +631,49 @@ __attribute__((weak)) unsigned long int tkl_strtoul(const char *nptr, char **end
 #if !defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0
 unsigned long int strtoul(const char *nptr, char **endptr, int base) __attribute__((weak, alias("tkl_strtoul")));
 #endif
+
+/* Register numbers in the nVidia assembler.  At most 32 digits: a u64
+ * is 20 decimal digits, and endptr still lands on the first non-digit
+ * of a short token. */
+__attribute__((weak)) unsigned long long tkl_strtoull(const char *nptr, char **endptr, int base)
+{
+    unsigned long long value = 0;
+    int steps;
+    int i;
+
+    if (!nptr) {
+        if (endptr) *endptr = NULL;
+        return 0;
+    }
+    while (*nptr == ' ' || *nptr == '\t') ++nptr;
+    if (*nptr == '+' || *nptr == '-') ++nptr;
+    if (base == 0) {
+        if (nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
+            base = 16;
+            nptr += 2;
+        } else if (nptr[0] == '0') {
+            base = 8;
+            ++nptr;
+        } else {
+            base = 10;
+        }
+    } else if (base == 16 && nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
+        nptr += 2;
+    } else if (base < 2 || base > 36) {
+        base = 10;
+    }
+    for (steps = 0; steps < 32 && *nptr != '\0'; steps++) {
+        if (*nptr >= '0' && *nptr <= '9') i = *nptr - '0';
+        else if (*nptr >= 'A' && *nptr <= 'Z') i = *nptr - 'A' + 10;
+        else if (*nptr >= 'a' && *nptr <= 'z') i = *nptr - 'a' + 10;
+        else break;
+        if (i >= base) break;
+        value = value * (unsigned)base + (unsigned)i;
+        ++nptr;
+    }
+    if (endptr) *endptr = (char *)nptr;
+    return value;
+}
 
 /* ── qsort ──────────────────────────────────────────────────────── */
 

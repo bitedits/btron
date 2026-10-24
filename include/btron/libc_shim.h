@@ -42,6 +42,7 @@
 #else
 
 #  include <libstr.h>
+#  include <stdio.h>                  /* FILE, and the four stream calls declared below */
 
 #  define BTRON_HOSTED 0
 
@@ -74,6 +75,33 @@ extern char  *strstr(const char *, const char *);
 extern int snprintf(char *, size_t, const char *, ...);
 extern unsigned long int strtoul(const char *, char **, int);
 extern int atoi(const char *);
+
+/*
+ * Byte-stream file access: fopen/fread/fwrite/fclose are declared in
+ * include/gl/stdio.h, the header this branch pulls in just above, because that
+ * is the one <stdio.h> every freestanding lane resolves to.  src/fs/fs_stdio.c
+ * answers them from the Record-Stream engine in src/fs/file.c.
+ *
+ * <sys/stat.h> has no such shadow, and there is no reason to ship a tree of
+ * POSIX headers for one field, so struct stat lives here instead.  st_size is
+ * long long because a session file is 73408 bytes and a `W`-sized size would
+ * silently answer 8192 for it.  A lane that links src/fs/fs_stdio.c gets a real
+ * length; a lane that does not gets an undefined symbol at the link, which is
+ * the honest failure.
+ */
+#ifndef _BTRON_STRUCT_STAT_DEFINED
+#define _BTRON_STRUCT_STAT_DEFINED
+#define S_IFREG  0x8000u
+#define S_IFDIR  0x4000u
+struct stat {
+    long long st_size;
+    unsigned int st_mode;
+    long long st_mtime;
+};
+#define S_ISREG(m)  (((m) & 0xF000u) == S_IFREG)
+#define S_ISDIR(m)  (((m) & 0xF000u) == S_IFDIR)
+#endif
+int stat(const char *path, struct stat *st);
 
 static inline int abs(int n) { return n < 0 ? -n : n; }
 

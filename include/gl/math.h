@@ -419,6 +419,16 @@ static inline double btron_log(double x) {
     return 2.0 * sum + (double)e * 0.69314718055994530942;
 }
 
+/* Common logarithm, derived from btron_log rather than re-implemented: log10(x) is
+ * log(x) * (1/ln 10), and the reciprocal is written as one rounded double constant
+ * because a second series here would be a second model of the same curve.  `pow`
+ * guards x <= 0 the same way -- a negative argument has no bit-pattern to read, so
+ * btron_log on its own would return garbage rather than an error. */
+static inline double log10(double x) {
+    if (x <= 0.0) return 0.0;
+    return btron_log(x) * 0.43429448190325182765;
+}
+
 /* exp scaled by 2^n from the bit pattern, so the series only ever runs on
  * |f| <= ln2/2 -- thirteen terms there is good to the last place of a double. */
 static inline double btron_exp(double x) {
@@ -471,6 +481,7 @@ static inline long long llround(double x) { return (long long)(x >= 0.0 ? x + 0.
 
 static inline double exp(double x) { return pow(M_E, x); }
 static inline float expf(float x) { return (float)exp((double)x); }
+static inline float log10f(float x) { return (float)log10((double)x); }
 static inline double fmod(double x, double y) {
     if (y == 0.0) return 0.0;
     return x - (double)((long long)(x / y)) * y;

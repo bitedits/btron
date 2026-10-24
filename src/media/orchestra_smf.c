@@ -9,7 +9,10 @@
 #include "../demo/lilcu64_insert.h"
 #include <stdio.h>
 #include <string.h>
+#include <btron/libc_shim.h>
+#if BTRON_HOSTED
 #include <sys/stat.h>
+#endif
 
 enum {
     SMF_HDR = 14,        /* MThd chunk: tag + length + 6 body bytes   */

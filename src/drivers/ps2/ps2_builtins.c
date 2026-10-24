@@ -8,8 +8,11 @@
  * -msoft-float is therefore built into the whole PS2 image, which moves every
  * floating-point operation -- float and double alike -- out of the FPU and into a
  * call to one of these symbols.  The link is -nostdlib, so the port carries the
- * runtime itself: the 32 names below are exactly what clang's relocations ask for
- * across the PS2 sources.
+ * runtime itself: the names below are what clang's relocations ask for across the
+ * PS2 sources.  They are the 32 floating-point libcalls plus six integer ones
+ * (`__udivdi3`, `__umoddi3`, `__divdi3` and the three unsigned 64-bit conversions)
+ * that a 64-bit count forces on a 32-bit register file; see the section at the end
+ * of this file for why those are answered here rather than narrowed away.
  *
  * Under -msoft-float the O32 ABI hands a floating-point value to a callee the same
  * way it hands a 64-bit integer: a `double` argument is an even/odd GPR pair with
@@ -1189,4 +1192,136 @@ int64_t __fixdfdi(uint64_t a)
     if (cls == FPK_NAN) return 0;
     if (cls == FPK_BIG || cls == FPK_INF || mag > max_i64) return sign ? (int64_t)(~max_i64) : (int64_t)max_i64;
     return sign ? -(int64_t)mag : (int64_t)mag;
+}
+
+/* ── The 64-bit integer libcalls ──────────────────────────────────────────── */
+
+/*
+ * clang emits these names wherever a source divides a 64-bit count, and the DAW
+ * divides them constantly: the transport converts samples to nanoseconds and
+ * back (src/media/gst_rt.c), the arrange ruler maps pixels to bars
+ * (orchestra_arrange.c), the piano maps a bar to a key (orchestra_piano.c).  A
+ * 32-bit-GPR MIPS has no 64-bit divide, rem or conversion instruction, and this
+ * link is -nostdlib, so nothing answers the call -- the build breaks at the link
+ * rather than the image silently wrong, which is the good failure mode.
+ *
+ * Two homes were possible.  The lane's own precedent for a count that does not
+ * fit the machine is to narrow the arithmetic (see the `no 64-bit divisor`
+ * comments in core_ps2.c, ps2_irq.c and ps2_ptr_stroke.h), and that is right for
+ * a cycle counter whose whole range is 32 bits by construction.  It is not right
+ * here: ns-since-start over a frame rate is a 64-bit quantity by definition, and
+ * rewriting each of the 19 sites to a 32-bit approximation would change what the
+ * transport measures -- a silent behavior edit in files the bench times.  So the
+ * runtime answers it instead, exactly as it already answers __floatdidf and
+ * __fixdfdi, which are the same class of "the register file cannot do this".
+ *
+ * The loop below keeps the running remainder in two 32-bit registers and does
+ * every compare and subtract on that pair, because an implementation written
+ * with `uint64_t / uint64_t` would recurse into the symbol it defines.  Shifts
+ * and the reassembly are free: clang turns them into register moves, not calls.
+ */
+static uint64_t u64_divmod(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    const uint32_t nh = (uint32_t)(n >> 32), nl = (uint32_t)n;
+    const uint32_t dh = (uint32_t)(d >> 32), dl = (uint32_t)d;
+    uint32_t qh = 0u, ql = 0u;
+    uint32_t rh = 0u, rl = 0u;
+    int i;
+
+    if (d == 0) {
+        /* Division by zero is undefined in C and no caller in the tree can
+         * reach it (a zero frame rate is refused upstream).  Returning zero
+         * with the dividend as the remainder is a choice, not a law: what
+         * matters is that the answer is obviously wrong rather than plausible,
+         * so a mistake reads as a stalled transport instead of 2^64-1. */
+        if (rem) *rem = n;
+        return 0;
+    }
+    if (nh == 0u && dh == 0u) {
+        /* Both operands fit 32 bits -- a frame count over a sample rate -- and
+         * the assembler's own divu and remu answer that, so the 64-iteration
+         * loop is only paid for the divides that genuinely need 64 bits. */
+        if (rem) *rem = (uint64_t)(nl % dl);
+        return (uint64_t)(nl / dl);
+    }
+    for (i = 0; i < 64; i++) {
+        const uint32_t bit = (i < 32) ? ((nh >> (uint32_t)(31 - i)) & 1u)
+                                      : ((nl >> (uint32_t)(63 - i)) & 1u);
+        rh = (rh << 1) | (rl >> 31);
+        rl = (rl << 1) | bit;
+        if (rh > dh || (rh == dh && rl >= dl)) {
+            const uint32_t borrow = (rl < dl) ? 1u : 0u;
+            rl -= dl;
+            rh = rh - dh - borrow;
+            if (i < 32) qh = (uint32_t)((qh << 1) | 1u);
+            else        ql = (uint32_t)((ql << 1) | 1u);
+        } else {
+            if (i < 32) qh <<= 1;
+            else        ql <<= 1;
+        }
+    }
+    if (rem) *rem = ((uint64_t)rh << 32) | (uint64_t)rl;
+    return ((uint64_t)qh << 32) | (uint64_t)ql;
+}
+
+uint64_t __udivdi3(uint64_t a, uint64_t b)
+{
+    return u64_divmod(a, b, 0);
+}
+
+uint64_t __umoddi3(uint64_t a, uint64_t b)
+{
+    uint64_t r = 0;
+    (void)u64_divmod(a, b, &r);
+    return r;
+}
+
+/* Signed quotient: magnitude-divide, then apply the sign of the operands.  The
+ * magnitudes come from unsigned subtraction so INT64_MIN, whose absolute value
+ * is not representable, is handled without the undefined negation -- the same
+ * trick __floatdidf above already uses.  C truncates toward zero, which is what
+ * the unsigned loop does; only the sign is added here. */
+int64_t __divdi3(int64_t a, int64_t b)
+{
+    const uint32_t neg = ((a < 0) ^ (b < 0)) ? 1u : 0u;
+    const uint64_t ma = (a < 0) ? (uint64_t)0u - (uint64_t)a : (uint64_t)a;
+    const uint64_t mb = (b < 0) ? (uint64_t)0u - (uint64_t)b : (uint64_t)b;
+    const uint64_t q = u64_divmod(ma, mb, 0);
+    return neg ? (int64_t)((uint64_t)0u - q) : (int64_t)q;
+}
+
+/* unsigned 64 -> double / -> float.  Both are a plain integer-to-float
+ * conversion with no sign, so the existing packer does them: it normalises,
+ * rounds to nearest-even and reaches the subnormal band exactly as the two
+ * signed forms above do.  These are not the hardware path even when
+ * BTRON_PS2_FP_HW is on -- cvt.s.w is a 32-bit signed source, so a 64-bit
+ * operand has no instruction at all -- which is why neither goes through
+ * FP_PICK. */
+uint64_t __floatundidf(uint64_t v)
+{
+    FP_COUNT(FP_DF_GEN);
+    return fp_pack(0u, v, 0, 0, &FP_F64);
+}
+
+uint32_t __floatundisf(uint64_t v)
+{
+    FP_COUNT(FP_SF_CVTI);
+    return (uint32_t)fp_pack(0u, v, 0, 0, &FP_F32);
+}
+
+/* float -> unsigned 64, truncating toward zero.  A negative value returns 0 and
+ * an out-of-range one saturates, which is the law this file already sets for
+ * __fixunssfsi; libgcc's __fixunssfdi wraps a negative to the top of the
+ * unsigned range instead, and nothing here depends on which of the two you
+ * call correct because every call site converts a time or a sample count that
+ * is non-negative by construction. */
+uint64_t __fixunssfdi(uint32_t a)
+{
+    uint32_t sign;
+    FP_COUNT(FP_SF_CVT);
+    int cls;
+    const uint64_t mag = fp_trunc((uint64_t)a, &FP_F32, &sign, &cls);
+    if (cls == FPK_NAN || sign) return 0;
+    if (cls == FPK_BIG || cls == FPK_INF) return 0xFFFFFFFFFFFFFFFFULL;
+    return mag;
 }

@@ -132,6 +132,12 @@
             color: var(--tron-teal);
         }
 
+        .nav-toggle .hamburger,
+        .nav-toggle .hamburger::before,
+        .nav-toggle .hamburger::after {
+            background: var(--ink);
+        }
+
         /* ── Hero ─────────────────────────────────────────────────────────── */
         header {
             min-height: 100vh;
@@ -153,7 +159,7 @@
 
         .hero-content {
             max-width: 1180px;
-            padding: 0 clamp(1.25rem, 5vw, 3.5rem);
+            padding: 5.5rem clamp(1.25rem, 5vw, 3.5rem) 9rem;
             text-align: center;
         }
 
@@ -211,12 +217,16 @@
             margin-top: clamp(2.2rem, 5vw, 3.2rem);
             display: flex;
             flex-wrap: wrap;
-            gap: 0.55rem 2.2rem;
+            gap: 0.6rem clamp(1.6rem, 4vw, 3.4rem);
             justify-content: center;
             font-family: var(--mono-font);
-            font-size: 0.76rem;
-            letter-spacing: 0.16em;
+            font-size: 0.74rem;
+            letter-spacing: 0.14em;
             color: var(--ink-3);
+        }
+
+        .hero-marks span {
+            white-space: nowrap;
         }
 
         .hero-marks span::before {
@@ -472,7 +482,8 @@
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 0.9rem;
+            gap: 0.35rem 0.9rem;
+            text-wrap: balance;
         }
 
         .copy p {
@@ -895,6 +906,19 @@
 
         /* ── Responsive ───────────────────────────────────────────────────── */
         @media (max-width: 940px) {
+            .scroll-cue {
+                display: none;
+            }
+
+            .hero-content {
+                padding-bottom: 5.5rem;
+            }
+
+            .band-head {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 0.7rem;
+            }
+
             .showcase {
                 grid-template-columns: minmax(0, 1fr);
                 gap: 2.4rem;
@@ -992,9 +1016,9 @@
             </p>
             <div class="hero-marks">
                 <span>48 kHz / 44.1 kHz</span>
-                <span>八つの窓 · 三十二の音色</span>
-                <span>1024 frame host period</span>
-                <span>七つの席</span>
+                <span>8 windows · 32 programs</span>
+                <span>1024-frame host period</span>
+                <span>4 products · 7 seats</span>
             </div>
         </div>
         <a class="scroll-cue" href="#opening">Scroll<i></i></a>
@@ -1041,10 +1065,7 @@
                 <div class="band-intro reveal">
                     <p>
                         B-System は創作を四つの専門分野として名前づけます。DAW（Digital Audio Workstation）、DPS（Desktop
-                        Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つはそれぞれ機械の別の場所を突
-                        きます。音は合成とデバイス遅延、組版は用紙の幾何、立体はシーングラフとフレームバッファ、映像は時間
-                        とファイル交換です。だから四つを一つの「スイート」にまとめず、それぞれに窓口とマニュアルを与えまし
-                        た。そして出荷済みの二題と、宣言だけの二題を同じ顔で並べず、札を分けて掲げます。
+Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つはそれぞれ機械の別の場所を突きます。音は合成とデバイス遅延、組版は用紙の幾何、立体はシーングラフとフレームバッファ、映像は時間とファイル交換です。だから四つを一つの「スイート」にまとめず、それぞれに窓口とマニュアルを与えました。そして出荷済みの二題と、宣言だけの二題を同じ顔で並べず、札を分けて掲げます。
                     </p>
                     <p class="en">
                         Four disciplines are named instead of one suite, because each one stresses a different contract
@@ -1096,8 +1117,7 @@
                         <p class="role">01 — DAW / Digital Audio Workstation</p>
                         <h3 class="jp-title">管弦楽 (Orchestra) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-                            ステージのための DAW。使い手を Rock（生バンド）、Classic（声と古典楽器）、Orchestra（フィル
-                            ハーモニー配置）の三つに固定し、三十二のプログラムをすべて手書きの合成手続きで鳴らします。
+ステージのための DAW。使い手を Rock（生バンド）、Classic（声と古典楽器）、Orchestra（フィルハーモニー配置）の三つに固定し、三十二のプログラムをすべて手書きの合成手続きで鳴らします。
                             SoundFont もサンプルライブラリも使いません。窓は八つ、マニュアルは第十二章です。
                         </p>
                         <ul class="spec">
@@ -1133,9 +1153,7 @@
                         <p class="role">02 — DPS / Desktop Publishing System</p>
                         <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-                            DTP 出版組版環境。和式の伝統判型十四種と、チベット横長ペーチャ経典の組版仕様を、同じエン
-                            ジン上の二つの紙として扱います。画面の像素ではなく頁の幾何が正しさの単位になる分野で、原稿
-                            リンクから印刷所入稿用 PDF までを一手順で通します。
+DTP 出版組版環境。和式の伝統判型十四種と、チベット横長ペーチャ経典の組版仕様を、同じエンジン上の二つの紙として扱います。画面の像素ではなく頁の幾何が正しさの単位になる分野で、原稿リンクから印刷所入稿用 PDF までを一手順で通します。
                         </p>
                         <ul class="spec">
                             <li><strong>和式伝統判型 14 種</strong><span>四六判の縦書き段組まで仕様として持つ</span></li>
@@ -1157,10 +1175,7 @@
                         <p class="role">03 — 3DS / 3D System</p>
                         <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-                            立体をつくる 3D システム。まだお届けしていません。この札に載っているのは宣言だけです。た
-                            だしかに床は動いています。B-GL は TinyGL のソフトウェアラスタライザと VirtIO-GPU（virgl）
-                            の二つを本番バックエンドとして持ち、ローポリのシーングラフは Lil Cu 64 と MSX の Geo3D が
-                            毎日すでに走らせています。
+立体をつくる 3D システム。まだお届けしていません。この札に載っているのは宣言だけです。ただしかに床は動いています。B-GL は TinyGL のソフトウェアラスタライザと VirtIO-GPU（virgl）の二つを本番バックエンドとして持ち、ローポリのシーングラフは Lil Cu 64 と MSX の Geo3D が毎日すでに走らせています。
                         </p>
                         <ul class="missing">
                             <li>本番バックエンド 2：TinyGL、VirtIO-GPU (virgl)</li>
@@ -1179,8 +1194,7 @@
                         <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
                             映像を切る非線形エディタ。こちらも届け前です。消費する側の図面はすでに書かれています。
-                            B-Video は表示経路とフレームバッファと再生契約を、B-Media は抽象パイプラインと平面ごとの
-                            予算を定めます。編集の UI は、その図面の上にはまだ載っていません。
+B-Video は表示経路とフレームバッファと再生契約を、B-Media は抽象パイプラインと平面ごとの予算を定めます。編集の UI は、その図面の上にはまだ載っていません。
                         </p>
                         <ul class="missing">
                             <li>床の仕様：B-Video（表示経路・バッファ・再生契約）</li>
@@ -1212,12 +1226,8 @@
 
                 <div class="band-intro reveal">
                     <p>
-                        遊び側は七つの席です。起動のバー（XMB）、ゲームをつくる SDK、そして五つの機械 — MSX、メガド
-                        ライブ、アミーガ、Iris（PS2）、Ares（N64）。この中でいちばん出来ているのは MSX です。CPU、VDP、
-                        音源、スロット、キーボード、ジオメトリ演算を別個のコアとして書き、ウィンドウマネージャに組み込
-                        み、カートリッジを窓の中の実身として読みます。Iris はエミュレータではなく、B-System が
-                        PlayStation 2 の実機そのものに起動する席です。メガドライブとアミーガと Ares は、席だけを置い
-                        ています。
+遊び側は七つの席です。起動のバー（XMB）、ゲームをつくる SDK、そして五つの機械 — MSX、メガドライブ、アミーガ、Iris（PS2）、Ares（N64）。この中でいちばん出来ているのは MSX です。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個のコアとして書き、ウィンドウマネージャに組み込み、カートリッジを窓の中の実身として読みます。Iris はエミュレータではなく、B-System が
+PlayStation 2 の実機そのものに起動する席です。メガドライブとアミーガと Ares は、席だけを置いています。
                     </p>
                     <p class="en">
                         One launcher, one SDK, five machine environments. One machine emulates today, one is the
@@ -1245,9 +1255,7 @@
                         <p class="role">05 — Launcher</p>
                         <h3 class="jp-title">クロスメディアバー (XMB) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-                            水平のカテゴリ軸と垂直のアイテム軸で行き来する、二軸クロスの統合メディアランチャーです。
-                            背景ではリアルタイムの正弦波シェーダーがうねり、実身／仮身のハイパーメディア空間を大画面・
-                            ゲームパッド・キーボードで速く閲覧し、速く実行します。
+水平のカテゴリ軸と垂直のアイテム軸で行き来する、二軸クロスの統合メディアランチャーです。背景ではリアルタイムの正弦波シェーダーがうねり、実身／仮身のハイパーメディア空間を大画面・ゲームパッド・キーボードで速く閲覧し、速く実行します。
                         </p>
                         <ul class="spec">
                             <li><strong>二軸ナビ</strong><span>水平カテゴリ × 垂直アイテム</span></li>
@@ -1280,9 +1288,7 @@
                         <p class="role">06 — B-Game SDK / B-Sound DSP</p>
                         <h3 class="jp-title">リル・キューブ 64 (SDK) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-                            ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーン
-                            グラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓
-                            の中で時間を共有しています。創作側と遊び側が出会うのはここです。
+ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーングラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓の中で時間を共有しています。創作側と遊び側が出会うのはここです。
                         </p>
                         <ul class="spec">
                             <li><strong>音色の使い方</strong><span>23 のシム音源を呼ぶ</span></li>
@@ -1320,7 +1326,7 @@
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">07 — Machine / MSX1 … turboR</p>
+                        <p class="role">07 — Machine / MSX1 … MSX2</p>
                         <h3 class="jp-title">ゲームシステム (MSX) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
                             カートリッジ実行環境。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個の C
@@ -1352,11 +1358,12 @@
   <b>boot_ps2.s</b>        entry, <b>ps2.ld</b>        link
   <b>ps2_gs.c</b>        GS framebuffer
   <b>ps2_gif_ring.c</b>  GIF packets
+  <b>ps2_gs_pack.c</b>   <b>ps2_gs_read.c</b>
   <b>ps2_gs_tex.c</b>    <b>ps2_gs_vram.c</b>
-  <b>ps2_vu0_kernel.c</b>  <em>VCL / VSM microcode</em>
-  <b>ps2_vu1_geom.c</b>    <em>VCL / VSM microcode</em>
-  <b>ps2_pad.c</b>       <b>ps2_usb.c</b>
-  <b>iop_ram.c</b>       <b>iop_irq.c</b>
+  <b>ps2_vu0_kernel.c</b>  <em>ps2_vu1_geom.vcl / .vsm</em>
+  <b>ps2_vu1_geom.c</b>    <em>microcode</em>
+  <b>ps2_pad.c</b>       <b>ps2_usb.c</b>       <b>ps2_sio.c</b>
+  <b>ps2_iopram.c</b>    <b>ps2_irq.c</b>
 
 make ps2  →  <em>one ISO</em>
 ps2_bench.sh  →  guest clock  |  wall clock</pre>
@@ -1392,8 +1399,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         <p class="role">09 — Machine / announced</p>
                         <h4 class="jp-title">メガドライブ (Genesis) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-                            席だけの宣言です。<code>src/emulators/sega/</code> はツリーにありますが、中には空の目印
-                            だけが置いてあります。68000 のコアも、VDP の再現も、まだ書かれていません。
+席だけの宣言です。<code>src/emulators/sega/</code> はツリーにありますが、中には空の目印だけが置いてあります。68000 のコアも、VDP の再現も、まだ書かれていません。
                         </p>
                         <ul class="missing">
                             <li>あるもの：ディレクトリと名前</li>
@@ -1405,8 +1411,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         <p class="role">10 — Machine / announced</p>
                         <h4 class="jp-title">アミーガ (Amiga) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-                            同じく席だけです。<code>src/emulators/amiga/</code> は空の目印を持つプレースホルダです。
-                            なお 68000 系の CPU そのものはカーネルの側に存在します。<code>src/cores/core_m68k.c</code>
+同じく席だけです。<code>src/emulators/amiga/</code> は空の目印を持つプレースホルダです。なお 68000 系の CPU そのものはカーネルの側に存在します。<code>src/cores/core_m68k.c</code>
                             は Motorola 68040 上の BTRON カーネルで、アミーガのエミュレーションではありません。
                         </p>
                         <ul class="missing">
@@ -1423,8 +1428,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         <p class="role">11 — Machine / plan only</p>
                         <h4 class="jp-title">アレス (Ares N64) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-                            計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェア
-                            バックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
+計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェアバックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
                         </p>
                         <ul class="missing">
                             <li>あるもの：この名前だけ</li>
@@ -1454,9 +1458,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
 
                 <div class="band-intro reveal">
                     <p>
-                        十一の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。創作アプリもゲームも、同じ
-                        平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。
-                        だから「四つのアプリと七つの席」は別々の製品の寄せ集めではなく、同じ約束の十一の使い方です。
+十一の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。創作アプリもゲームも、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。だから「四つのアプリと七つの席」は別々の製品の寄せ集めではなく、同じ約束の十一の使い方です。
                     </p>
                     <p class="en">
                         The eleven tiles are made of four constants, one audio path and one window contract. Authoring
@@ -1486,9 +1488,7 @@ two families   4 authoring products  +  7 seats on the launcher</div>
             <div class="wrap wrap-narrow">
                 <h2 class="jp-title reveal">一枚のデスクから始める</h2>
                 <p class="reveal">
-                    どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。
-                    オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれに
-                    も、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
+どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれにも、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
                 </p>
                 <p class="en reveal">
                     Every tile is a window on one desk. Open the Workbench, choose one thing, and the specification

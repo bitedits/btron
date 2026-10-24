@@ -723,7 +723,7 @@ if __name__ == '__main__':
             print(f"  [COMPILED] {in_n} -> {out_n} ({res['elements_count']} items, {res['bin_bytes']} bytes)")
             all_results.append(res)
 
-    for root_file in ('index.html', 'releases.html'):
+    for root_file in ('index.html', 'media.html', 'releases.html'):
         if os.path.exists(root_file):
             res = process_file(root_file, out_dir, '')
             stem = os.path.splitext(root_file)[0]

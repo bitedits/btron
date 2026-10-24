@@ -1,0 +1,1575 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>メディア — 創作アプリケーションとゲームの機 | B-System (BTRON3 3.20)</title>
+    <meta name="description"
+        content="B-System のメディア環境の入口。創作側は DAW のオーケストラ、DPS のクラリティ、3DS のスタジオ、NLE のカットの四題。遊び側はクロスメディアバー、Game SDK、MSX、メガドライブ、アミーガ、Iris (PS2)、Ares (N64) の七つの席。公開中・実機稼働・準備中を分けて掲げます。">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+JP:wght@300;400;500;600&family=Shippori+Mincho:wght@500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="index.css?v=2">
+    <script>document.documentElement.className += ' js';</script>
+    <style>
+        /* ══════════════════════════════════════════════════════════════════════
+           media.html — 2000s/2010s scrolling award landing.
+           Loads index.css for the shared nav/footer/type contract, then replaces
+           the pastel theme with an ink / paper / teal treatment. Screenshots are
+           presented as museum plates: white card, hairline rule, deep soft shadow,
+           transparent window cutouts floating on a neutral field.
+           ══════════════════════════════════════════════════════════════════════ */
+
+        :root {
+            --jp-font: 'Noto Sans JP', 'Inter', system-ui, -apple-system, sans-serif;
+            --mincho-font: 'Shippori Mincho', 'Noto Sans JP', serif;
+            --mono-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+            --tron-teal: #008080;
+            --tron-gold: #c59b27;
+
+            --ink: #14171a;
+            --ink-2: #2b3136;
+            --ink-3: #5b6470;
+            --paper: #f7f7f5;
+            --paper-2: #efeeea;
+            --plate: #ffffff;
+            --rule: #d8d7d1;
+            --rule-dark: rgba(255, 255, 255, 0.16);
+
+            --shadow-plate: 0 2px 4px rgba(20, 23, 26, 0.05),
+                0 18px 40px -18px rgba(20, 23, 26, 0.22),
+                0 60px 90px -50px rgba(20, 23, 26, 0.28);
+            --shadow-lift: 0 2px 4px rgba(20, 23, 26, 0.06),
+                0 28px 56px -20px rgba(20, 23, 26, 0.28),
+                0 80px 120px -60px rgba(20, 23, 26, 0.34);
+        }
+
+        /* ── Neutralise the pastel root theme ─────────────────────────────── */
+        body {
+            font-family: var(--jp-font);
+            font-weight: 400;
+            letter-spacing: 0.015em;
+            line-height: 1.85;
+            color: var(--ink-2);
+            background: var(--paper);
+        }
+
+        main {
+            max-width: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        section {
+            margin: 0;
+            padding: clamp(5rem, 11vw, 10rem) 0;
+        }
+
+        section h2,
+        h2 {
+            background: none;
+            -webkit-background-clip: initial;
+            background-clip: initial;
+            -webkit-text-fill-color: currentColor;
+            color: var(--ink);
+        }
+
+        .wrap {
+            width: 100%;
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 0 clamp(1.25rem, 5vw, 3.5rem);
+        }
+
+        .wrap-narrow {
+            max-width: 780px;
+        }
+
+        .jp-title {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        /* ── Navigation ───────────────────────────────────────────────────── */
+        nav.sticky {
+            background: rgba(247, 247, 245, 0.94);
+            border-bottom: 1px solid var(--rule);
+            backdrop-filter: blur(14px);
+        }
+
+        .nav-container {
+            max-width: 1180px;
+            padding: 0.85rem clamp(1.25rem, 5vw, 3.5rem);
+        }
+
+        .logo {
+            background: none;
+            -webkit-background-clip: initial;
+            background-clip: initial;
+            -webkit-text-fill-color: var(--ink);
+            color: var(--ink);
+            font-size: 1.35rem;
+        }
+
+        .logo img {
+            width: 30px;
+            opacity: 0.75;
+            filter: grayscale(1) contrast(1.4);
+        }
+
+        .nav-links a {
+            font-size: 0.86rem;
+            font-weight: 500;
+            color: var(--ink-3);
+        }
+
+        .nav-links a:hover,
+        .nav-links a.active {
+            color: var(--tron-teal);
+        }
+
+        /* ── Hero ─────────────────────────────────────────────────────────── */
+        header {
+            min-height: 100vh;
+            background:
+                radial-gradient(120% 90% at 50% 0%, rgba(0, 128, 128, 0.07), rgba(0, 128, 128, 0) 60%),
+                var(--paper);
+            border-bottom: 1px solid var(--rule);
+        }
+
+        header::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(197, 155, 39, 0) 0%, rgba(197, 155, 39, 0.55) 50%, rgba(197, 155, 39, 0) 100%);
+        }
+
+        .hero-content {
+            max-width: 1180px;
+            padding: 0 clamp(1.25rem, 5vw, 3.5rem);
+            text-align: center;
+        }
+
+        .hero-kicker {
+            font-family: var(--mono-font);
+            font-size: 0.76rem;
+            letter-spacing: 0.34em;
+            text-transform: uppercase;
+            color: var(--tron-teal);
+            margin-bottom: clamp(1.6rem, 4vw, 2.6rem);
+        }
+
+        .hero-content h1 {
+            background: none;
+            -webkit-background-clip: initial;
+            background-clip: initial;
+            -webkit-text-fill-color: var(--ink);
+            color: var(--ink);
+            animation: none;
+            margin: 0 auto;
+            font-family: var(--mincho-font);
+            font-weight: 700;
+            font-size: clamp(2.9rem, 8.4vw, 6.6rem);
+            line-height: 1.18;
+            letter-spacing: -0.015em;
+            text-shadow: none;
+        }
+
+        .hero-rule {
+            width: 64px;
+            height: 1px;
+            background: var(--ink);
+            margin: clamp(1.8rem, 4vw, 2.6rem) auto;
+            opacity: 0.55;
+        }
+
+        .hero-lede {
+            max-width: 620px;
+            margin: 0 auto;
+            font-size: clamp(1.02rem, 1.7vw, 1.22rem);
+            font-weight: 300;
+            line-height: 2.1;
+            color: var(--ink-2);
+        }
+
+        .hero-lede-en {
+            max-width: 660px;
+            margin: 1.7rem auto 0;
+            font-size: 0.95rem;
+            line-height: 1.95;
+            color: var(--ink-3);
+        }
+
+        .hero-marks {
+            margin-top: clamp(2.2rem, 5vw, 3.2rem);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem 2.2rem;
+            justify-content: center;
+            font-family: var(--mono-font);
+            font-size: 0.76rem;
+            letter-spacing: 0.16em;
+            color: var(--ink-3);
+        }
+
+        .hero-marks span::before {
+            content: "·";
+            margin-right: 0.6rem;
+            color: var(--tron-gold);
+        }
+
+        .scroll-cue {
+            position: absolute;
+            left: 50%;
+            bottom: 2.4rem;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.9rem;
+            font-family: var(--mono-font);
+            font-size: 0.66rem;
+            letter-spacing: 0.32em;
+            text-transform: uppercase;
+            color: var(--ink-3);
+            text-decoration: none;
+        }
+
+        .scroll-cue i {
+            display: block;
+            width: 1px;
+            height: 54px;
+            background: linear-gradient(to bottom, var(--ink-3), rgba(91, 100, 112, 0));
+        }
+
+        /* ── Part bands ───────────────────────────────────────────────────── */
+        .band-head {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            align-items: baseline;
+            gap: 1.6rem;
+            border-top: 1px solid var(--rule);
+            padding-top: 1.5rem;
+            margin-bottom: clamp(2.4rem, 6vw, 4rem);
+        }
+
+        .band-index {
+            font-family: var(--mono-font);
+            font-size: 0.78rem;
+            letter-spacing: 0.24em;
+            color: var(--tron-teal);
+            white-space: nowrap;
+        }
+
+        .band-head h2 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: clamp(2rem, 5.2vw, 3.4rem);
+            line-height: 1.3;
+            text-align: left;
+            margin: 0;
+        }
+
+        .band-eyebrow {
+            grid-column: 1 / -1;
+            order: 3;
+            font-family: var(--mono-font);
+            font-size: 0.74rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--ink-3);
+        }
+
+        .band-intro {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: clamp(2rem, 5vw, 4rem);
+            align-items: start;
+            margin-bottom: clamp(3rem, 7vw, 5.5rem);
+        }
+
+        .band-intro p {
+            font-size: 1rem;
+            line-height: 2.05;
+            color: var(--ink-2);
+            margin: 0;
+        }
+
+        .band-intro .en {
+            font-size: 0.93rem;
+            line-height: 1.95;
+            color: var(--ink-3);
+            padding-left: clamp(0rem, 3vw, 2rem);
+            border-left: 1px solid var(--rule);
+        }
+
+        /* ── Showcase rows (plate + copy) ─────────────────────────────────── */
+        .showcase {
+            display: grid;
+            grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+            gap: clamp(2.5rem, 6vw, 5.5rem);
+            align-items: center;
+            padding: clamp(3rem, 6vw, 5rem) 0;
+            border-top: 1px solid var(--rule);
+        }
+
+        .showcase:first-of-type {
+            border-top: 0;
+            padding-top: 0;
+        }
+
+        .showcase.flip .plate-column {
+            order: 2;
+        }
+
+        .showcase.flip .copy {
+            order: 1;
+        }
+
+        .plate {
+            margin: 0;
+            background: var(--plate);
+            border: 1px solid var(--rule);
+            border-radius: 2px;
+            box-shadow: var(--shadow-plate);
+            padding: clamp(1.4rem, 3vw, 2.4rem);
+            transition: box-shadow 420ms cubic-bezier(0.23, 1, 0.32, 1),
+                transform 420ms cubic-bezier(0.23, 1, 0.32, 1);
+        }
+
+        .plate:hover {
+            box-shadow: var(--shadow-lift);
+            transform: translateY(-6px);
+        }
+
+        .field {
+            background:
+                radial-gradient(70% 70% at 50% 40%, #ffffff 0%, var(--paper-2) 100%);
+            border-bottom: 1px solid var(--rule);
+            padding: clamp(1rem, 2.5vw, 1.9rem);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .field::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient(90deg,
+                    rgba(20, 23, 26, 0.028) 0 1px,
+                    rgba(20, 23, 26, 0) 1px 96px);
+            pointer-events: none;
+        }
+
+        .field img {
+            display: block;
+            width: 100%;
+            height: auto;
+            margin: 0;
+            border: 0;
+            border-radius: 0;
+            box-shadow: none;
+            position: relative;
+            z-index: 1;
+        }
+
+        .plate figcaption {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 0.4rem 1.4rem;
+            padding-top: 1.05rem;
+            font-family: var(--mono-font);
+            font-size: 0.7rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--ink-3);
+        }
+
+        .plate figcaption b {
+            color: var(--ink);
+            font-weight: 500;
+        }
+
+        .strip {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: clamp(0.7rem, 1.6vw, 1.1rem);
+            margin-top: clamp(0.9rem, 2vw, 1.3rem);
+        }
+
+        .strip figure {
+            margin: 0;
+            background: var(--plate);
+            border: 1px solid var(--rule);
+            border-radius: 2px;
+            box-shadow: 0 1px 2px rgba(20, 23, 26, 0.05),
+                0 12px 24px -16px rgba(20, 23, 26, 0.25);
+            padding: 0.6rem 0.6rem 0.5rem;
+        }
+
+        .strip .field {
+            padding: 0.5rem;
+            border-bottom: 0;
+            min-height: 92px;
+        }
+
+        .strip figcaption {
+            padding-top: 0.5rem;
+            font-size: 0.6rem;
+            letter-spacing: 0.08em;
+            display: block;
+        }
+
+        .diptych {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: clamp(1rem, 2.4vw, 1.8rem);
+        }
+
+        .diptych figure {
+            margin: 0;
+            background: var(--plate);
+            border: 1px solid var(--rule);
+            box-shadow: var(--shadow-plate);
+            padding: clamp(0.9rem, 2vw, 1.4rem);
+            transition: box-shadow 420ms cubic-bezier(0.23, 1, 0.32, 1),
+                transform 420ms cubic-bezier(0.23, 1, 0.32, 1);
+        }
+
+        .diptych figure:hover {
+            box-shadow: var(--shadow-lift);
+            transform: translateY(-5px);
+        }
+
+        /* ── Copy column ──────────────────────────────────────────────────── */
+        .role {
+            font-family: var(--mono-font);
+            font-size: 0.72rem;
+            letter-spacing: 0.24em;
+            text-transform: uppercase;
+            color: var(--tron-teal);
+            margin-bottom: 1.1rem;
+        }
+
+        .copy h3 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: clamp(1.7rem, 3.6vw, 2.5rem);
+            line-height: 1.35;
+            color: var(--ink);
+            margin-bottom: 1.3rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.9rem;
+        }
+
+        .copy p {
+            margin: 0 0 1.15rem;
+            font-size: 0.99rem;
+            line-height: 2.05;
+            color: var(--ink-2);
+        }
+
+        .copy .en {
+            font-size: 0.9rem;
+            line-height: 1.95;
+            color: var(--ink-3);
+        }
+
+        .spec {
+            list-style: none;
+            margin: 1.6rem 0 1.7rem;
+            padding: 0;
+            border-top: 1px solid var(--rule);
+        }
+
+        .spec li {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+            gap: 1.2rem;
+            padding: 0.62rem 0;
+            border-bottom: 1px solid var(--rule);
+            font-size: 0.87rem;
+            line-height: 1.75;
+            color: var(--ink-2);
+        }
+
+        .spec li strong {
+            font-weight: 500;
+            color: var(--ink);
+        }
+
+        .spec code {
+            font-family: var(--mono-font);
+            font-size: 0.81rem;
+            color: var(--tron-teal);
+            background: none;
+            padding: 0;
+        }
+
+        .entry {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.7rem;
+            font-family: var(--mono-font);
+            font-size: 0.78rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: var(--ink);
+            text-decoration: none;
+            border-bottom: 1px solid var(--ink);
+            padding-bottom: 0.42rem;
+            transition: color 260ms, border-color 260ms, gap 260ms;
+        }
+
+        .entry:hover {
+            color: var(--tron-teal);
+            border-color: var(--tron-teal);
+            gap: 1.1rem;
+        }
+
+        .entry+.entry {
+            margin-left: 1.9rem;
+        }
+
+        /* ── Status stamps ────────────────────────────────────────────────── */
+        .stamp {
+            font-family: var(--mono-font);
+            font-size: 0.64rem;
+            font-weight: 500;
+            letter-spacing: 0.22em;
+            padding: 0.3rem 0.72rem;
+            border: 1px solid currentColor;
+            border-radius: 1px;
+            white-space: nowrap;
+        }
+
+        .stamp-live {
+            color: var(--tron-teal);
+        }
+
+        .stamp-silicon {
+            color: var(--tron-gold);
+        }
+
+        .stamp-soon {
+            color: var(--ink-3);
+        }
+
+        /* ── Announced cards (no screenshot) ──────────────────────────────── */
+        .announced {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: clamp(1.4rem, 3vw, 2.2rem);
+            border-top: 1px solid var(--rule);
+            padding-top: clamp(2.6rem, 6vw, 4rem);
+        }
+
+        .announced-card {
+            background: rgba(255, 255, 255, 0.5);
+            border: 1px dashed var(--rule);
+            border-radius: 2px;
+            padding: clamp(1.7rem, 3vw, 2.3rem);
+        }
+
+        .announced-card h4 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: 1.35rem;
+            color: var(--ink);
+            margin: 0.85rem 0 0.95rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.7rem;
+        }
+
+        .announced-card p {
+            margin: 0 0 1rem;
+            font-size: 0.9rem;
+            line-height: 1.95;
+            color: var(--ink-2);
+        }
+
+        .announced-card .en {
+            font-size: 0.83rem;
+            color: var(--ink-3);
+            line-height: 1.85;
+        }
+
+        .announced-card .role {
+            margin-bottom: 0;
+        }
+
+        .missing {
+            list-style: none;
+            margin: 1.1rem 0 1.3rem;
+            padding: 0;
+            font-family: var(--mono-font);
+            font-size: 0.74rem;
+            letter-spacing: 0.04em;
+            line-height: 1.95;
+            color: var(--ink-3);
+        }
+
+        .missing li::before {
+            content: "—";
+            margin-right: 0.6rem;
+            color: var(--rule);
+        }
+
+        /* ── Technical spec plate (Iris / PS2) ────────────────────────────── */
+        .spec-plate {
+            margin: 0;
+            background: var(--ink);
+            border: 1px solid var(--ink);
+            border-radius: 2px;
+            box-shadow: var(--shadow-plate);
+            padding: clamp(1.6rem, 3.4vw, 2.4rem);
+            color: #cdd3d8;
+        }
+
+        .spec-plate pre {
+            font-family: var(--mono-font);
+            font-size: 0.76rem;
+            line-height: 2;
+            margin: 0;
+            white-space: pre-wrap;
+            color: inherit;
+            background: none;
+            border: 0;
+            padding: 0;
+        }
+
+        .spec-plate pre b {
+            color: var(--tron-teal);
+            font-weight: 500;
+        }
+
+        .spec-plate pre em {
+            color: var(--tron-gold);
+            font-style: normal;
+        }
+
+        .spec-plate figcaption {
+            display: block;
+            margin-top: 1.3rem;
+            padding-top: 1.1rem;
+            border-top: 1px solid var(--rule-dark);
+            font-family: var(--mono-font);
+            font-size: 0.68rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #8b939b;
+        }
+
+        /* ── Opening plate (full-bleed desktop) ───────────────────────────── */
+        .opening {
+            background:
+                radial-gradient(80% 120% at 50% -10%, #1d2226 0%, var(--ink) 70%);
+            color: #d5dae0;
+            padding: clamp(4rem, 9vw, 7.5rem) 0;
+        }
+
+        .opening .plate {
+            background: #1a1e22;
+            border-color: rgba(255, 255, 255, 0.12);
+            box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.9),
+                0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+        }
+
+        .opening .field {
+            background: radial-gradient(65% 75% at 50% 45%, #232a2f 0%, #14181b 100%);
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .opening .field::after {
+            background: repeating-linear-gradient(90deg,
+                    rgba(255, 255, 255, 0.03) 0 1px,
+                    rgba(255, 255, 255, 0) 1px 96px);
+        }
+
+        .opening .plate figcaption {
+            color: #8b939b;
+        }
+
+        .opening .plate figcaption b {
+            color: #e8ecef;
+        }
+
+        .opening-title {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 1rem 2rem;
+            margin-bottom: clamp(1.8rem, 4vw, 2.8rem);
+            padding-bottom: 1.2rem;
+            border-bottom: 1px solid var(--rule-dark);
+        }
+
+        .opening-title h2 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: clamp(1.6rem, 3.6vw, 2.4rem);
+            line-height: 1.4;
+            color: #f0f2f4;
+            margin: 0;
+            text-align: left;
+        }
+
+        .opening-title .band-index {
+            color: #6fb3b3;
+        }
+
+        .opening-note {
+            max-width: 640px;
+            font-size: 0.92rem;
+            line-height: 2;
+            color: #a9b2ba;
+            margin: clamp(1.8rem, 4vw, 2.6rem) 0 0;
+        }
+
+        /* ── Ledger band ──────────────────────────────────────────────────── */
+        .ledger {
+            background: var(--paper-2);
+            border-top: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+        }
+
+        .ledger .code-snippet {
+            font-family: var(--mono-font);
+            font-size: clamp(0.66rem, 1.35vw, 0.84rem);
+            line-height: 2.35;
+            letter-spacing: 0.02em;
+            background: var(--plate);
+            border: 1px solid var(--rule);
+            border-radius: 2px;
+            box-shadow: var(--shadow-plate);
+            color: var(--ink-2);
+            padding: clamp(1.4rem, 3vw, 2.4rem);
+            margin: clamp(2rem, 5vw, 3rem) 0;
+            overflow-x: auto;
+            text-align: left;
+        }
+
+        .ledger .band-intro {
+            margin-bottom: 0;
+        }
+
+        .foundation-marks {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem 2rem;
+            justify-content: center;
+            border-top: 1px solid var(--rule);
+            padding-top: 2rem;
+            margin-top: clamp(2rem, 5vw, 3rem);
+        }
+
+        /* ── Closing ──────────────────────────────────────────────────────── */
+        .closing {
+            text-align: center;
+        }
+
+        .closing h2 {
+            font-family: var(--mincho-font);
+            font-weight: 600;
+            font-size: clamp(1.9rem, 4.6vw, 3.1rem);
+            line-height: 1.4;
+            color: var(--ink);
+            margin-bottom: 1.8rem;
+        }
+
+        .closing p {
+            max-width: 680px;
+            margin: 0 auto 1.2rem;
+            font-size: 0.98rem;
+            line-height: 2.05;
+            color: var(--ink-2);
+        }
+
+        .closing .en {
+            font-size: 0.9rem;
+            color: var(--ink-3);
+            max-width: 700px;
+        }
+
+        .closing-entries {
+            margin-top: clamp(2.4rem, 6vw, 3.6rem);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.9rem 2.4rem;
+            justify-content: center;
+        }
+
+        /* ── Footer ───────────────────────────────────────────────────────── */
+        footer {
+            background: var(--ink);
+            border-top: 0;
+            padding: clamp(3rem, 7vw, 5rem) clamp(1.25rem, 5vw, 3.5rem) 3rem;
+            color: #98a1a9;
+        }
+
+        .footer-columns {
+            max-width: 1180px;
+            gap: clamp(2rem, 5vw, 3.5rem);
+        }
+
+        .footer-columns h4 {
+            color: #e8ecef;
+            font-family: var(--mono-font);
+            font-size: 0.72rem;
+            font-weight: 500;
+            letter-spacing: 0.24em;
+            text-transform: uppercase;
+            margin-bottom: 1.4rem;
+        }
+
+        .footer-columns p {
+            font-size: 0.83rem;
+            line-height: 1.9;
+            color: #98a1a9;
+        }
+
+        .footer-columns ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .footer-columns li {
+            font-size: 0.83rem;
+            line-height: 2.15;
+        }
+
+        .footer-columns a {
+            color: #c8ced4;
+        }
+
+        .footer-columns a:hover {
+            color: var(--tron-teal);
+        }
+
+        .footer-columns b {
+            color: #e8ecef;
+            font-weight: 500;
+        }
+
+        /* ── Scroll reveal ────────────────────────────────────────────────── */
+        html.js .reveal {
+            opacity: 0;
+            transform: translateY(26px);
+            transition: opacity 760ms cubic-bezier(0.23, 1, 0.32, 1),
+                transform 760ms cubic-bezier(0.23, 1, 0.32, 1);
+        }
+
+        html.js .reveal.in {
+            opacity: 1;
+            transform: none;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html.js .reveal {
+                opacity: 1;
+                transform: none;
+                transition: none;
+            }
+
+            .plate:hover,
+            .diptych figure:hover {
+                transform: none;
+            }
+        }
+
+        /* ── Responsive ───────────────────────────────────────────────────── */
+        @media (max-width: 940px) {
+            .showcase {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 2.4rem;
+            }
+
+            .showcase.flip .plate-column {
+                order: 1;
+            }
+
+            .showcase.flip .copy {
+                order: 2;
+            }
+
+            .band-intro {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 1.6rem;
+            }
+
+            .band-intro .en {
+                padding-left: 0;
+                border-left: 0;
+                padding-top: 1.4rem;
+                border-top: 1px solid var(--rule);
+            }
+        }
+
+        @media (max-width: 620px) {
+            .band-head {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 0.7rem;
+            }
+
+            .spec li {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 0.15rem;
+            }
+
+            .strip {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .diptych {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .entry+.entry {
+                margin-left: 0;
+            }
+
+            section {
+                padding: 4.5rem 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Sticky Navigation -->
+    <nav class="sticky">
+        <div class="nav-container">
+            <a href="index.html" class="logo"><img width="48" src="https://n2o.dev/img/synrc.svg" alt="Synrc Logo"></a>
+            <button class="nav-toggle" aria-label="Toggle navigation"
+                onclick="document.querySelector('.nav-links').classList.toggle('open'); this.classList.toggle('open');">
+                <span class="hamburger"></span>
+            </button>
+            <ul class="nav-links">
+                <li><a href="b-media/index.html" class="active">B-Media</a></li>
+                <li><a href="index.html">B-System</a></li>
+                <li><a href="b-book/index.html">B-Book</a></li>
+                <li><a href="conformance.html">B-Spec</a></li>
+                <li><a href="virtio.html">VirtIO</a></li>
+                <li><a href="mobile.html">FOMA</a></li>
+                <li><a href="releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <header>
+        <div class="hero-content">
+            <p class="hero-kicker">B-System · BTRON 3.20 · Media</p>
+            <h1 class="jp-title">つくる人の、OS。</h1>
+            <div class="hero-rule"></div>
+            <p class="hero-lede">
+                音をとりに、紙を組み、立体をつくり、映像を切る。<br>
+                そのための四つのアプリケーションと、ゲームのための七つの席。<br>
+                どちらも、標準 C99 でクリーンルームに書き直した一つの BTRON3 の上で動いています。
+            </p>
+            <p class="hero-lede-en">
+                Two families, one machine. The authoring side of B-System is a digital audio workstation, a desktop
+                publishing system, a 3D system and a non-linear editor. The playing side is a launcher, a game SDK and
+                five machine environments. Every plate below says plainly whether the product ships today, runs on real
+                console silicon, or is only announced.
+            </p>
+            <div class="hero-marks">
+                <span>48 kHz / 44.1 kHz</span>
+                <span>八つの窓 · 三十二の音色</span>
+                <span>1024 frame host period</span>
+                <span>七つの席</span>
+            </div>
+        </div>
+        <a class="scroll-cue" href="#opening">Scroll<i></i></a>
+    </header>
+
+    <main>
+
+        <!-- ═══ Opening plate: the desk before anything is chosen ═══ -->
+        <section id="opening" class="opening">
+            <div class="wrap">
+                <div class="opening-title reveal">
+                    <h2 class="jp-title">机は一つです</h2>
+                    <span class="band-index">00 / Opening</span>
+                </div>
+                <figure class="plate reveal">
+                    <div class="field">
+                        <img src="b-system/img/screens/Desktop_Full.png" width="1280" height="800"
+                            alt="B-System ワークベンチの初期起動デスクトップ、実機フレームバッファから自動抽出">
+                    </div>
+                    <figcaption>
+                        <span><b>B-System Workbench</b> — Initial desktop</span>
+                        <span>Headless C99 framebuffer · 1280 × 800</span>
+                    </figcaption>
+                </figure>
+                <p class="opening-note reveal">
+                    下のすべての窓は、この机の上にあります。十一の札は別々の製品ではなく、同じ約束の十一の使い方です。
+                    Every window on this page is cut from the framebuffer of one operating system, on this desk,
+                    at this resolution.
+                </p>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- PART 1: AUTHORING APPLICATIONS                              -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <section id="applications">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">01 / Authoring</span>
+                    <h2 class="jp-title">第一部：創作アプリケーション</h2>
+                    <p class="band-eyebrow">DAW · DPS · 3DS · NLE</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+                        B-System は創作を四つの専門分野として名前づけます。DAW（Digital Audio Workstation）、DPS（Desktop
+                        Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つはそれぞれ機械の別の場所を突
+                        きます。音は合成とデバイス遅延、組版は用紙の幾何、立体はシーングラフとフレームバッファ、映像は時間
+                        とファイル交換です。だから四つを一つの「スイート」にまとめず、それぞれに窓口とマニュアルを与えまし
+                        た。そして出荷済みの二題と、宣言だけの二題を同じ顔で並べず、札を分けて掲げます。
+                    </p>
+                    <p class="en">
+                        Four disciplines are named instead of one suite, because each one stresses a different contract
+                        inside the kernel. Two of them are shipping products with a complete specification page; two are
+                        announced, and their cards say so rather than borrowing the confidence of the shipped ones. The
+                        distinction is kept visible on purpose: a landing page that cannot tell a build from a plan is
+                        not documentation.
+                    </p>
+                </div>
+
+                <!-- 1. Orchestra — DAW -->
+                <div class="showcase reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Orchestra_Application.png" width="790" height="556"
+                                    alt="管弦楽 (Orchestra) — ステージ画面、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Orchestra</b> — Stage window</span>
+                                <span>790 × 556 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                        <div class="strip">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Orchestra_Mix.png" width="790" height="496"
+                                        alt="管弦楽 ミキサー窗">
+                                </div>
+                                <figcaption>Mixer</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Orchestra_Piano.png" width="770" height="516"
+                                        alt="管弦楽 ピアノロール窗">
+                                </div>
+                                <figcaption>Piano roll</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/Orchestra_Score.png" width="730" height="356"
+                                        alt="管弦楽 総譜窗">
+                                </div>
+                                <figcaption>Score</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">01 — DAW / Digital Audio Workstation</p>
+                        <h3 class="jp-title">管弦楽 (Orchestra) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+                            ステージのための DAW。使い手を Rock（生バンド）、Classic（声と古典楽器）、Orchestra（フィル
+                            ハーモニー配置）の三つに固定し、三十二のプログラムをすべて手書きの合成手続きで鳴らします。
+                            SoundFont もサンプルライブラリも使いません。窓は八つ、マニュアルは第十二章です。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>二つのサンプルレート</strong><span>48000 と 44100、既定は 48000 Hz</span></li>
+                            <li><strong>ホスト周期 / 量子</strong><span>1024 フレーム、合成量子 Q = 32</span></li>
+                            <li><strong>セッションファイル</strong><span>73,408 バイト固定長。長さがずれたファイルは読まない</span></li>
+                            <li><strong>遅延の決まり方</strong><span>窓の枚数ではなく、デバイス側の待ち行列の長さ</span></li>
+                        </ul>
+                        <p class="en">
+                            Orchestra is documented as a manual rather than a feature list: twelve chapters, each one
+                            resting on the previous, with the latency figure measured from the audio queue rather than
+                            asserted.
+                        </p>
+                        <a class="entry" href="b-system/apps/Orchestra.html">ユーザーマニュアル →</a>
+                    </div>
+                </div>
+
+                <!-- 2. Clarity — DPS -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Clarity_Menu_Opened.png" width="910" height="656"
+                                    alt="電子帳票 (Clarity) — メニュー展開と本文、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Clarity</b> — File menu opened</span>
+                                <span>910 × 656 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">02 — DPS / Desktop Publishing System</p>
+                        <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+                            DTP 出版組版環境。和式の伝統判型十四種と、チベット横長ペーチャ経典の組版仕様を、同じエン
+                            ジン上の二つの紙として扱います。画面の像素ではなく頁の幾何が正しさの単位になる分野で、原稿
+                            リンクから印刷所入稿用 PDF までを一手順で通します。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>和式伝統判型 14 種</strong><span>四六判の縦書き段組まで仕様として持つ</span></li>
+                            <li><strong>チベット Pecha 組版</strong><span>560 × 110 mm の横長、朱黒二重枠と左余白表題</span></li>
+                            <li><strong>学術 PostScript 論文</strong><span>数式混植と査読注釈の自動連動</span></li>
+                            <li><strong>出力</strong><span>木版風 PDF / EPS、四六判・袋綴じ PDF</span></li>
+                        </ul>
+                        <p class="en">
+                            Publishing is the discipline where geometry is the deliverable: paper formats, not pixel
+                            buffers, are what a correctness claim is made about.
+                        </p>
+                        <a class="entry" href="b-system/apps/Clarity.html">機能仕様と内部構造 →</a>
+                    </div>
+                </div>
+
+                <!-- 3 & 4 — announced, no screenshots -->
+                <div class="announced reveal">
+                    <div class="announced-card">
+                        <p class="role">03 — 3DS / 3D System</p>
+                        <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+                            立体をつくる 3D システム。まだお届けしていません。この札に載っているのは宣言だけです。た
+                            だしかに床は動いています。B-GL は TinyGL のソフトウェアラスタライザと VirtIO-GPU（virgl）
+                            の二つを本番バックエンドとして持ち、ローポリのシーングラフは Lil Cu 64 と MSX の Geo3D が
+                            毎日すでに走らせています。
+                        </p>
+                        <ul class="missing">
+                            <li>本番バックエンド 2：TinyGL、VirtIO-GPU (virgl)</li>
+                            <li>ハードウェアバックエンド 4 は別枠で宣言済み</li>
+                            <li>既存の実装例：デモシーン、MSX Geo3D</li>
+                            <li>アプリの窓はまだない — 図面は基盤側</li>
+                        </ul>
+                        <p class="en">
+                            Studio is announced, not shipped. What exists is the layer it will sit on — B-GL, whose two
+                            production backends are already exercised every day by the demoscene and by MSX Geo3D titles.
+                        </p>
+                        <a class="entry" href="b-media/gl.html">基盤 B-GL の仕様 →</a>
+                    </div>
+                    <div class="announced-card">
+                        <p class="role">04 — NLE / Non-Linear Editor</p>
+                        <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+                            映像を切る非線形エディタ。こちらも届け前です。消費する側の図面はすでに書かれています。
+                            B-Video は表示経路とフレームバッファと再生契約を、B-Media は抽象パイプラインと平面ごとの
+                            予算を定めます。編集の UI は、その図面の上にはまだ載っていません。
+                        </p>
+                        <ul class="missing">
+                            <li>床の仕様：B-Video（表示経路・バッファ・再生契約）</li>
+                            <li>床の仕様：B-Media（抽象パイプラインと平面予算）</li>
+                            <li>音の席は Orchestra が先に埋めている</li>
+                            <li>このページのどの画像もカットの画面ではない</li>
+                        </ul>
+                        <p class="en">
+                            Cut is announced, not shipped. The display path and the pipeline contract it will consume are
+                            specified documents today; the editing interface is not.
+                        </p>
+                        <a class="entry" href="b-media/video.html">B-Video の表示契約 →</a>
+                        <a class="entry" href="b-media/index.html">B-Media の床 →</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- PART 2: CROSS MEDIA BAR, SDK AND MACHINES                   -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <section id="machines">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">02 / Playing</span>
+                    <h2 class="jp-title">第二部：クロスメディアバーとゲームの機</h2>
+                    <p class="band-eyebrow">XMB · B-Game SDK · MSX · Genesis · Amiga · Iris · Ares</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+                        遊び側は七つの席です。起動のバー（XMB）、ゲームをつくる SDK、そして五つの機械 — MSX、メガド
+                        ライブ、アミーガ、Iris（PS2）、Ares（N64）。この中でいちばん出来ているのは MSX です。CPU、VDP、
+                        音源、スロット、キーボード、ジオメトリ演算を別個のコアとして書き、ウィンドウマネージャに組み込
+                        み、カートリッジを窓の中の実身として読みます。Iris はエミュレータではなく、B-System が
+                        PlayStation 2 の実機そのものに起動する席です。メガドライブとアミーガと Ares は、席だけを置い
+                        ています。
+                    </p>
+                    <p class="en">
+                        One launcher, one SDK, five machine environments. One machine emulates today, one is the
+                        operating system booting on real console silicon, and three are placeholders with a directory
+                        and a name. A launcher that pretends to boot a cartridge nobody has written is worse than a
+                        launcher with fewer tiles, so the tiles are labelled.
+                    </p>
+                </div>
+
+                <!-- 5. XMB -->
+                <div class="showcase reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/XMB_Application.png" width="970" height="622"
+                                    alt="クロスメディアバー (XMB) — 二軸ナビの実行画面、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>XMB</b> — Two-axis navigation</span>
+                                <span>970 × 622 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">05 — Launcher</p>
+                        <h3 class="jp-title">クロスメディアバー (XMB) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+                            水平のカテゴリ軸と垂直のアイテム軸で行き来する、二軸クロスの統合メディアランチャーです。
+                            背景ではリアルタイムの正弦波シェーダーがうねり、実身／仮身のハイパーメディア空間を大画面・
+                            ゲームパッド・キーボードで速く閲覧し、速く実行します。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>二軸ナビ</strong><span>水平カテゴリ × 垂直アイテム</span></li>
+                            <li><strong>実装</strong><span>C99 / OpenGL ネイティブ</span></li>
+                            <li><strong>ゼロヒープ</strong><span>事前ベイクのテクスチャアトラスで 60FPS</span></li>
+                        </ul>
+                        <p class="en">
+                            The XMB is the desk seen from ten feet away: the same document model as the editor, reached
+                            with a pad instead of a mouse.
+                        </p>
+                        <a class="entry" href="b-system/apps/XMB.html">カテゴリ構造と操作体系 →</a>
+                    </div>
+                </div>
+
+                <!-- 6. Game SDK -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Demoscene_Application.png" width="730" height="576"
+                                    alt="デモシーン・Game SDK (Lil Cu 64) — 実行画面、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Lil Cu 64</b> — Demoscene runtime</span>
+                                <span>730 × 576 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">06 — B-Game SDK / B-Sound DSP</p>
+                        <h3 class="jp-title">リル・キューブ 64 (SDK) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+                            ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーン
+                            グラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓
+                            の中で時間を共有しています。創作側と遊び側が出会うのはここです。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>音色の使い方</strong><span>23 のシム音源を呼ぶ</span></li>
+                            <li><strong>幾何</strong><span>ローポリ + シーングラフの階層</span></li>
+                            <li><strong>律</strong><span>音律・MIDI 周波数・プログラム表</span></li>
+                            <li><strong>振る舞い</strong><span>空間音響・トラッカー調時・適応型機構</span></li>
+                        </ul>
+                        <p class="en">
+                            The SDK is where the two families meet: the hand-written synthesis procedures that Orchestra
+                            budgets for the stage are the same palette a game calls.
+                        </p>
+                        <a class="entry" href="b-system/apps/SDK.html">Game SDK の仕様 →</a>
+                        <a class="entry" href="b-media/sound.html">B-Sound 合成器 →</a>
+                    </div>
+                </div>
+
+                <!-- 7. MSX -->
+                <div class="showcase reveal">
+                    <div class="plate-column">
+                        <div class="diptych">
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/B_MSX_Application.png" width="538" height="543"
+                                        alt="ゲームシステム (MSX) — カートリッジ実行窓、実機フレームバッファから自動抽出">
+                                </div>
+                                <figcaption><b>MSX</b> — Cartridge window</figcaption>
+                            </figure>
+                            <figure>
+                                <div class="field">
+                                    <img src="b-system/img/screens/MSX_BadApple.png" width="538" height="543"
+                                        alt="MSX 上で実行中の Bad Apple デモ、V9938 描画の実機抽出">
+                                </div>
+                                <figcaption>Bad Apple — V9938 output</figcaption>
+                            </figure>
+                        </div>
+                    </div>
+                    <div class="copy">
+                        <p class="role">07 — Machine / MSX1 … turboR</p>
+                        <h3 class="jp-title">ゲームシステム (MSX) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+                            カートリッジ実行環境。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個の C
+                            コアとして実装し、B-System のウィンドウマネージャに組み込みました。32 KiB のフラット ROM
+                            から 4 MiB の MegaROM、Geo3D を内蔵するタイトルまで、同じ窓から起動します。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>計算</strong><span><code>z80.c</code>、<code>r800.c</code>、<code>geo3d.c</code></span></li>
+                            <li><strong>描画</strong><span><code>v9938.c</code>、<code>vdp.c</code></span></li>
+                            <li><strong>音源</strong><span><code>psg.c</code>、<code>scc.c</code>、<code>y8950.c</code>、<code>opll.c</code>、<code>t9769b.c</code></span></li>
+                            <li><strong>周辺</strong><span><code>slots.c</code>、<code>s1985.c</code>、<code>ppi.c</code>、<code>kbd.c</code>、<code>bios.c</code></span></li>
+                            <li><strong>検証</strong><span><code>zexall.c</code> が Z80 命令群を機械に検査させる</span></li>
+                        </ul>
+                        <p class="en">
+                            MSX is the deepest emulator in the tree precisely because it is not one file: each chip is a
+                            core, each core is testable, and the window manager owns the frame the way it owns every
+                            other application.
+                        </p>
+                        <a class="entry" href="b-system/apps/MSX.html">アプリとしての仕様 →</a>
+                        <a class="entry" href="b-media/msx.html">コアの設計と来源 →</a>
+                    </div>
+                </div>
+
+                <!-- 8. Iris (PS2) -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="spec-plate">
+<pre>src/drivers/ps2/
+  <b>boot_ps2.s</b>        entry, <b>ps2.ld</b>        link
+  <b>ps2_gs.c</b>        GS framebuffer
+  <b>ps2_gif_ring.c</b>  GIF packets
+  <b>ps2_gs_tex.c</b>    <b>ps2_gs_vram.c</b>
+  <b>ps2_vu0_kernel.c</b>  <em>VCL / VSM microcode</em>
+  <b>ps2_vu1_geom.c</b>    <em>VCL / VSM microcode</em>
+  <b>ps2_pad.c</b>       <b>ps2_usb.c</b>
+  <b>iop_ram.c</b>       <b>iop_irq.c</b>
+
+make ps2  →  <em>one ISO</em>
+ps2_bench.sh  →  guest clock  |  wall clock</pre>
+                            <figcaption>Iris — native PS2 target · not an emulator</figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">08 — Console / native target</p>
+                        <h3 class="jp-title">イリス (Iris PS2) <span class="stamp stamp-silicon">実機稼働</span></h3>
+                        <p>
+                            Iris はエミュレータではありません。B-System が PlayStation 2 の実機そのものに起動します。
+                            GS（グラフィックスシンセサイザー）へ GIF を組む道、VU0 と VU1 の幾何パイプライン、パッドと
+                            USB、IOP の RAM と割り込みまでが <code>src/drivers/ps2/</code> にあり、<code>make ps2</code>
+                            は一枚の ISO に落ちます。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>起動</strong><span><code>boot_ps2.s</code> と <code>ps2.ld</code></span></li>
+                            <li><strong>描画</strong><span><code>ps2_gs.c</code>、<code>ps2_gif_ring.c</code>、<code>ps2_gs_tex.c</code></span></li>
+                            <li><strong>幾何</strong><span>VU0 / VU1 — マイクロコード付き</span></li>
+                            <li><strong>実測</strong><span><code>scripts/ps2_bench.sh</code> がゲスト内部の時間と実行側の時間を分けて採る</span></li>
+                        </ul>
+                        <p class="en">
+                            Iris is the console as host, not as guest. The same C99 sources link against PS2 silicon,
+                            and the benchmark separates the clock inside the machine from the clock outside it.
+                        </p>
+                        <a class="entry" href="b-book/drivers.html">PS2 ドライバ群の位置 →</a>
+                    </div>
+                </div>
+
+                <!-- 9, 10, 11 — reserved seats -->
+                <div class="announced reveal">
+                    <div class="announced-card">
+                        <p class="role">09 — Machine / announced</p>
+                        <h4 class="jp-title">メガドライブ (Genesis) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+                            席だけの宣言です。<code>src/emulators/sega/</code> はツリーにありますが、中には空の目印
+                            だけが置いてあります。68000 のコアも、VDP の再現も、まだ書かれていません。
+                        </p>
+                        <ul class="missing">
+                            <li>あるもの：ディレクトリと名前</li>
+                            <li>ないもの：コア、画面、スクリーンショット</li>
+                        </ul>
+                        <p class="en">Genesis is a reserved seat. No core, no frame, no screenshot.</p>
+                    </div>
+                    <div class="announced-card">
+                        <p class="role">10 — Machine / announced</p>
+                        <h4 class="jp-title">アミーガ (Amiga) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+                            同じく席だけです。<code>src/emulators/amiga/</code> は空の目印を持つプレースホルダです。
+                            なお 68000 系の CPU そのものはカーネルの側に存在します。<code>src/cores/core_m68k.c</code>
+                            は Motorola 68040 上の BTRON カーネルで、アミーガのエミュレーションではありません。
+                        </p>
+                        <ul class="missing">
+                            <li>あるもの：ディレクトリと名前</li>
+                            <li>別の場所にある似たもの：68040 のカーネルポート</li>
+                            <li>ないもの：アミーガとしての実装</li>
+                        </ul>
+                        <p class="en">
+                            Amiga is a reserved seat. The 68040 kernel port elsewhere in the tree runs B-System on that
+                            CPU family; it is not an Amiga.
+                        </p>
+                    </div>
+                    <div class="announced-card">
+                        <p class="role">11 — Machine / plan only</p>
+                        <h4 class="jp-title">アレス (Ares N64) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+                            計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェア
+                            バックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
+                        </p>
+                        <ul class="missing">
+                            <li>あるもの：この名前だけ</li>
+                            <li>関連する宣言：B-GL の HW バックエンド四つ</li>
+                            <li>ないもの：RDRAM、RSP、RDP、カートリッジ、画面</li>
+                        </ul>
+                        <p class="en">
+                            Ares is a name on a roadmap. Nothing in the tree backs it yet, and the card keeps that
+                            visible instead of implying a feature.
+                        </p>
+                        <a class="entry" href="b-media/gl.html">B-GL のロードマップ →</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- PART 3: THE GROUND UNDER BOTH FAMILIES                      -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <section id="ground" class="ledger">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">03 / Substrate</span>
+                    <h2 class="jp-title">第三部：同じ床</h2>
+                    <p class="band-eyebrow">Four constants · one audio path · one window contract</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+                        十一の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。創作アプリもゲームも、同じ
+                        平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。
+                        だから「四つのアプリと七つの席」は別々の製品の寄せ集めではなく、同じ約束の十一の使い方です。
+                    </p>
+                    <p class="en">
+                        The eleven tiles are made of four constants, one audio path and one window contract. Authoring
+                        and playing share the per-plane CPU and buffer budgets, the same interleaved PCM written to the
+                        same device, and the same real-body / virtual-body document model. That is why the two families
+                        are one operating system rather than a bundle — and every number on this page is readable in the
+                        sources it comes from.
+                    </p>
+                </div>
+
+                <div class="code-snippet reveal">sample rates   48000 | 44100 Hz          host period 1024 frames     render quantum Q = 32
+plane budgets  UI   8333 µs / 4000 µs       INPUT  1000 µs /  500 µs
+one audio path virtiosnd — AUDIO_S16LSB, interleaved       session file 73,408 bytes
+two families   4 authoring products  +  7 seats on the launcher</div>
+
+                <div class="foundation-marks reveal">
+                    <a class="entry" href="b-media/index.html">B-Media：パイプラインと予算 →</a>
+                    <a class="entry" href="b-media/audio.html">B-Audio：PCM 出力 →</a>
+                    <a class="entry" href="b-media/core.html">B-Core：計算流送 →</a>
+                    <a class="entry" href="b-book/cores.html">対応カーネルと機械 →</a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Closing ═══ -->
+        <section id="invitation" class="closing">
+            <div class="wrap wrap-narrow">
+                <h2 class="jp-title reveal">一枚のデスクから始める</h2>
+                <p class="reveal">
+                    どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。
+                    オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれに
+                    も、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
+                </p>
+                <p class="en reveal">
+                    Every tile is a window on one desk. Open the Workbench, choose one thing, and the specification
+                    behind that tile is ordered the same way: what the window is, how it is operated, and how it is built.
+                </p>
+                <div class="closing-entries reveal">
+                    <a class="entry" href="b-system/apps/Orchestra.html">管弦楽 →</a>
+                    <a class="entry" href="b-system/apps/Clarity.html">電子帳票 →</a>
+                    <a class="entry" href="b-system/apps/XMB.html">XMB →</a>
+                    <a class="entry" href="b-system/apps/MSX.html">MSX →</a>
+                    <a class="entry" href="index.html">B-System 全体 →</a>
+                    <a class="entry" href="releases.html">リリース →</a>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer>
+        <div class="footer-columns">
+            <div>
+                <h4>Synrc VE OS.1</h4>
+                <p>High-Assurance VirtIO Hypervisor</p>
+                <p>Deployment Platform for Unikernels</p>
+                <p>By <a rel="me" href="https://mathstodon.xyz/@5ht">5HT</a> in C99 &amp; Erlang/OTP</p>
+            </div>
+
+            <div>
+                <h4>Media Products</h4>
+                <ul>
+                    <li><a href="b-system/apps/Orchestra.html"><b>Orchestra:</b> Stage DAW</a></li>
+                    <li><a href="b-system/apps/Clarity.html"><b>Clarity:</b> Publishing System</a></li>
+                    <li><a href="b-system/apps/SDK.html"><b>Lil Cu 64:</b> Game SDK &amp; B-Sound</a></li>
+                    <li><a href="b-system/apps/XMB.html"><b>XMB:</b> Cross Media Bar</a></li>
+                    <li><a href="b-system/apps/MSX.html"><b>MSX:</b> Cartridge Machine</a></li>
+                    <li><a href="b-media/gl.html"><b>B-GL:</b> 3D Graphics Subsystem</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4>System Images</h4>
+                <ul>
+                    <li><a href="index.html"><b>B-System:</b> Consumer OS Architecture</a></li>
+                    <li><a href="b-media/index.html"><b>B-Media:</b> Pipes, Budgets &amp; SMP Substrate</a></li>
+                    <li><a href="b-book/index.html"><b>B-Book:</b> Kernel, Drivers &amp; UI</a></li>
+                    <li><a href="conformance.html"><b>B-Spec:</b> BTRON3 Conformance</a></li>
+                    <li><a href="virtio.html"><b>VirtIO:</b> Hypervisor Devices</a></li>
+                    <li><a href="mobile.html"><b>FOMA:</b> Handset Desktop</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4>Whitepapers</h4>
+                <ul>
+                    <li><a href="doc/pdf/btron-article.pdf" target="_blank">2026 BTRON Article</a></li>
+                    <li><a href="doc/pdf/btron-sound.pdf" target="_blank">2026 BTRON Sound Paper</a></li>
+                    <li><a href="doc/pdf/btron-smp.pdf" target="_blank">2026 BTRON SMP Microkernel</a></li>
+                    <li><a href="doc/pdf/btron-tad.pdf" target="_blank">2026 BTRON TAD Browser &amp; Cabinet</a></li>
+                    <li><a href="doc/pdf/btron-hmi.pdf" target="_blank">2026 BTRON HMI Standards</a></li>
+                    <li><a href="doc/pdf/btron-history.pdf" target="_blank">2026 BTRON History &amp; Heritage</a></li>
+                </ul>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            var nodes = document.querySelectorAll('.reveal');
+            if (!('IntersectionObserver' in window)) {
+                for (var i = 0; i < nodes.length; i++) { nodes[i].classList.add('in'); }
+                return;
+            }
+            var io = new IntersectionObserver(function (entries) {
+                entries.forEach(function (e) {
+                    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+                });
+            }, { rootMargin: '0px 0px -12% 0px', threshold: 0.06 });
+            for (var j = 0; j < nodes.length; j++) { io.observe(nodes[j]); }
+        })();
+    </script>
+
+</body>
+
+</html>

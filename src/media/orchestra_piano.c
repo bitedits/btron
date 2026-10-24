@@ -6,6 +6,9 @@ static uint32_t s_t0;
 static int s_key0 = 48;
 static int s_pick = -1;
 static int s_zoom = 2;
+static int s_hold;
+static uint32_t s_home;
+static uint8_t s_seen_state;
 
 static const char *zoom_label(void)
 {
@@ -161,6 +164,7 @@ static void paint_grid(GDEV *dev, const OrchView *v, int gx, int y0, int gw, int
     }
 }
 
+static void time_follow(const OrchView *v, uint32_t vis);
 static void piano_paint(WND *wnd, GDEV *dev)
 {
     OrchView *v = gst_view();
@@ -192,6 +196,8 @@ static void piano_paint(WND *wnd, GDEV *dev)
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
     vis = bar * (uint32_t)zoom_bars(gw);
+    if (vis == 0u) vis = bar;
+    time_follow(v, vis);
     if (mode != ORCH_LAY_MIN && gw >= 160) {
         int x0 = gx + gw - 92;
         orch_fill(dev, x0, 29, 28, 16, ORCH_COL_BTN_FACE);
@@ -245,6 +251,76 @@ static void page_time(const OrchView *v, int dir)
     if (bar == 0u) bar = 3840u;
     if (dir < 0) s_t0 = (s_t0 >= bar) ? s_t0 - bar : 0;
     else if (s_t0 < 4000000000u - bar) s_t0 += bar;
+    s_hold = 1;
+}
+
+static void key_home(const OrchView *v)
+{
+    uint32_t n;
+    uint32_t i;
+    int track;
+    int key;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_key0 < 128, __LINE__);
+    if (!v) return;
+    track = (int)v->selected;
+    key = 60;
+    n = v->event_count;
+    if (n > 4096u) n = 4096u;
+    for (i = 0; i < n; i++) {
+        const OrchEvent *e = &v->ev[i];
+        uint8_t tr;
+        uint8_t vel;
+        tr = e->track;
+        vel = e->vel;
+        if ((int)tr != track || vel == 0) continue;
+        key = (int)e->key;
+        break;
+    }
+    s_key0 = key - 6;
+    if (s_key0 < 0) s_key0 = 0;
+    if (s_key0 > 119) s_key0 = 119;
+}
+
+static void take_home(const OrchView *v)
+{
+    uint32_t h;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_pick >= -1 && s_pick < 4096, __LINE__);
+    if (!v) return;
+    h = v->home_gen;
+    if (h == s_home) return;
+    s_home = h;
+    s_t0 = 0;
+    s_hold = 0;
+    s_pick = -1;
+    key_home(v);
+}
+
+static void time_follow(const OrchView *v, uint32_t vis)
+{
+    uint32_t now;
+    int k;
+    orch_check(v != 0, __LINE__);
+    orch_check(vis > 0u, __LINE__);
+    if (!v || vis == 0u) return;
+    take_home(v);
+    if (v->state == ORCH_GST_PLAYING && s_seen_state != ORCH_GST_PLAYING)
+        s_hold = 0;
+    s_seen_state = v->state;
+    if (v->state != ORCH_GST_PLAYING || s_hold) return;
+    now = orch_now_tick(v);
+    for (k = 0; k < 256 && now < s_t0; k++) {
+        if (s_t0 <= vis) {
+            s_t0 = 0;
+            break;
+        }
+        s_t0 -= vis;
+    }
+    for (k = 0; k < 256 && now >= s_t0 + vis; k++) {
+        if (s_t0 > 0xfff00000u - vis) break;
+        s_t0 += vis;
+    }
 }
 
 static void piano_edit(const OrchView *v, int key, int x, int gx, int gw, uint32_t vis)

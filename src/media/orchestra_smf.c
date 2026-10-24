@@ -6,6 +6,7 @@
 #include <apps/orchestra.h>
 #include <apps/orch_chk.h>
 #include "../demo/lilcu64_wa.h"
+#include "../demo/lilcu64_insert.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -917,6 +918,8 @@ static int finish_load(int res)
         gst_seq_end();
     }
     s_have = 0u;
+    lc_insert_reset();
+    gst_rt_return_zero();
     gst_insert_touch();
     orch_status_ok();
     return 1;

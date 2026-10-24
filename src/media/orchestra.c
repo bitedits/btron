@@ -353,6 +353,31 @@ static void right_ms(unsigned ms)
     app_menu_set_right_text(&s_menu, b);
 }
 
+static uint32_t span_tick(const OrchView *v)
+{
+    uint32_t n;
+    uint32_t i;
+    uint32_t end;
+    orch_check(v != 0, __LINE__);
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
+    if (!v) return 0;
+    n = v->event_count;
+    end = 0;
+    if (n > ORCH_MAX_EVENTS) n = ORCH_MAX_EVENTS;
+    for (i = 0; i < n; i++) {
+        const OrchEvent *e = &v->ev[i];
+        uint32_t a;
+        uint32_t d;
+        uint32_t b;
+        if (e->vel == 0) continue;
+        a = e->start_tick;
+        d = e->dur_tick;
+        b = (a > 0xffffffffu - d) ? 0xffffffffu : a + d;
+        if (b > end) end = b;
+    }
+    return end;
+}
+
 void orchestra_ui_tick(void)
 {
     OrchView *v = gst_view();
@@ -363,6 +388,7 @@ void orchestra_ui_tick(void)
     orch_build_curve();
     gst_seq_begin();
     v->queued_ms = gst_rt_queued_ms();
+    v->loop_tick = span_tick(v);
     gst_seq_end();
     orch_publish_idle();
     right_ms(v->queued_ms);

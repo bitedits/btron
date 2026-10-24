@@ -171,6 +171,8 @@ typedef struct OrchView {
     int8_t selected;
     uint32_t event_count;
     uint64_t npos;
+    uint32_t loop_tick;
+    uint32_t home_gen;
     uint32_t queued_ms;
     uint32_t element_count;
     uint32_t wcet_us;
@@ -207,7 +209,6 @@ uint64_t gst_sample_of_tick(uint32_t tick, uint32_t fs, uint32_t bpm, uint32_t d
 uint32_t gst_tick_of_sample(uint64_t npos, uint32_t fs, uint32_t bpm, uint32_t den);
 uint32_t gst_snap_q(uint8_t snap, uint8_t num, uint8_t den);
 uint32_t gst_snap_down(uint32_t tick, uint32_t q);
-
 int  gst_rt_boot(uint32_t sample_rate);
 void gst_rt_shutdown(void);
 int  gst_rt_set_state(int target);
@@ -218,15 +219,12 @@ uint32_t gst_rt_wcet_us(void);
 uint32_t gst_rt_period_us(void);
 uint32_t gst_rt_queued_ms(void);
 uint64_t gst_rt_running_ns(void);
-
 int  orchestra_dispatch_midi_event(int in_port, uint8_t status, uint8_t d1, uint8_t d2);
 void orchestra_audio_tick(void);
 void orchestra_audio_service(uint32_t now_us);
-
 void gst_rt_panic(void);
 void gst_rt_stop_voices(void);
 int  gst_rt_export_wav(const char *path);
-
 void orch_status_set(const char *text);
 void orch_status_hold(const char *text);
 void orch_status_ok(void);

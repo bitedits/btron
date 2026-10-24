@@ -934,6 +934,7 @@ static int apply_fam(int fam)
     wa_set_reverb(1, (float)v->room / 100.0f, (float)v->damping / 100.0f,
                   (float)v->feedback / 100.0f, (float)v->wet / 100.0f);
     lc_insert_reset();
+    gst_rt_return_zero();
     gst_insert_touch();
     orch_status_ok();
     return 1;

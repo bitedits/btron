@@ -15,6 +15,7 @@ static int s_drag;
 static int s_anchor;
 static int s_anchor_row;
 static uint32_t s_anchor_t0;
+static uint32_t s_home;
 static uint8_t s_seen_state;
 
 enum { SB = 16, DRAG_OFF = 0, DRAG_V = 1, DRAG_H = 2 };
@@ -273,18 +274,38 @@ static void row_sync(const OrchView *v, const ArrGeom *g)
     if (s_row > vmax) s_row = vmax;
 }
 
+static void take_home(const OrchView *v)
+{
+    uint32_t h;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_pick >= -1 && s_pick < 4096, __LINE__);
+    if (!v) return;
+    h = v->home_gen;
+    if (h == s_home) return;
+    s_home = h;
+    s_t0 = 0;
+    s_row = 0;
+    s_hold = 0;
+    s_pick = -1;
+    s_drag = 0;
+    s_seen_n = -1;
+    s_seen_sel = -2;
+    s_seen_lo = -1;
+    s_seen_hi = -1;
+}
+
 static void time_follow(const OrchView *v, const ArrGeom *g)
 {
-    uint32_t now = 0;
+    uint32_t now;
     uint32_t max0;
-    uint32_t page;
-    uint32_t end;
     uint32_t vis;
+    uint32_t end;
     int chasing;
     int k;
     orch_check(v != 0, __LINE__);
     orch_check(g != 0, __LINE__);
     if (!v || !g) return;
+    take_home(v);
     vis = g->vis;
     end = g->end;
     if (vis == 0u) return;
@@ -292,19 +313,23 @@ static void time_follow(const OrchView *v, const ArrGeom *g)
         s_hold = 0;
     s_seen_state = v->state;
     chasing = (v->state == ORCH_GST_PLAYING && !s_hold && s_drag != DRAG_H);
-    if (chasing) {
-        uint32_t bar = g->bar;
-        now = orch_now_tick(v);
-        if (now < s_t0) s_t0 = (bar > 0u) ? (now / bar) * bar : 0u;
-        page = vis;
-        for (k = 0; k < 256 && now >= s_t0 + page; k++) {
-            if (s_t0 > 0xfff00000u - page) break;
-            s_t0 += page;
-        }
+    if (!chasing) {
+        max0 = (end > vis) ? end - vis : 0u;
+        if (s_t0 > max0) s_t0 = max0;
+        return;
     }
-    max0 = (end > vis) ? end - vis : 0u;
-    if (s_t0 > max0) s_t0 = max0;
-    if (chasing && now >= s_t0 + vis) s_t0 = (now > vis) ? now - vis : 0u;
+    now = orch_now_tick(v);
+    for (k = 0; k < 256 && now < s_t0; k++) {
+        if (s_t0 <= vis) {
+            s_t0 = 0;
+            break;
+        }
+        s_t0 -= vis;
+    }
+    for (k = 0; k < 256 && now >= s_t0 + vis; k++) {
+        if (s_t0 > 0xfff00000u - vis) break;
+        s_t0 += vis;
+    }
 }
 
 static int thumb_v(const ArrGeom *g, int *y, int *h)
@@ -647,10 +672,10 @@ static void arrange_paint(WND *wnd, GDEV *dev)
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     geom_of(v, w, h, &g);
+    time_follow(v, &g);
     if (s_drag != DRAG_V) row_sync(v, &g);
     if (s_row < 0) s_row = 0;
     if (s_row > g.vmax) s_row = g.vmax;
-    time_follow(v, &g);
     orch_fill(dev, 0, 0, w, h, ORCH_COL_CANVAS);
     paint_head(dev, v, &g);
     (void)wnd;

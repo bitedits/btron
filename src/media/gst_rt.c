@@ -1,7 +1,4 @@
-/*
- * Closed real-time chain. No GObject, no loader, no function pointers.
- * Audio path: no malloc, no printf, no fopen, no mutex.
- */
+/* Closed real-time chain. No GObject, no loader, no malloc on the audio path. */
 #include <media/gst_rt.h>
 #include <apps/orch_chk.h>
 #include <device/virtio.h>
@@ -1029,9 +1026,6 @@ static void master_pcm(int nframe, int store)
     zero_f(s_wr, nframe, ORCH_Q);
     wa_reverb_process(s_send, s_wl, s_wr, (size_t)nframe);
     mv = fader_of(s_lmvol, 0);
-    /* Shims are leveled for the demo bus. Track and master faders at 100
-       are each G(100), so the product would sit about 17 dB under the demo.
-       Nominal 100/100 stays at the shim level. Quieter faders still scale. */
     g100 = 0.08f + 0.37f * (100.0f / 127.0f);
     orch_check(g100 > 0.2f && g100 < 0.5f, __LINE__);
     if (g100 > 0.2f) mv = mv / (g100 * g100);
@@ -1200,6 +1194,7 @@ static void device_out(int nframe)
     if (wr < 0) chain_result(ORCH_DROP, 1, 0);
     else chain_result(ORCH_OK, 0, 0);
 }
+static void release_all_slots(void);
 void orchestra_audio_tick(void)
 {
     uint32_t prefix;
@@ -1226,6 +1221,20 @@ void orchestra_audio_tick(void)
     render_graph(g.npos, s_slot, ORCH_Q);
     device_out(ORCH_Q);
     g.npos += ORCH_Q;
+    if (g.loop_tick > 0u) {
+        uint64_t end = gst_sample_of_tick(g.loop_tick, fs_now(), bpm_fix(g.tempo), den_fix(g.den));
+        if (end > 0ull && g.npos >= end) {
+            memset(g.ev_live, 0, sizeof g.ev_live);
+            release_all_slots();
+            ring_clear();
+            g.npos = 0;
+            s_arm = 1;
+            s_minit = s_binit = 0;
+            s_mlast = s_blast = 0;
+            if (s_booted) wa_set_clock_samples(0);
+            if (g.home_gen < 4294967295u) g.home_gen++;
+        }
+    }
     (void)gst_rt_wcet_us();
     (void)gst_rt_period_us();
 }
@@ -1246,9 +1255,6 @@ void orchestra_audio_service(uint32_t now_us)
     if (!s_booted || g.state != ORCH_GST_PLAYING) return;
     T = gst_rt_period_us();
     if (T == 0u) T = 1u;
-    /* A zero clock is one quantum per call (host tools). A live clock is the
-       desktop thread: it coalesces many periods. The sink queue is the pacer,
-       one device period up to two. A late poll is not a deadline miss. */
     if (btron_render_perf_us() == 0u) {
         s_force_late = 0;
         orchestra_audio_tick();
@@ -1317,6 +1323,7 @@ void gst_rt_return_zero(void)
     s_binit = 0;
     s_mlast = 0;
     s_blast = 0;
+    if (g.home_gen < 4294967295u) g.home_gen++;
 }
 static void concert(void)
 {

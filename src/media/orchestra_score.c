@@ -4,6 +4,9 @@
 static WND *s_wnd;
 static int s_bar;
 static int s_pick = -1;
+static int s_hold;
+static uint32_t s_home;
+static uint8_t s_seen_state;
 
 enum { ND = 48 };
 
@@ -357,6 +360,49 @@ static void draw_rests(GDEV *dev, const OrchView *v, int track, int gx, int bar_
     }
 }
 
+static void take_home(const OrchView *v)
+{
+    uint32_t h;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_pick >= -1 && s_pick < 4096, __LINE__);
+    if (!v) return;
+    h = v->home_gen;
+    if (h == s_home) return;
+    s_home = h;
+    s_bar = 0;
+    s_hold = 0;
+    s_pick = -1;
+}
+
+static void time_follow(const OrchView *v, int bars, uint32_t bar)
+{
+    uint32_t now;
+    uint32_t vis;
+    int k;
+    orch_check(v != 0, __LINE__);
+    orch_check(bar > 0u && bars > 0 && bars <= 8, __LINE__);
+    if (!v || bar == 0u || bars < 1) return;
+    take_home(v);
+    if (v->state == ORCH_GST_PLAYING && s_seen_state != ORCH_GST_PLAYING)
+        s_hold = 0;
+    s_seen_state = v->state;
+    if (v->state != ORCH_GST_PLAYING || s_hold) return;
+    if (s_bar < 0) s_bar = 0;
+    vis = bar * (uint32_t)bars;
+    now = orch_now_tick(v);
+    for (k = 0; k < 256 && now < (uint32_t)s_bar * bar; k++) {
+        if (s_bar < bars) {
+            s_bar = 0;
+            break;
+        }
+        s_bar -= bars;
+    }
+    for (k = 0; k < 256 && now >= (uint32_t)s_bar * bar + vis; k++) {
+        if (s_bar > 100000 - bars) break;
+        s_bar += bars;
+    }
+}
+
 static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
 {
     int bass;
@@ -385,6 +431,7 @@ static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
     bar_w = inner / bars;
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
+    time_follow(v, bars, bar);
     for (i = -4; i <= 4; i += 2)
         orch_fill(dev, 8, mid - i * dy, w - 16, 1, ORCH_COL_SILVER);
     draw_clef(dev, 8, mid, dy, bass);
@@ -438,10 +485,13 @@ static int turn_page(int x, int y, int mode)
     orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
     orch_check(y > -4000 && y < 8000, __LINE__);
     if (mode == ORCH_LAY_MIN || y >= 28) return 0;
-    if (x < 36) {
-        if (s_bar > 0) s_bar--;
-    } else if (x < 64 && s_bar < 400) {
-        s_bar++;
+    if (x < 64) {
+        s_hold = 1;
+        if (x < 36) {
+            if (s_bar > 0) s_bar--;
+        } else if (s_bar < 400) {
+            s_bar++;
+        }
     }
     return 1;
 }

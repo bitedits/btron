@@ -51,6 +51,7 @@ void orch_shutdown_desk(void);
 
 int  orch_cmd_new(void);
 int  orch_cmd_open(void);
+int  orch_cmd_open_at(int idx);
 int  orch_cmd_save(void);
 int  orch_cmd_family(int fam);
 int  orch_cmd_scene(int idx);

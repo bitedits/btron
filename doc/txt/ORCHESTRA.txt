@@ -1615,7 +1615,7 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
 
   ファイル (F)                 104
     新規作成 (New)             Ctrl+N   101
-    開く (Open)                Ctrl+O   102
+    開く (Open) ▶              Ctrl+O   102
     上書き保存 (Save)          Ctrl+S   103
     роздільник
     SMFを読み込む (Load SMF)   Ctrl+L   104
@@ -1624,7 +1624,13 @@ Related: SOUND.txt, ASYNC.txt, IO.txt,
     роздільник
     閉じる (Close)             Ctrl+W   107
     New чистить сесію в PAUSED.
-    Open і Save — файл §7.1.
+    Open — каскад, як у T-Editor.
+    Ctrl+O читає orchestra.orch.
+    Рядки: Session, Bells,
+    Caterpillar, Rising, TRON Init.
+    Файл у /SYS, поле path — §7.1.
+    На хості немає /SYS: читається SYS/.
+    Save завжди пише orchestra.orch.
     SMF і WAV — §11. Close веде в NULL.
 
   コンサート (C)               120

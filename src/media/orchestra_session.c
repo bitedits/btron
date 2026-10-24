@@ -234,20 +234,6 @@ static int playing(void)
     orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
     return v->state == ORCH_GST_PLAYING;
 }
-static int path_arg(const char *p)
-{
-    const char *lit = ORCH_PATH_ORCH;
-    int i = 0;
-    int n = 0;
-    orch_check(p != 0, __LINE__);
-    while (lit[n] != 0 && n < 64) n++;
-    orch_check(n > 0 && n < 64, __LINE__);
-    for (i = 0; i < 64; i++) {
-        if (p[i] != lit[i]) return 0;
-        if (p[i] == 0) return 1;
-    }
-    return 0;
-}
 static int path_field(const uint8_t *p)
 {
     const char *lit = ORCH_PATH_ORCH;
@@ -690,37 +676,71 @@ static void resolve_orch_path(void)
     if (s_orch_path[0] != '/') return;
     copy_path(s_orch_path, s_orch_alt);
 }
-static int load_path(const char *path)
+static const char *open_lit(int idx)
+{
+    static const char *const lit[5] = {
+        "/SYS/orchestra.orch",
+        "/SYS/bells.orch",
+        "/SYS/caterpillar.orch",
+        "/SYS/rising.orch",
+        "/SYS/tron.orch"
+    };
+    orch_check(lit[0][0] == '/', __LINE__);
+    orch_check(lit[4][0] == '/', __LINE__);
+    if (idx < 0 || idx > 4) return 0;
+    return lit[idx];
+}
+static int pick_host(char *dst, const char *lit)
+{
+    struct stat st;
+    orch_check(dst != 0, __LINE__);
+    orch_check(lit != 0, __LINE__);
+    copy_path(dst, lit);
+    if (path_stat(dst, &st)) return 1;
+    if (lit[0] != '/') return 0;
+    copy_path(dst, lit + 1);
+    return path_stat(dst, &st) ? 1 : 0;
+}
+static int read_orch(const char *path)
 {
     FILE *fp;
     struct stat st;
     size_t n;
     int closed;
-    OrchView *v = gst_view();
     orch_check(path != 0, __LINE__);
-    orch_check(v != 0, __LINE__);
-    if (!v) return 0;
+    orch_check(path[0] != 0, __LINE__);
     if (playing()) return refuse_session();
-    if (!path_arg(path)) return refuse_session();
-    resolve_orch_path();
-    if (!path_stat(s_orch_path, &st)) return refuse_session();
+    if (!path_stat(path, &st)) return refuse_session();
     if ((unsigned long long)st.st_size != (unsigned long long)ORCH_FILE_BYTES) {
         return refuse_session();
     }
-    fp = fopen(s_orch_path, "rb");
+    fp = fopen(path, "rb");
     if (!fp) return refuse_session();
     n = fread(s_file, 1, ORCH_FILE_BYTES, fp);
     closed = fclose(fp);
     if (closed != 0 || n != ORCH_FILE_BYTES) return refuse_session();
     return accept_buf(s_file);
 }
+int orch_cmd_open_at(int idx)
+{
+    const char *lit;
+    char dst[ORCH_PATH_N];
+    OrchView *v = gst_view();
+    orch_check(v != 0, __LINE__);
+    orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
+    if (!v) return 0;
+    lit = open_lit(idx);
+    if (!lit) return refuse_session();
+    if (!pick_host(dst, lit)) return refuse_session();
+    return read_orch(dst);
+}
 int orch_cmd_open(void)
 {
     OrchView *v = gst_view();
     orch_check(v != 0, __LINE__);
-    if (!v) return 0;
     orch_check(v->state <= ORCH_GST_PLAYING, __LINE__);
-    return load_path(ORCH_PATH_ORCH);
+    if (!v) return 0;
+    return orch_cmd_open_at(0);
 }
 int orch_cmd_save(void)
 {

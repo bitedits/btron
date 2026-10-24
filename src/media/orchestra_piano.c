@@ -5,6 +5,34 @@ static WND *s_wnd;
 static uint32_t s_t0;
 static int s_key0 = 48;
 static int s_pick = -1;
+static int s_zoom = 2;
+
+static const char *zoom_label(void)
+{
+    static const char *lb[5] = { "16", "8", "4", "2", "1" };
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    orch_check(lb[2][0] == '4', __LINE__);
+    if (s_zoom < 0 || s_zoom > 4) return "4";
+    return lb[s_zoom];
+}
+
+static void zoom_by(int dir)
+{
+    orch_check(dir == -1 || dir == 1, __LINE__);
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    if (dir < 0 && s_zoom > 0) s_zoom--;
+    if (dir > 0 && s_zoom < 4) s_zoom++;
+}
+
+static int zoom_bars(int gw)
+{
+    int bars = 16 >> s_zoom;
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    orch_check(gw > -10 && gw < 8000, __LINE__);
+    if (bars < 1) bars = 1;
+    if (gw < 240 && bars > 2) bars = 2;
+    return bars;
+}
 
 static int black_key(int key)
 {
@@ -163,7 +191,16 @@ static void piano_paint(WND *wnd, GDEV *dev)
     if (gw < 8) gw = 8;
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
-    vis = bar * (gw < 240 ? 2u : 4u);
+    vis = bar * (uint32_t)zoom_bars(gw);
+    if (mode != ORCH_LAY_MIN && gw >= 160) {
+        int x0 = gx + gw - 92;
+        orch_fill(dev, x0, 29, 28, 16, ORCH_COL_BTN_FACE);
+        orch_text(dev, x0 + 2, 29, "Out", ORCH_COL_WHITE);
+        orch_fill(dev, x0 + 30, 29, 28, 16, ORCH_COL_INSET_BG);
+        orch_text(dev, x0 + 38, 29, zoom_label(), ORCH_COL_AMBER);
+        orch_fill(dev, x0 + 60, 29, 28, 16, ORCH_COL_BTN_FACE);
+        orch_text(dev, x0 + 68, 29, "In", ORCH_COL_WHITE);
+    }
     for (r = 0; r < rows && r < 32; r++) {
         int key = s_key0 + rows - 1 - r;
         COLOR bg = black_key(key) ? ORCH_COL_GRID_BG : ORCH_COL_ROW_B;
@@ -262,9 +299,16 @@ static void piano_click(int x, int y, int w, int h)
     }
     gx = kw + 4;
     gw = w - gx - 4;
+    if (gw < 8) gw = 8;
     bar = orch_q(v, ORCH_SNAP_BAR);
-    vis = (bar ? bar : 3840u) * (gw < 240 ? 2u : 4u);
+    if (bar == 0u) bar = 3840u;
+    vis = bar * (uint32_t)zoom_bars(gw);
     if (mode != ORCH_LAY_MIN && y < y0 && y >= 28) {
+        if (gw >= 160 && x >= gx + gw - 92) {
+            if (x < gx + gw - 62) zoom_by(-1);
+            else if (x >= gx + gw - 32) zoom_by(1);
+            return;
+        }
         page_time(v, (x < gx + gw / 2) ? -1 : 1);
         return;
     }

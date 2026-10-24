@@ -2047,3 +2047,40 @@ uint32_t lc_shim_refusals(void)
     orch_check(s_T > -1.0e12, __LINE__);
     return s_shim_refuse;
 }
+
+void lc_cap_begin(void)
+{
+    s_cap_on = 1;
+    s_cap_n = 0;
+    s_cap_over = 0;
+}
+
+void lc_cap_end(void)
+{
+    s_cap_on = 0;
+}
+
+int lc_cap_count(void)
+{
+    return s_cap_n;
+}
+
+int lc_cap_overflow(void)
+{
+    return s_cap_over;
+}
+
+int lc_cap_at(int i, int *shim, int *art, double *t, float *hz, float *vol, float *dur)
+{
+    CapEv *e;
+    if (i < 0 || i >= s_cap_n) return 0;
+    if (!shim || !art || !t || !hz || !vol || !dur) return 0;
+    e = &s_cap[i];
+    *shim = (int)e->shim;
+    *art = (int)e->art;
+    *t = e->t;
+    *hz = e->hz;
+    *vol = e->vol;
+    *dur = e->dur;
+    return 1;
+}

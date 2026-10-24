@@ -8,6 +8,16 @@
 static APP_MENU_BAR s_menu;
 static int s_menu_ok;
 
+enum { OPEN_N = 5 };
+
+static const char k_open_lbl[OPEN_N][64] = {
+    "セッション (Session)",
+    "鐘のキャロル (Bells)",
+    "今田勝 (Caterpillar)",
+    "朝日のあたる家 (Rising)",
+    "TRON Init"
+};
+
 static void orch_menu_scenes(void);
 
 int orch_lay_mode(int w, int h)
@@ -577,13 +587,23 @@ static void add_item(int h, const char *label, const char *accel, int cmd)
     (void)app_menu_add_item(&s_menu, h, label, accel, cmd, TRUE);
 }
 
+static void add_open(int h)
+{
+    int ix;
+    orch_check(h == 0, __LINE__);
+    orch_check(s_menu.header_count == 1, __LINE__);
+    ix = app_menu_add_submenu_item(&s_menu, h, "開く (Open) ▶", 102, 1);
+    if (ix < 0) return;
+    orch_copy(s_menu.headers[h].items[ix].accel, 16, "Ctrl+O");
+}
+
 static void menu_file(void)
 {
     int h = add_hdr("ファイル(F)", 104);
     orch_check(h == 0, __LINE__);
     orch_check(s_menu.header_count == 1, __LINE__);
     add_item(h, "新規作成 (New)", "Ctrl+N", 101);
-    add_item(h, "開く (Open)", "Ctrl+O", 102);
+    add_open(h);
     add_item(h, "上書き保存 (Save)", "Ctrl+S", 103);
     (void)app_menu_add_separator(&s_menu, h);
     add_item(h, "SMFを読み込む (Load SMF)", "Ctrl+L", 104);
@@ -719,6 +739,9 @@ void orch_menu_paint(GDEV *dev)
     if (!dev || !s_menu_ok) return;
     app_menu_paint_bar(&s_menu, dev);
     app_menu_paint_dropdown(&s_menu, dev);
+    if (s_menu.active_submenu >= 0) {
+        app_menu_paint_cascading_strings(&s_menu, dev, k_open_lbl, OPEN_N);
+    }
 }
 
 int orch_menu_move(int x, int y)
@@ -739,7 +762,12 @@ int orch_menu_down(int x, int y)
     orch_check(x > -4000 && y > -4000, __LINE__);
     if (!s_menu_ok) return 0;
     if (!app_menu_handle_mouse_down(&s_menu, (H)x, (H)y, &cmd, &sub)) return 0;
-    if (cmd > 0) run_cmd(cmd);
+    if (cmd == 102 && sub >= 0) {
+        (void)orch_cmd_open_at(sub);
+        orch_inval_all();
+    } else if (cmd > 0) {
+        run_cmd(cmd);
+    }
     return 1;
 }
 

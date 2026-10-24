@@ -352,7 +352,10 @@ static void stage_event(WND *wnd, const EVT *evt)
     }
     if (evt->type != EV_BUT_DOWN) return;
     if (y < 21 || orch_menu_is_open()) {
-        if (orch_menu_down(x, y)) (void)inval_wnd(wnd);
+        if (orch_menu_down(x, y)) {
+            (void)inval_wnd(wnd);
+            return;
+        }
         if (y < 21) return;
     }
     stage_click(x, y, w, h);

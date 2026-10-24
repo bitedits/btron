@@ -4,6 +4,66 @@
 static WND *s_wnd;
 static uint32_t s_t0;
 static int s_pick = -1;
+static int s_zoom = 2;
+
+static const char *zoom_label(void)
+{
+    static const char *lb[5] = { "16", "8", "4", "2", "1" };
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    orch_check(lb[2][0] == '4', __LINE__);
+    if (s_zoom < 0 || s_zoom > 4) return "4";
+    return lb[s_zoom];
+}
+
+static void zoom_by(int dir)
+{
+    orch_check(dir == -1 || dir == 1, __LINE__);
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    if (dir < 0 && s_zoom > 0) s_zoom--;
+    if (dir > 0 && s_zoom < 4) s_zoom++;
+}
+
+static int zoom_bars(int gw)
+{
+    int bars = 16 >> s_zoom;
+    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    orch_check(gw > -10 && gw < 8000, __LINE__);
+    if (bars < 1) bars = 1;
+    if (gw < 240 && bars > 2) bars = 2;
+    return bars;
+}
+
+static void name_fit(char *dst, int cap, const char *src, int px)
+{
+    int i = 0;
+    int n = 0;
+    int w = 0;
+    orch_check(dst != 0, __LINE__);
+    orch_check(cap >= 2 && cap <= 48, __LINE__);
+    dst[0] = 0;
+    if (!src || px < 8) return;
+    while (src[n] && i < cap - 1 && n < 47) {
+        unsigned char c = (unsigned char)src[n];
+        int adv = 8;
+        int step = 1;
+        if (c >= 0x80u) {
+            adv = 16;
+            while (step < 3 && src[n + step] != 0) {
+                if (((unsigned char)src[n + step] & 0xC0u) != 0x80u) break;
+                step++;
+            }
+        }
+        if (w + adv > px) break;
+        while (step > 0 && i < cap - 1) {
+            dst[i] = src[n];
+            i++;
+            n++;
+            step--;
+        }
+        w += adv;
+    }
+    dst[i] = 0;
+}
 
 static const char *snap_name(int snap)
 {
@@ -17,11 +77,14 @@ static const char *snap_name(int snap)
 
 static int head_w(int mode, int w)
 {
+    int h = 200;
     orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
     orch_check(w > 0 && w < 8000, __LINE__);
     if (w < 280 || mode == ORCH_LAY_MIN) return 0;
-    if (mode == ORCH_LAY_STACK) return 88;
-    return 120;
+    if (mode == ORCH_LAY_STACK) h = 112;
+    if (h > w / 2) h = w / 2;
+    if (h < 48) h = 48;
+    return h;
 }
 
 static int lane_n(int mode, int avail)
@@ -116,6 +179,11 @@ static void paint_notes(GDEV *dev, const OrchView *v, int track, int gx, int y, 
         }
         col = ((int)i == s_pick) ? ORCH_COL_CYAN : ORCH_COL_AMBER;
         orch_fill(dev, x0, y0, x1 - x0, hh, col);
+        if (!map && x1 - x0 >= 48 && track < 64) {
+            char fit[48];
+            name_fit(fit, 48, v->trk[track].name, x1 - x0 - 6);
+            if (fit[0]) orch_text(dev, x0 + 3, y0 + 2, fit, ORCH_COL_INSET_BG);
+        }
     }
 }
 
@@ -131,7 +199,9 @@ static void paint_lane(GDEV *dev, const OrchView *v, int track, int x, int y, in
     bg = sel ? ORCH_COL_ROW_A : ORCH_COL_ROW_B;
     orch_fill(dev, x, y, head + gw, lh - 1, bg);
     if (head > 8 && track >= 0) {
-        orch_text(dev, x + 4, y + 4, v->trk[track].name, ORCH_COL_WHITE);
+        char fit[48];
+        name_fit(fit, 48, v->trk[track].name, head - 10);
+        orch_text(dev, x + 4, y + 4, fit, ORCH_COL_WHITE);
         if (v->trk[track].accent)
             orch_fill(dev, x, y, 3, lh - 1, (COLOR)v->trk[track].accent);
     }
@@ -146,6 +216,8 @@ static void paint_lane(GDEV *dev, const OrchView *v, int track, int x, int y, in
     paint_notes(dev, v, track, x + head, y, gw, lh, t0, vis);
 }
 
+static void paint_ruler(GDEV *dev, int gx, int gw, uint32_t bar, uint32_t vis);
+
 static void paint_head(GDEV *dev, const OrchView *v, int w, int h)
 {
     int mode;
@@ -159,6 +231,7 @@ static void paint_head(GDEV *dev, const OrchView *v, int w, int h)
     uint32_t vis;
     uint32_t bar;
     uint32_t now;
+    int bars;
     int px;
     orch_check(dev != 0, __LINE__);
     orch_check(v != 0, __LINE__);
@@ -175,18 +248,9 @@ static void paint_head(GDEV *dev, const OrchView *v, int w, int h)
     if (gw < 8) gw = 8;
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
-    vis = bar * 4u;
-    if (gw < 240) vis = bar * 2u;
-    if (mode != ORCH_LAY_MIN) {
-        orch_fill(dev, gx, 32, gw, 18, ORCH_COL_PANEL_BG);
-        for (i = 0; i < 8; i++) {
-            uint32_t t = s_t0 + (uint32_t)i * bar;
-            char nb[8];
-            if (t >= s_t0 + vis) break;
-            (void)orch_fmt_u(nb, 8, (t / bar) + 1u);
-            orch_text(dev, x_of(gx, gw, s_t0, vis, t) + 2, 34, nb, ORCH_COL_DIM);
-        }
-    }
+    bars = zoom_bars(gw);
+    vis = bar * (uint32_t)bars;
+    if (mode != ORCH_LAY_MIN) paint_ruler(dev, gx, gw, bar, vis);
     for (i = 0; i < lanes && i < 5; i++) {
         int tr = lane_track(v, i, lanes);
         int sel = (tr >= 0 && tr == (int)v->selected);
@@ -238,11 +302,48 @@ static int tool_click(const OrchView *v, int x, int y, int mode)
     return 1;
 }
 
+static void paint_ruler(GDEV *dev, int gx, int gw, uint32_t bar, uint32_t vis)
+{
+    int i;
+    int stop;
+    orch_check(dev != 0, __LINE__);
+    orch_check(bar > 0u && vis >= bar, __LINE__);
+    orch_fill(dev, gx, 32, gw, 18, ORCH_COL_PANEL_BG);
+    stop = gx + gw;
+    if (gw >= 160) stop = gx + gw - 96;
+    for (i = 0; i < 16; i++) {
+        uint32_t t = s_t0 + (uint32_t)i * bar;
+        int tx;
+        char nb[8];
+        if (t >= s_t0 + vis) break;
+        tx = x_of(gx, gw, s_t0, vis, t) + 2;
+        if (tx + 16 > stop) break;
+        (void)orch_fmt_u(nb, 8, (t / bar) + 1u);
+        orch_text(dev, tx, 34, nb, ORCH_COL_DIM);
+    }
+    if (gw < 160) return;
+    orch_fill(dev, gx + gw - 92, 33, 28, 16, ORCH_COL_BTN_FACE);
+    orch_text(dev, gx + gw - 90, 33, "Out", ORCH_COL_WHITE);
+    orch_fill(dev, gx + gw - 62, 33, 28, 16, ORCH_COL_INSET_BG);
+    orch_text(dev, gx + gw - 54, 33, zoom_label(), ORCH_COL_AMBER);
+    orch_fill(dev, gx + gw - 32, 33, 28, 16, ORCH_COL_BTN_FACE);
+    orch_text(dev, gx + gw - 24, 33, "In", ORCH_COL_WHITE);
+}
+
 static void ruler_page(const OrchView *v, int x, int gx, int gw)
 {
     uint32_t bar;
+    int x0;
     orch_check(v != 0, __LINE__);
     orch_check(gw > 0, __LINE__);
+    if (gw >= 160) {
+        x0 = gx + gw - 92;
+        if (x >= x0) {
+            if (x < x0 + 30) zoom_by(-1);
+            else if (x >= x0 + 60) zoom_by(1);
+            return;
+        }
+    }
     bar = orch_q(v, ORCH_SNAP_BAR);
     if (bar == 0u) bar = 3840u;
     if (x < gx + gw / 3) {
@@ -325,7 +426,8 @@ static void arrange_click(int x, int y, int w, int h)
     gw = w - head - 8;
     if (gw < 8) gw = 8;
     bar = orch_q(v, ORCH_SNAP_BAR);
-    vis = (bar ? bar : 3840u) * ((gw < 240) ? 2u : 4u);
+    if (bar == 0u) bar = 3840u;
+    vis = bar * (uint32_t)zoom_bars(gw);
     for (i = 0; i < lanes && i < 5; i++) {
         int tr = lane_track(v, i, lanes);
         int ly = top + i * lh;

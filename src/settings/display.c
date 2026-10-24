@@ -113,10 +113,10 @@ static SETTINGS_CONTROL s_display_controls[] = {
 };
 
 static SETTINGS_SECTION s_display_sections[] = {
-    { " [1. Resolution & Video Mode] ", 1, 0, 3, 56, 94, {0} },
-    { " [2. DPI Scaling & Color Profiles] ", 1, 3, 3, 164, 94, {0} },
+    { " [1. Resolution & Video Mode] ", 1, 0, 3, 56, 94, {0}, 0, 0, 0 },
+    { " [2. DPI Scaling & Color Profiles] ", 1, 3, 3, 164, 94, {0}, 0, 0, 0 },
 #if defined(BTRON_PS2_TARGET)
-    { " [3. OpenGL PS2 Rasterizer] ", 1, 6, 2, 262, 78, {0} },
+    { " [3. OpenGL PS2 Rasterizer] ", 1, 6, 2, 262, 78, {0}, 0, 0, 0 },
 #endif
 };
 

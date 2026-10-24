@@ -38,7 +38,7 @@ static SETTINGS_CONTROL s_system_controls[] = {
 };
 
 static SETTINGS_SECTION s_system_sections[] = {
-    { " [1. System Plane & Kernel Information] ", 1, 0, 4, 56, 116, {0} }
+    { " [1. System Plane & Kernel Information] ", 1, 0, 4, 56, 116, {0}, 0, 0, 0 }
 };
 
 static void paint_system_settings(WND *wnd, GDEV *dev) {

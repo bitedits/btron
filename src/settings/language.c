@@ -47,7 +47,7 @@ static SETTINGS_CONTROL s_language_controls[] = {
 };
 
 static SETTINGS_SECTION s_language_sections[] = {
-    { " [1. Language Switching Shortcuts] ", 0, 0, 0, 46, 64, {0} },
+    { " [1. Language Switching Shortcuts] ", 0, 0, 0, 46, 64, {0}, 0, 0, 0 },
     { " [2. Japanese Mode (JP あ / JP ア)] ", 1, 0, 2, 116, 70, {0}, 6, 14, 6 },
     { " [3. Tibetan Mode (TB བོད)] ", 1, 2, 3, 192, 70, {0}, 10, 14, 6 },
     { " [4. Candidate Popup Navigation (All Modes)] ", 1, 5, 2, 268, 67, {0}, 14, 14, 6 },

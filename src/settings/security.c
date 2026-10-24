@@ -37,7 +37,7 @@ static SETTINGS_CONTROL s_security_controls[] = {
 };
 
 static SETTINGS_SECTION s_security_sections[] = {
-    { " [1. Access Control Lists (ACL)] ", 1, 0, 3, 56, 94, {0} }
+    { " [1. Access Control Lists (ACL)] ", 1, 0, 3, 56, 94, {0}, 0, 0, 0 }
 };
 
 static void paint_security_settings(WND *wnd, GDEV *dev) {

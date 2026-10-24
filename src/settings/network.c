@@ -39,8 +39,8 @@ static SETTINGS_CONTROL s_network_controls[] = {
 };
 
 static SETTINGS_SECTION s_network_sections[] = {
-    { " [1. Network Interface Configuration] ", 1, 0, 3, 56, 94, {0} },
-    { " [2. Messaging & Remote Services] ",      1, 3, 2, 164, 72, {0} }
+    { " [1. Network Interface Configuration] ", 1, 0, 3, 56, 94, {0}, 0, 0, 0 },
+    { " [2. Messaging & Remote Services] ",      1, 3, 2, 164, 72, {0}, 0, 0, 0 }
 };
 
 static void paint_network_settings(WND *wnd, GDEV *dev) {

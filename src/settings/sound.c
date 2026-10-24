@@ -45,8 +45,8 @@ static SETTINGS_CONTROL s_sound_controls[] = {
 };
 
 static SETTINGS_SECTION s_sound_sections[] = {
-    { " [1. Audio Master Output] ", 1, 0, 4, 56, 116, {0} },
-    { " [2. Cassette DSP Engine] ", 1, 4, 2, 186, 72, {0} }
+    { " [1. Audio Master Output] ", 1, 0, 4, 56, 116, {0}, 0, 0, 0 },
+    { " [2. Cassette DSP Engine] ", 1, 4, 2, 186, 72, {0}, 0, 0, 0 }
 };
 
 static void paint_sound_settings(WND *wnd, GDEV *dev) {

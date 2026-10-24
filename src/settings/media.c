@@ -38,7 +38,7 @@ static SETTINGS_CONTROL s_media_controls[] = {
 };
 
 static SETTINGS_SECTION s_media_sections[] = {
-    { " [1. File Type Associations] ", 1, 0, 4, 56, 116, {0} }
+    { " [1. File Type Associations] ", 1, 0, 4, 56, 116, {0}, 0, 0, 0 }
 };
 
 static void paint_media_settings(WND *wnd, GDEV *dev) {

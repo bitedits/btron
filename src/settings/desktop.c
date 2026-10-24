@@ -45,8 +45,11 @@ static SETTINGS_CONTROL s_desktop_controls[] = {
 };
 
 static SETTINGS_SECTION s_desktop_sections[] = {
-    { " [1. Workbench Virtual Object Modes] ", 1, 0, 3, 56, 94, {0} },
-    { " [2. Background Surface & Patterns] ",   1, 3, 3, 164, 94, {0} }
+    /* padding_top/row_height/row_gap are written out as 0 = "inherit the dialog
+     * default", which is what settings_layout_dialog() implements; see
+     * include/btron/settings_dlg.h. */
+    { " [1. Workbench Virtual Object Modes] ", 1, 0, 3, 56, 94, {0}, 0, 0, 0 },
+    { " [2. Background Surface & Patterns] ",   1, 3, 3, 164, 94, {0}, 0, 0, 0 }
 };
 
 static void paint_desktop_settings(WND *wnd, GDEV *dev) {

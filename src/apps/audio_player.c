@@ -1078,6 +1078,12 @@ WND* open_audio_player_window(void) {
 void cassette_service(void)
 {
     int sec;
+    OrchView *v;
+    /* Desk Play does not go through the cassette rows. The transport still
+       has to be pumped every UI pass, or N stays put and the device stays dry. */
+    v = gst_view();
+    if (v && v->state == ORCH_GST_PLAYING)
+        orchestra_audio_service(btron_render_perf_us());
     if (g_deck.pl_on < 0 || g_deck.pl_on >= CASSETTE_PL_N) return;
     if (g_deck.state != TAPE_PLAY) return;
     if (s_owner == 1 && g_deck.pl_on < 4) {
@@ -1091,10 +1097,8 @@ void cassette_service(void)
         }
         s_seen = sec;
     } else if (s_owner == 2 && g_deck.pl_on >= 4) {
-        OrchView *v;
-        orchestra_audio_service(btron_render_perf_us());
-        v = gst_view();
         sec = 0;
+        v = gst_view();
         if (v && v->sample_rate != 0u)
             sec = (int)(v->npos / v->sample_rate);
         if (v) {

@@ -1020,6 +1020,7 @@ static void master_pcm(int nframe, int store)
 {
     int i;
     float mv;
+    float g100;
     int peak_l = 0, peak_r = 0;
     int lim = (s_llim == ORCH_INS_LIMITER);
     orch_check(nframe > 0 && nframe <= ORCH_Q, __LINE__); orch_check(lim == 0 || lim == 1, __LINE__);
@@ -1027,6 +1028,12 @@ static void master_pcm(int nframe, int store)
     zero_f(s_wr, nframe, ORCH_Q);
     wa_reverb_process(s_send, s_wl, s_wr, (size_t)nframe);
     mv = fader_of(s_lmvol, 0);
+    /* Shims are leveled for the demo bus. Track and master faders at 100
+       are each G(100), so the product would sit about 17 dB under the demo.
+       Nominal 100/100 stays at the shim level. Quieter faders still scale. */
+    g100 = 0.08f + 0.37f * (100.0f / 127.0f);
+    orch_check(g100 > 0.2f && g100 < 0.5f, __LINE__);
+    if (g100 > 0.2f) mv = mv / (g100 * g100);
     for (i = 0; i < nframe; i++) {
         float L = (s_L[i] + (s_wl[i] - s_send[i])) * mv;
         float R = (s_R[i] + (s_wr[i] - s_send[i])) * mv;
@@ -1221,28 +1228,42 @@ void orchestra_audio_tick(void)
     (void)gst_rt_wcet_us();
     (void)gst_rt_period_us();
 }
+static uint32_t queued_frames(void)
+{
+    uint32_t b;
+    orch_check(s_booted == 0 || s_booted == 1, __LINE__);
+    orch_check(g.state <= ORCH_GST_PLAYING, __LINE__);
+    b = virtio_sound_get_queued_bytes();
+    return b / 4u;
+}
 void orchestra_audio_service(uint32_t now_us)
 {
     int i;
-    uint32_t clk, T, lim;
-    orch_check(s_booted == 0 || s_booted == 1, __LINE__); orch_check(g.state <= ORCH_GST_PLAYING, __LINE__);
+    uint32_t T;
+    orch_check(s_booted == 0 || s_booted == 1, __LINE__);
+    orch_check(g.state <= ORCH_GST_PLAYING, __LINE__);
     if (!s_booted || g.state != ORCH_GST_PLAYING) return;
-    clk = btron_render_perf_us();
     T = gst_rt_period_us();
     if (T == 0u) T = 1u;
-    if (clk == 0u) {
+    /* A zero clock is one quantum per call (host tools). A live clock is the
+       desktop thread: it coalesces many periods. The sink queue is the pacer,
+       one device period up to two. A late poll is not a deadline miss. */
+    if (btron_render_perf_us() == 0u) {
         s_force_late = 0;
         orchestra_audio_tick();
         return;
     }
     if (s_due == 0u) s_due = now_us;
-    lim = T / 10u;
-    for (i = 0; i < 16; i++) {
-        uint32_t behind;
-        if ((int32_t)(now_us - s_due) < 0) break;
-        behind = now_us - s_due;
-        s_force_late = (behind > lim) ? 1 : 0;
+    s_force_late = 0;
+    for (i = 0; i < 64; i++) {
+        uint32_t qf;
+        int due;
+        qf = queued_frames();
+        due = ((int32_t)(now_us - s_due) >= 0);
+        if (qf >= 2048u) break;
+        if (qf >= 1024u && !due) break;
         orchestra_audio_tick();
+        if (!due) continue;
         s_due += T;
         if (s_due == 0u) s_due = 1u;
     }

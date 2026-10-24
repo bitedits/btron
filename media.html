@@ -198,7 +198,7 @@
         }
 
         .hero-lede {
-            max-width: 620px;
+            max-width: 900px;
             margin: 0 auto;
             font-size: clamp(1.02rem, 1.7vw, 1.22rem);
             font-weight: 300;
@@ -206,8 +206,24 @@
             color: var(--ink-2);
         }
 
+        /* One thought per line: the abstract never breaks mid-sentence. */
+        .hero-lede .l {
+            display: block;
+        }
+
+        @media (min-width: 940px) {
+            .hero-lede .l {
+                white-space: nowrap;
+            }
+        }
+
+        p,
+        li {
+            text-wrap: pretty;
+        }
+
         .hero-lede-en {
-            max-width: 660px;
+            max-width: 720px;
             margin: 1.7rem auto 0;
             font-size: 0.95rem;
             line-height: 1.95;
@@ -1156,9 +1172,12 @@
             <h1 class="jp-title">メディアのOS。</h1>
             <div class="hero-rule"></div>
             <p class="hero-lede">
-                メディアは、後から載せるものではありません。OS の約束の、いちばん前にあるものです。<br>
-                BeOS が示したメディア OS の設計を、BTRON3 の実身／仮身モデルの上で作り直しました。平面ごとの CPU 予算とハードリアルタイムの約束を、カーネルの最初の一行から数えています。<br>
-                1 MB 以下の組み込み機から SMP のワークステーションまでを走らせるのは、同じ標準 C99 の出典です。速いのは、軽いから。軽いのは、はじめからメディアのためだけに設計したからです。
+                <span class="l">メディアは、後から載せるものではありません。</span>
+                <span class="l">OS の約束の、いちばん前にあるものです。</span>
+                <span class="l">BeOS のメディア OS 設計を、BTRON3 の実身／仮身モデルで作り直しました。</span>
+                <span class="l">平面ごとの CPU 予算と、ハードリアルタイムを最初の一行から数えています。</span>
+                <span class="l">1 MB 以下の組み込み機から SMP のワークステーションまで、同じ C99 の出典です。</span>
+                <span class="l">速いのは、軽いから。軽いのは、メディアのためだけに設計したからです。</span>
             </p>
             <p class="hero-lede-en">
                 Multimedia is not something you bolt on. It is something you design in. B-System is a media operating

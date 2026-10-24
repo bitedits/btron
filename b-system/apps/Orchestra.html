@@ -221,7 +221,7 @@
 
       <h3 id="ch1-1">1.1 三つの実践 — Rock・Classic・Orchestra</h3>
       <div class="orch-ja">
-        Orchestra はステージ用の DAW です。想定する使い手は三つに固定されています。<strong>Rock</strong> は生バンド（キック、スネア、ハット、ベース、ギター、キー、リード、ボーカルの八トラック）。<strong>Classic</strong> は声と古典楽器（ボーカル、ピアノ、フルート、バイオリン、チェロ、コンティニュオの六トラック）。<strong>Orchestra</strong> はフィルハーモニーの配置（第一バイオリンから打楽器まで十六のモノフォニックトラック）。この三つ以外の用途を、この案内書は扱いません。同様に、チューナー、Logger、Click &amp; Cue、Router、レコーダ、Monitor、シーンマネージャといった別商品は存在しません。Orchestra の診断は窓ではなく、デスクの上の一行のテキストです。
+        Orchestra はステージ用の DAW です。想定する使い手は三つに固定されています。<strong>Rock</strong> は生バンド（キック、スネア、ハット、ベース、ギター、キー、リード、ボーカルの八トラック）。<strong>Classic</strong> は声と古典楽器（ボーカル、ピアノ、フルート、バイオリン、チェロ、通奏低音の六トラック）。<strong>Orchestra</strong> はフィルハーモニーの配置（第一バイオリンから打楽器まで十六のモノフォニックトラック）。この三つ以外の用途を、この案内書は扱いません。同様に、チューナー、Logger、Click &amp; Cue、Router、レコーダ、Monitor、シーンマネージャといった別商品は存在しません。Orchestra の診断は窓ではなく、デスクの上の一行のテキストです。
       </div>
       <div class="orch-en">
         <b>Three practices, not a market.</b> Orchestra is the only DAW specification in B-System, and it is written for a fixed set of users rather than for a general audience. The reason is structural: the tone of every sound is produced by a hand-written procedure, and a procedure has to be chosen, tuned and budgeted. Three practices give thirty-two programs that can be named, measured and defended. A fourth practice would mean a second set of procedures, a second budget, and a second manual. Diagnosis is text on the desk rather than a separate product for the same reason — an extra window is an extra layer of promise that the desk itself already has to keep.
@@ -365,7 +365,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
           <tr><td>32</td><td>Upright</td><td><code class="code-inline">shimWaddle</code></td><td>bs</td><td>1</td><td>0</td><td>LP 180 Hz、shimWaddleD 経由</td></tr>
           <tr><td>33</td><td>Bass</td><td><code class="code-inline">shimIndustrialBass</code></td><td>bs</td><td>1</td><td>0</td><td>シム LP 2600、Q 4.5、sweep 420</td></tr>
           <tr><td>38</td><td>Continuo</td><td><code class="code-inline">shimPedalBass</code></td><td>bs</td><td>1</td><td>0</td><td>MMA の Synth Bass 1 という名前は名乗らない</td></tr>
-          <tr><td>40</td><td>Violin</td><td><code class="code-inline">shimViolin</code></td><td>tr</td><td>1</td><td>0</td><td>3ノイズ／2サウ／1ローパス。LFO と peaking は入らない</td></tr>
+          <tr><td>40</td><td>Violin</td><td><code class="code-inline">shimViolin</code></td><td>tr</td><td>1</td><td>0</td><td>3ノイズ／2ノコギリ／1ローパス。LFO と peaking は入らない</td></tr>
           <tr><td>41</td><td>Viola</td><td><code class="code-inline">shimViolin</code></td><td>tr</td><td>1</td><td>−7</td><td>同じシム。アルト記号は使わない</td></tr>
           <tr><td>42</td><td>Cello</td><td><code class="code-inline">shimCello</code></td><td>bs</td><td>1</td><td>0</td><td>isPizz = 0、シムの Q = 20·log₁₀(2.2)</td></tr>
           <tr><td>43</td><td>Contrabass</td><td><code class="code-inline">shimCello</code></td><td>bs</td><td>1</td><td>−12</td><td>LP 400、Q 2.2。shimPedalBass は他が使用中</td></tr>
@@ -533,9 +533,9 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
                                     volume
                                  virtiosndsink
                                virtio_sound_write</div>
-        <p class="orch-fig">図5-1 静的な接続図。tee の枝は二本だけ（ドライなミックスとトラックの send）で、両方は同じ一周で計算されます。ミキサが重ねるのは最大66本 — トラックのバス1..64 と、クリックが点いているときのバス65 — で、バス0（デモの音）は並びに入りません。</p>
+        <p class="orch-fig">図5-1 静的な接続図。tee の枝は二本だけ（ドライなミックスとトラックの send）で、両方は同じ一周で計算されます。ミキサーが重ねるのは最大66本 — トラックのバス1..64 と、クリックが点いているときのバス65 — で、バス0（デモの音）は並びに入りません。</p>
         <div class="orch-ja">
-          データ型（caps）は三つです。MIDI、Q = 32 フレームの float32（1か2チャンネル、セッションのレート）、同じ大きさの int16。交差の規則は「完全一致」で、文字列のパースはありません。イベント語彙（EOS、SEGMENT、CAPS、GAP、SEEK など）はメディ層に存在せず、状態変化は「代入 + 拒否」であってメッセージではありません。位置は <code class="code-inline">npos</code>、ループ端は <code class="code-inline">loop_tick</code>、深さは <code class="code-inline">gst_rt_queued_ms()</code>。すべて静的プールです。MIDI トークン8、録音リング64、スロット48、ミックス平面 66×Q、作業行6本、配線バッファ Q×2、ディレイライン8、コーラスライン8。
+          データ型（caps）は三つです。MIDI、Q = 32 フレームの float32（1か2チャンネル、セッションのレート）、同じ大きさの int16。交差の規則は「完全一致」で、文字列のパースはありません。イベント語彙（EOS、SEGMENT、CAPS、GAP、SEEK など）はメディア層に存在せず、状態変化は「代入 + 拒否」であってメッセージではありません。位置は <code class="code-inline">npos</code>、ループ端は <code class="code-inline">loop_tick</code>、深さは <code class="code-inline">gst_rt_queued_ms()</code>。すべて静的プールです。MIDI トークン8、録音リング64、スロット48、ミックス平面 66×Q、作業行6本、配線バッファ Q×2、ディレイライン8、コーラスライン8。
         </div>
       </div>
       <div class="orch-en">
@@ -601,7 +601,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
         </div>
       </div>
       <div class="orch-ja">
-        プルトが出す ms は測定値だけです。UI の一周が毎回 <code class="code-inline">gst_rt_queued_ms()</code> を呼び、その値を <code class="code-inline">OrchView.queued_ms</code> に入れ、メニューの右端へ書き、ステータス行の "q NN ms" にも使います。「0.8 ms」のような定数表記は禁止、「0.2 ms 未満」もこの章からは導けません（500 µs は 0.5 ms、632 µs は 0.632 ms）。5〜8 ms の round-trip もこのビルドの約束ではありません — ホスト周期が1024フレームなので、それを裏切るには128フレーム以下の backend が必要で、それは <code class="code-inline">virtio_sound_open</code> の値ではありません。
+        デスクが出す ms は測定値だけです。UI の一周が毎回 <code class="code-inline">gst_rt_queued_ms()</code> を呼び、その値を <code class="code-inline">OrchView.queued_ms</code> に入れ、メニューの右端へ書き、ステータス行の "q NN ms" にも使います。「0.8 ms」のような定数表記は禁止、「0.2 ms 未満」もこの章からは導けません（500 µs は 0.5 ms、632 µs は 0.632 ms）。5〜8 ms の round-trip もこのビルドの約束ではありません — ホスト周期が1024フレームなので、それを裏切るには128フレーム以下の backend が必要で、それは <code class="code-inline">virtio_sound_open</code> の値ではありません。
       </div>
       <div class="orch-en">
         <b>Latency is a measurement, or it is nothing.</b> Three different lengths are routinely confused in audio writing: what a block is allowed to cost, what an input plane is allowed to cost, and what the listener actually hears. This manual keeps them apart and publishes only the third as a millisecond figure, because the first two are ceilings and the third is a queue depth that changes as you play. A constant "0.8 ms" label would be a claim with no instrument behind it, so it is forbidden rather than merely avoided.
@@ -664,7 +664,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
         <p class="orch-fig">図6-2 三段階の配置。シーン格子は八つずつ二行、セル幅は aw/8 を 24..120 にクランプ、ピッチ28 px。FAMILY ボタンは Rock / Classic / Orchestra を回し、テンプレートの適用がまだ確定していないときはラベルに "?" が付きます。</p>
       </div>
       <div class="orch-ja">
-        窓ごとに、細いときの出方は違います。アレンジのヘッダ幅は段階で変わり、スナップの表示は幅180以上、ピアノは MIN でスナップと Undo が出ず、スコアのツール行は幅700以上で出て、インサートは MIN でも二つのノブを残します。ミキサの列は68 px（WIDE）から52 px（狭い）へ縮み、編集ボタンは最小8×8 px、メータは最小2×2 px のときだけ描かれます。
+        窓ごとに、細いときの出方は違います。アレンジのヘッダ幅は段階で変わり、スナップの表示は幅180以上、ピアノは MIN でスナップと Undo が出ず、スコアのツール行は幅700以上で出て、インサートは MIN でも二つのノブを残します。ミキサーの列は68 px（WIDE）から52 px（狭い）へ縮み、編集ボタンは最小8×8 px、メータは最小2×2 px のときだけ描かれます。
       </div>
       <div class="orch-en">
         <b>Three tiers, not seven builds.</b> The desk is one program with a mode switch, not a per-width build; the tiers exist because a stage box and a 480-wide handset cannot share a control layout. The manual states the thresholds so a reader can predict what disappears: scenes go before meters, meters go before the third transport row. What never disappears is the refusal — a control that cannot be drawn is not a control that silently does nothing.
@@ -702,7 +702,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
           <tr><td>上書き保存 (Save)</td><td>Ctrl+S</td><td>103</td><td>必ず <code class="code-inline">orchestra.orch</code> へ書く（第九章）</td></tr>
           <tr><td>SMFを読み込む (Load SMF)</td><td>Ctrl+L</td><td>104</td><td><code class="code-inline">/SYS/orchestra.mid</code> を読む</td></tr>
           <tr><td>SMFを書き出す (Save SMF)</td><td>Ctrl+M</td><td>105</td><td>type 1 を書く（一トラック = 一 MTrk）</td></tr>
-          <tr><td>WAVを書き出す (Export WAV)</td><td>—</td><td>106</td><td><code class="code-inline">/SYS/orchestra.wav</code> をオフラインレンダ。読み戻すものはない</td></tr>
+          <tr><td>WAVを書き出す (Export WAV)</td><td>—</td><td>106</td><td><code class="code-inline">/SYS/orchestra.wav</code> をオフラインレンダリング。読み戻すものはない</td></tr>
           <tr><td>閉じる (Close)</td><td>Ctrl+W</td><td>107</td><td>セッションを NULL へ導く</td></tr>
           <tr><td rowspan="8"><strong>コンサート (C)</strong><br>120 px</td><td>再生 (Play)</td><td>Space</td><td>320</td><td>ボタンと同じ <code class="code-inline">orch_cmd_play</code>（7.3）</td></tr>
           <tr><td>停止 (Stop)</td><td>—</td><td>321</td><td>二段階の停止（7.3）</td></tr>
@@ -863,7 +863,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
 
       <h3 id="ch8-0">8.0 テンプレートとは何か</h3>
       <div class="orch-ja">
-        テンプレートは<strong>ミキサの雛形であって、楽譜ではありません</strong>。三つの表（<code class="code-inline">ROCK_ROW</code>・<code class="code-inline">CLASSIC_ROW</code>・<code class="code-inline">ORCH_ROW</code>）と二つの音量表（<code class="code-inline">ROCK_VOL</code>・<code class="code-inline">CLASSIC_VOL</code>）はファイルではなくコードに置かれています。適用するとトラックとシーンが置き換わり、テンポ・拍・ホールが定まり、イベントとインサートの値線は<strong>ゼロになります</strong>。<code class="code-inline">apply_fam</code> は seqlock の中で <code class="code-inline">blank_music</code> → 表の読み込み → <code class="code-inline">family_fields</code> を行い、seq の外で <code class="code-inline">wa_set_reverb</code>・<code class="code-inline">lc_insert_reset</code>・<code class="code-inline">gst_rt_return_zero</code>・<code class="code-inline">gst_insert_touch</code> を呼ぶ。トラックの無いチャンネルは program 255・volume 0 です。
+        テンプレートは<strong>ミキサーの雛形であって、楽譜ではありません</strong>。三つの表（<code class="code-inline">ROCK_ROW</code>・<code class="code-inline">CLASSIC_ROW</code>・<code class="code-inline">ORCH_ROW</code>）と二つの音量表（<code class="code-inline">ROCK_VOL</code>・<code class="code-inline">CLASSIC_VOL</code>）はファイルではなくコードに置かれています。適用するとトラックとシーンが置き換わり、テンポ・拍・ホールが定まり、イベントとインサートの値線は<strong>ゼロになります</strong>。<code class="code-inline">apply_fam</code> は seqlock の中で <code class="code-inline">blank_music</code> → 表の読み込み → <code class="code-inline">family_fields</code> を行い、seq の外で <code class="code-inline">wa_set_reverb</code>・<code class="code-inline">lc_insert_reset</code>・<code class="code-inline">gst_rt_return_zero</code>・<code class="code-inline">gst_insert_touch</code> を呼ぶ。トラックの無いチャンネルは program 255・volume 0 です。
       </div>
       <div class="orch-ja">
         三つに共通して <code class="code-inline">family_fields</code> が置く値は、master_lim = LIMITER、master_vol = 100、click オフ、拍 4/4、selected = 0、confirm_family = −1。テンポとホールは表から：<strong>Rock 128 / 40・40・30・25</strong>、<strong>Classic 84 / 75・35・55・45</strong>、<strong>Orchestra 96 / 85・40・60・40</strong>（room・damping・feedback・wet の順）。クリックはシーン音量に入りません（bus 65 の専用加算、7.4）。lighting は三つとも空（埋める関数が memset から始める）。accent は Rock と Classic の表にあり、Orchestra の表はゼロ。<strong>どのテンプレートも REVERB を置きません</strong> — send は同じ一つのホールへ行くからです（第四章 4.3）。
@@ -1065,10 +1065,10 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
  68    32   lighting                       12   u32 reserved = 0</div>
       </div>
       <div class="orch-ja">
-        検証は五つの関数に分かれます。<code class="code-inline">hdr_ok</code> が上の範囲（scene_count は 16 ちょうど、パスは一字一句）。<code class="code-inline">tracks_ok</code> と <code class="code-inline">one_track_ok</code> が六十四枠すべて（track_count のうしろはゼロだけ）。<code class="code-inline">type_over</code> が同一アルゴリズム八枠の天井（第四章）。<code class="code-inline">scenes_ok</code> が十六シーンの範囲。<code class="code-inline">events_ok</code> が event_count 以下の行（vel 非ゼロ、flags 0、track <code class="code-inline">&lt;</code> track_count、reserved 0）と残りのゼロ。<code class="code-inline">ev_live</code> はこの十六バイトの外です — 版1の flags はゼロでなければならないので、ライヴの旗はファイルに載りません。デスクで置いた行の長さは snap 量子未満なら引き上げられて載ります（7.6）。
+        検証は五つの関数に分かれます。<code class="code-inline">hdr_ok</code> が上の範囲（scene_count は 16 ちょうど、パスは一字一句）。<code class="code-inline">tracks_ok</code> と <code class="code-inline">one_track_ok</code> が六十四枠すべて（track_count のうしろはゼロだけ）。<code class="code-inline">type_over</code> が同一アルゴリズム八枠の天井（第四章）。<code class="code-inline">scenes_ok</code> が十六シーンの範囲。<code class="code-inline">events_ok</code> が event_count 以下の行（vel 非ゼロ、flags 0、track <code class="code-inline">&lt;</code> track_count、reserved 0）と残りのゼロ。<code class="code-inline">ev_live</code> はこの十六バイトの外です — 版1の flags はゼロでなければならないので、ライブの旗はファイルに載りません。デスクで置いた行の長さは snap 量子未満なら引き上げられて載ります（7.6）。
       </div>
       <div class="orch-ja">
-        ホールの四つ（room・damping・feedback・wet）は<strong>もともと reserved だった四バイト</strong>をもらった欄です。REVERB インサートはトラックの send と 28・29・31 番地を P1〜P3 から書き、30 番地（feedback）は<strong>テンプレートと読み込みしか書きません</strong>。<code class="code-inline">commit_buf</code> は seqlock の中で欄を埋め、外で <code class="code-inline">wa_set_reverb(1,…)</code>・<code class="code-inline">lc_insert_reset()</code>・<code class="code-inline">gst_rt_return_zero()</code>・<code class="code-inline">gst_insert_touch()</code> を呼ぶ。トラックから導かれる値（shim、prog_tr、kind、oneshot）は <code class="code-inline">gst_resolve_track</code> が program から作り直します。読み込みは UI 面だけ — レンダはファイルを読みません。<code class="code-inline">/SYS</code> が無いホストビルドでは <code class="code-inline">SYS/</code> を読みます（開くメニューのサブ項目は Session・Bells・Caterpillar・Rising・TRON Init）。
+        ホールの四つ（room・damping・feedback・wet）は<strong>もともと reserved だった四バイト</strong>をもらった欄です。REVERB インサートはトラックの send と 28・29・31 番地を P1〜P3 から書き、30 番地（feedback）は<strong>テンプレートと読み込みしか書きません</strong>。<code class="code-inline">commit_buf</code> は seqlock の中で欄を埋め、外で <code class="code-inline">wa_set_reverb(1,…)</code>・<code class="code-inline">lc_insert_reset()</code>・<code class="code-inline">gst_rt_return_zero()</code>・<code class="code-inline">gst_insert_touch()</code> を呼ぶ。トラックから導かれる値（shim、prog_tr、kind、oneshot）は <code class="code-inline">gst_resolve_track</code> が program から作り直します。読み込みは UI 面だけ — レンダリングはファイルを読みません。<code class="code-inline">/SYS</code> が無いホストビルドでは <code class="code-inline">SYS/</code> を読みます（開くメニューのサブ項目は Session・Bells・Caterpillar・Rising・TRON Init）。
       </div>
       <div class="orch-en">
         <b>The length is the first validator.</b> A fixed 73408-byte container means a hostile or truncated file is rejected by <code class="code-inline">stat</code> before one body byte is read, and the static buffer cannot be resized to whatever a field claims. Every ceiling the file carries (64 tracks, 16 scenes, 4096 events, eight slots per algorithm) is a ceiling the running desk already has, so the validator is a restatement rather than a second policy — and because the restatement is generated from the same enum ranges, a new insert type cannot be written to disk before it can be played.
@@ -1147,7 +1147,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
         切り詰めが起きたら <code class="code-inline">trunc</code> が立ち、デスクの文字は "truncated"。同じ文字は <code class="code-inline">fwrite</code> が要求より少ないときにも出ます（条件はひとつ）。そのとき<strong>一部だけ書けたファイルはディスクに残ります</strong>。
       </div>
       <div class="orch-ja">
-        レンダのあいだ、デスクは何も教えません。メータは更新されず（第六章 6.3）、<code class="code-inline">midi_clock</code>・<code class="code-inline">steal_voice</code>・<code class="code-inline">chain_accept</code>・<code class="code-inline">chain_drop</code>・<code class="code-inline">refuse_insert</code> は動かず、REVERB の摘みは取り出したまま公開されず、ライブの tick は最初の検査で戻ります。始める前に十五のカウンタとメータと内部位相を <code class="code-inline">CtrSnap</code> に取り、スロット表を写し、<code class="code-inline">wa_set_clock_samples(0)</code> と <code class="code-inline">lc_set_score_base(0.0)</code> を置く。終わったら<strong>カウンタと N を戻してから</strong>、bus 1..65 の 128 キーを解き、ホールとインサートと時計を復元して <code class="code-inline">s_export = 0</code>。順番は意味があります — 生きているスロットが戻ってからでないと、出力中の声が見える。
+        レンダリングのあいだ、デスクは何も教えません。メータは更新されず（第六章 6.3）、<code class="code-inline">midi_clock</code>・<code class="code-inline">steal_voice</code>・<code class="code-inline">chain_accept</code>・<code class="code-inline">chain_drop</code>・<code class="code-inline">refuse_insert</code> は動かず、REVERB の摘みは取り出したまま公開されず、ライブの tick は最初の検査で戻ります。始める前に十五のカウンタとメータと内部位相を <code class="code-inline">CtrSnap</code> に取り、スロット表を写し、<code class="code-inline">wa_set_clock_samples(0)</code> と <code class="code-inline">lc_set_score_base(0.0)</code> を置く。終わったら<strong>カウンタと N を戻してから</strong>、bus 1..65 の 128 キーを解き、ホールとインサートと時計を復元して <code class="code-inline">s_export = 0</code>。順番は意味があります — 生きているスロットが戻ってからでないと、出力中の声が見える。
       </div>
       <div class="orch-en">
         <b>Export borrows the engine, not the state.</b> The exported file must be the same audio the stage would have produced, so it cannot be a second renderer with its own approximations — it calls the same five functions. But it must also leave the desk exactly where it was found, which is why it keeps a private slot table, restores fifteen counters and the transport position, and is the reason the meters freeze rather than flicker through an album take. N is never read or written by the loop; the chase index and the shim's time argument are the export's own local clock, which is why chapter five's measured queue is untouched by an export.
@@ -1237,7 +1237,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
 
       <h3 id="ch11-1">11.1 三つの証人 — Cubase・Pro Tools・Rosegarden</h3>
       <div class="orch-ja">
-        比較できるのは、窓（第六章）・ファイル（第九章）・トラック（第三〜第八章）が揃ったあとだけです。評価は三択 — <strong>ある / 部分ある / 無い</strong>。Cubase 14 の紹介文でも、宣伝用の機能一覧でもありません。名前は三つ：業種がいちばん近いのが Steinberg Cubase Score と Cubase VST（線形 MIDI・拍・単一の譜面）、特化形の天井が Avid Pro Tools（ミキサー・インサート・センド・セッション）、そして Rosegarden — アランジメントも譜面も要求として既に決まっているからです。読み比べるのは機能の名前で、Cubase と Pro Tools の実機は触っていません。
+        比較できるのは、窓（第六章）・ファイル（第九章）・トラック（第三〜第八章）が揃ったあとだけです。評価は三択 — <strong>ある / 部分ある / 無い</strong>。Cubase 14 の紹介文でも、宣伝用の機能一覧でもありません。名前は三つ：業種がいちばん近いのが Steinberg Cubase Score と Cubase VST（線形 MIDI・拍・単一の譜面）、特化形の天井が Avid Pro Tools（ミキサー・インサート・センド・セッション）、そして Rosegarden — アレンジも譜面も要求として既に決まっているからです。読み比べるのは機能の名前で、Cubase と Pro Tools の実機は触っていません。
       </div>
       <div class="arch-grid">
         <div class="arch-card">
@@ -1245,7 +1245,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
           <p><strong>Arrange</strong> = 部分ある（W_ARRANGE、線形 MIDI。オーディオクリップとフォルダトラックは無い）<br>
           <strong>Key Edit</strong> = 部分ある（W_PIANO、0..127 とベロシティ。コントローラレーンは無い）<br>
           <strong>Score</strong> = 部分ある（一段の譜面、6.1）<br>
-          <strong>Mixer</strong> = 部分ある（ストリップ・マスター・aux 一つ。四帯域 EQ はバイクヮード一つを除いて無い）<br>
+          <strong>Mixer</strong> = 部分ある（ストリップ・マスター・aux 一つ。四帯域 EQ はビクアド一つを除いて無い）<br>
           <strong>MIDI tracks</strong> = ある（64 まで）<br>
           <strong>Audio tracks</strong> = 無い<br>
           <strong>Transport</strong> = 部分ある（再生・停止・MIDI 録音。scrub は無い）<br>
@@ -1296,7 +1296,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
             <tr><td>ネットワーク（RTP-MIDI・WebRTC・PTP）</td><td>第三章 3.4 が除外し、Orchestra はソケットを開かない。第十二章の信頼境界</td></tr>
             <tr><td>プラグインコードのロード</td><td><code class="code-inline">dlopen</code> なし、VST/LV2 なし、<code class="code-inline">third_party/</code> への道なし</td></tr>
             <tr><td>パターンのシーケンサ</td><td>時間は線形なチック（第二・第五・第七章）</td></tr>
-            <tr><td>別商品の Monitor / Logger / Tuner / Router / レコーダ / シーンマネージャ</td><td>診断はプルト上の一行（6.3）。シーン管理は格子（7.5）</td></tr>
+            <tr><td>別商品の Monitor / Logger / Tuner / Router / レコーダ / シーンマネージャ</td><td>診断はデスク上の一行（6.3）。シーン管理は格子（7.5）</td></tr>
             <tr><td>MTC・SMPTE master / DMX</td><td><code class="code-inline">tc_format</code> は巡るだけで、何も送らない（7.1 の装置メニュー）</td></tr>
             <tr><td>redo・クリップリスト・フォルダトラック</td><td>Undo は 16 件のリングのみ（7.6）</td></tr>
           </tbody>
@@ -1341,11 +1341,11 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
           <tbody>
             <tr><td>第5・7章</td><td>工場は <code class="code-inline">fluidsynth</code> の行を断り、<code class="code-inline">shimsynth</code> を通す。状態行に定数 0.8 は出ない。一見出しに二十項目まで</td></tr>
             <tr><td>第8・9章</td><td>登録外の program change はシムを変えない。73408 バイトでないファイルは状態を変えない。Rock のプログラム 0 は単声のまま</td></tr>
-            <tr><td>第3章</td><td>21〜23 番を移植したあとは断りではなく、バイオリンが peaking 節を作らない</td></tr>
+            <tr><td>第3章</td><td>シム 21〜23 は移植済み。移植とは名前でなく実体のことで、断りは消えた。バイオリンは peaking 節を作らない（三つの節）</td></tr>
             <tr><td>第2章</td><td>48 kHz・128 BPM・4/4 でチック 40 → サンプル 938、サンプル 938 → チック 40。96 BPM・6/8 で T_bar = 3.75 秒、八分に MIDI パルス 12、四分に 24。イベントは N が sample(start_tick) を越えたとき始まり、ev_live があれば二度始まらない。最初の Stop でも record を下ろしたあとの note-off でも、行は dur_tick ≥ q かつ ev_live = 0 で閉じる。第二段 Stop は N = 0 と wa_time = 0。ブロックの終わりはカウンタを写さない</td></tr>
             <tr><td>第4・8章</td><td>Tutti は十六枠、ピアノは六まで、四十九番目の声は奪って数える。同じサンプルの二つのキーは別々に離れる</td></tr>
             <tr><td>第9章</td><td>256 KiB を超える SMFはこの長さのバッファへ読めない。WAV 出力は N を変えない。出力中は chase と <code class="code-inline">lc_shim_note</code> が自分だけの s_clock を読み、<code class="code-inline">wa_set_clock_samples(saved)</code> のあと再び s_clock = N</td></tr>
-            <tr><td>第一章</td><td>プルトの三ファイル合わせて五千行まで（<code class="code-inline">lilcu64_insert.c</code> とシムの移植は数えない）</td></tr>
+            <tr><td>第一章</td><td>デスクの三ファイル（<code class="code-inline">orchestra.c</code>・<code class="code-inline">orchestra_session.c</code>・<code class="code-inline">orchestra_smf.c</code>）合わせて五千行まで — 実測 <strong>4035 行</strong>（957 + 1761 + 1317）。<code class="code-inline">lilcu64_insert.c</code> とシムの移植は数えない</td></tr>
           </tbody>
         </table>
         <p class="orch-fig">開いている開発の枝は残っていません。名前の出た場所で閉じた（比較の証人、コントラバス、ハープ、声、FM 対 八つの正弦、周期 1024、一つのホール、/SYS のパス、管弦の単声、Piano シーン＝ハープ、chase 対 二度の note-off、短縮したバイオリン、テンポは停止中だけ、ホールのバイト、出力の共通指数、録音したノートの閉じ方、P1..P4 の外の feedback、hat と bass の二つのフィルタ、零への戻り、メニュー六見出し、三つの層）。</p>
@@ -1399,7 +1399,7 @@ System (virtio_sound_*, async_rt.h, files in /SYS)</div>
           <li class="bib-item"><span class="bib-num">05</span><span>b-media/index.html（25 の shim* と面）、b-media/sound.html（証明の切れ目と FM 2.76 対 1.8）、b-media/audio.html（周期 1024 と Control Panel の 128 フレーム目標）</span></li>
           <li class="bib-item"><span class="bib-num">06</span><span>Makefile — §2.4 と §3.1 の一覧、album_encode（737–742・823–833）</span></li>
           <li class="bib-item"><span class="bib-num">07</span><span>外部規格：MMA, <em>Standard MIDI Files 1.0</em>（MThd・MTrk・VLQ、第九章）</span></li>
-          <li class="bib-item"><span class="bib-num">08</span><span>外部文献：Robert Bristow-Johnson, <em>Audio EQ Cookbook</em> — バイクヮードの係数（第三章 3.4・第四章）</span></li>
+          <li class="bib-item"><span class="bib-num">08</span><span>外部文献：Robert Bristow-Johnson, <em>Audio EQ Cookbook</em> — ビクアドの係数（第三章 3.4・第四章）</span></li>
           <li class="bib-item"><span class="bib-num">09</span><span>比較の対象：Steinberg Cubase（Score／VST の系譜）、Avid Pro Tools、Rosegarden — 名前のみの対照で、実機・実文の再読はしていない（第十一章）</span></li>
           <li class="bib-item"><span class="bib-num">10</span><span>画面：../img/screens/Orchestra_*.png — 実機の描画バッファから自動抽出した七枚（第一曲を読み込んだ状態）</span></li>
         </ul>

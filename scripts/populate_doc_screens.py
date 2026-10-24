@@ -401,18 +401,13 @@ def strip_screen_section(content):
         flags=re.DOTALL)
 
 def insert_block_at(content, pos, block):
-    """Insert block as its own line before pos, reusing the indent already there.
+    """Put block just before pos without touching what already sits there.
 
-    The indent is read back from the file instead of being added, so a second run
-    rebuilds byte-identical text and the unmapped pages stop drifting.
+    The whitespace in front of pos becomes the marker's own indent and the anchor
+    keeps its line, so nothing accumulates: strip + re-insert is byte-identical and
+    the unmapped pages stop drifting by four spaces per run.
     """
-    line_start = content.rfind("\n", 0, pos) + 1
-    indent = content[line_start:pos]
-    if indent.strip():  # pos sits mid-line; fall back to column zero
-        indent = ""
-    body = "\n".join(indent + ln if ln.strip() else ln
-                     for ln in block.rstrip("\n").split("\n"))
-    return content[:line_start] + body + "\n\n" + content[line_start:]
+    return content[:pos] + block.rstrip("\n") + "\n\n" + content[pos:]
 
 def remove_screen_section_if_not_mapped(dir_path, mapped_dict):
     for f in os.listdir(dir_path):

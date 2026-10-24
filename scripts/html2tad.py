@@ -92,6 +92,54 @@ def strip_tags(html: str) -> str:
     return text.strip()
 
 
+def strip_tags_keep_lines(html: str) -> str:
+    """Remove tags but keep the line structure a <pre> or monospace block has."""
+    text = re.sub(r'<br\s*/?>', '\n', html, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    lines = [ln.rstrip() for ln in text.replace('\r\n', '\n').split('\n')]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return '\n'.join(lines)
+
+
+# ── Div Prose Recovery ────────────────────────────────────────────────────────
+# The token scanner only recognises headings, paragraphs, lists, tables, pre
+# blocks and links, so text a page puts directly inside a <div> — tagline cards,
+# the manual's Japanese and English blocks — used to vanish from the TAD body.
+# This pass lifts every such text run into a <p>, or into a <pre> for the
+# monospace classes, and leaves nested blocks for the scanner to find on its own.
+MONO_DIV_CLASSES = ('orch-formula', 'orch-ascii')
+NESTED_BLOCK = (r'<table\b.*?</table>|<ul\b.*?</ul>|<ol\b.*?</ol>|<pre\b.*?</pre>'
+                r'|<h[1-6]\b.*?</h[1-6]>|<p\b[^>]*>.*?</p>|<img\s+[^>]*>'
+                r'|<a\s+href=[\'"][^\'"]+[\'"][^>]*>.*?</a>')
+INNERMOST_DIV = re.compile(
+    r'<div\b([^>]*)>((?:(?!<div\b|</div>).)*?)</div>', re.I | re.S)
+
+
+def _wrap_div_runs(match) -> str:
+    tag = 'pre' if any(c in match.group(1).lower() for c in MONO_DIV_CLASSES) else 'p'
+    # re.split with one capture group alternates: even slots are the div's own
+    # text, odd slots are nested blocks the scanner will reach on its own.
+    parts = re.split(r'(' + NESTED_BLOCK + r')', match.group(2), flags=re.I | re.S)
+    out = []
+    for i, part in enumerate(parts):
+        if not part.strip():
+            continue
+        out.append(part if i % 2 else '<%s>%s</%s>' % (tag, part.strip(), tag))
+    return '\n'.join(out)
+
+
+def wrap_div_text(html: str) -> str:
+    for _ in range(12):
+        wrapped = INNERMOST_DIV.sub(_wrap_div_runs, html)
+        if wrapped == html:
+            return html
+        html = wrapped
+    return html
+
+
 # ── List / Table Parsers ──────────────────────────────────────────────────────
 def parse_list(html: str) -> list:
     items = re.findall(r'<li\b[^>]*>(.*?)</li>', html, flags=re.I | re.S)
@@ -251,7 +299,7 @@ def seg_text(text: str) -> bytes:
 
 # ── HTML Parser → Element List ────────────────────────────────────────────────
 def parse_html(html: str) -> list:
-    clean = filter_html_noise(html)
+    clean = wrap_div_text(filter_html_noise(html))
     token_re = re.compile(
         r'(<h[1-6]\b[^>]*>.*?</h[1-6]>'
         r'|<pre\b[^>]*>.*?</pre>'
@@ -289,7 +337,7 @@ def parse_html(html: str) -> list:
         elif low[:3] in ('<h4', '<h5', '<h6'):
             elements.append(('h4', decode_entities(strip_tags(full))))
         elif low.startswith('<pre'):
-            elements.append(('pre', decode_entities(strip_tags(full))))
+            elements.append(('pre', decode_entities(strip_tags_keep_lines(full))))
         elif low.startswith('<table'):
             elements.append(('table', parse_table(full)))
         elif low.startswith('<ul'):
@@ -585,6 +633,11 @@ def run_tests():
         <p>BTRON підтримує 8-бітні, 16-бітні та 32-бітні типи даних.</p>
         <pre>typedef char B;\ntypedef short H;</pre>
         <ul><li>Item 1</li><li>Item 2</li></ul>
+        <div class="section">
+          <div class="orch-ja">本文A <a href="#ch7">第7章</a> 本文B<table><tr><td>c</td></tr></table></div>
+          <div class="orch-formula">  0    4     O R C H
+  4    u16   version = 1</div>
+        </div>
         <a href="tad1.html">Посилання на TAD специфікацію</a>
       </body></html>"""
 
@@ -600,6 +653,17 @@ def run_tests():
     chk(any(e==('ul',['Item 1','Item 2']) for e in elements), 'Parsed UL list')
     chk(any(e==('link','tad1.html','Посилання на TAD специфікацію') for e in elements),
         'Parsed A link to Virtual Body')
+
+    # Text a page puts straight inside a <div> is prose too: it has to reach the
+    # body, keep its nested blocks separate, and not arrive twice.
+    chk(any(e[0]=='p' and e[1]=='本文A' for e in elements), 'Div text run reaches the body')
+    chk(sum(1 for e in elements if e[0]=='p' and e[1]=='本文A') == 1,
+        'Div text run is not duplicated')
+    chk(any(e[0]=='p' and e[1]=='本文B' for e in elements), 'Prose after a table survives')
+    chk(any(e==('link','#ch7','第7章') for e in elements), 'Inline link inside div prose stays a link')
+    chk(any(e[0]=='pre' and '\n' in e[1] and 'O R C H' in e[1] for e in elements),
+        'Monospace div keeps its line structure')
+    chk(any(e[0]=='table' for e in elements), 'Table nested in a div stays a table')
 
     bin_tad = compile_to_binary_tad(elements, 'Unit Test TAD')
     rec_type, payload_len = struct.unpack_from('>HI', bin_tad)

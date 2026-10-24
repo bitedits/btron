@@ -34,7 +34,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
-        check-structure test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
+        check-structure test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
         test-xmb-render test-xmb-render-tgl test-gl-context \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
@@ -613,7 +613,12 @@ COMMON_NO_SDL_SRCS = \
 
 BAREMETAL_STARTUP  = src/drivers/bcm283x/cpu/startup_arm.c
 BAREMETAL_LD       = src/drivers/bcm283x/cpu/link.ld
-ARM32_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_yoko.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS) $(LILCU64_ENGINE_SRCS)
+# src/kernel/libaeabi.c is named here and not folded into COMMON_NO_SDL_SRCS: it
+# answers the conversion libcalls only a 32-bit register file asks for, so the
+# AArch64 lane -- which converts a 64-bit integer in one instruction -- must not
+# link it, and the house rule is to name a runtime only in the lanes measured
+# against it.  `make test-arm-aeabi` grades it against the host FPU.
+ARM32_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_yoko.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS) $(LILCU64_ENGINE_SRCS) src/kernel/libaeabi.c
 ARM64_BAREMETAL_SRCS = src/cores/core_init.c src/cores/core_arm64.c $(TKERNEL_SAKAMURA_SRCS) $(ARCH_BCM64_SRCS) $(BAREMETAL_STARTUP) $(COMMON_NO_SDL_SRCS) $(LILCU64_ENGINE_SRCS)
 
 # ── Object lists ─────────────────────────────────────────────────
@@ -1871,6 +1876,27 @@ test-ps2-softfloat: $(TEST_PSFLOAT_BIN)
 $(TEST_PSFLOAT_BIN): $(TEST_PSFLOAT_OBJS) src/drivers/ps2/ps2_builtins.c
 	@mkdir -p ./.build
 	$(CC) $(TEST_PSFLOAT_OBJS) -o $@ $(LDFLAGS) -lm
+
+# The ARM32 spelling of the same instrument.  VFPv4 converts a *32-bit* core
+# register to or from a floating one and nothing wider, and the Pi 2B image links
+# -nostdlib, so the DAW's 64-bit sample/nanosecond arithmetic reaches the runtime
+# only through names clang invents -- __aeabi_l2d, __aeabi_ul2d, __aeabi_l2f,
+# __aeabi_ul2f, __aeabi_d2lz, __aeabi_f2ulz.  `make arm-elf` proves they exist; only
+# this proves they are right, because a conversion that is 1 ulp off shows up as an
+# audio glitch on a monitor and as nothing on a host.
+TEST_ARMAEABI_SRCS = verify/tests/test_arm_aeabi.c
+TEST_ARMAEABI_OBJS = $(TEST_ARMAEABI_SRCS:.c=.test.o)
+TEST_ARMAEABI_BIN  = ./.build/test_arm_aeabi
+
+test-arm-aeabi: $(TEST_ARMAEABI_BIN)
+	@echo "=========================================================="
+	@echo " Running ARM EABI conversion runtime vs the host FPU..."
+	@echo "=========================================================="
+	@./$(TEST_ARMAEABI_BIN)
+
+$(TEST_ARMAEABI_BIN): $(TEST_ARMAEABI_OBJS) src/kernel/libaeabi.c
+	@mkdir -p ./.build
+	$(CC) $(TEST_ARMAEABI_OBJS) -o $@ $(LDFLAGS) -lm
 
 # Increment 2 of the EE/GS plan of record (doc/txt/PS2.txt): the packet builder.  A GS field
 # one bit off cannot be seen -- it draws a triangle somewhere the screen is not -- so the
@@ -3256,7 +3282,7 @@ $(TEST_MSX_AUDIO_BIN): $(TEST_MSX_AUDIO_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_AUDIO_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

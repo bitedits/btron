@@ -61,8 +61,8 @@ int editor_parse_search_string(const char* inputstr, struct charbuf* parsedstr, 
                 case '\0': return PARSE_INCOMPLETE_BACKSLASH;
                 case '\\': charbuf_append(parsedstr, "\\", 1); ++inputstr; break;
                 case 'x': ++inputstr;
-                          int off = 0;
                           if (*inputstr == '\0' || *(inputstr + 1) == '\0') return PARSE_INCOMPLETE_HEX;
+//                          int off = 0;   /* only read by the escape scanner below, which is commented out */
 //                          while (*inputstr != '\0' && isxdigit(*inputstr + off)) {
   //                            off++;
     //                      }
@@ -285,7 +285,6 @@ int editor_statusmessage(struct editor* e, enum status_severity sev, const char*
 void editor_render_header(struct editor* e, struct charbuf* b) {
     char banner[ 1024 + 1];
     int  banlen = 0;
-    char model[] = "";
     char arch[10][8] = { "Unknown\0",
                          "  EM64T\0",
                          "AArch32\0",
@@ -310,7 +309,6 @@ void editor_render_header(struct editor* e, struct charbuf* b) {
     charbuf_append(b, banner, banlen);
 
     unsigned int offset_at_cursor = editor_offset_at_cursor(e);
-    unsigned char val = e->contents[offset_at_cursor];
     int percentage = (float)(offset_at_cursor + 1) / ((float)e->content_length) * 100;
     charbuf_appendf(b, "\x1b[1;37m\x1b[46m");
     int width = e->screen_cols - (16+32+64) - 38;
@@ -486,6 +484,7 @@ int editor_read_string(struct editor* e, char* dst, int len) {
 
 
 void editor_free(struct editor* e) {
+    (void)e;  /* the editor is a singleton; editor() below is the same object */
     struct editor* x = editor();
     free(x->filename);
     free(x->contents);

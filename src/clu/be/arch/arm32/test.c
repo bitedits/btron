@@ -44,6 +44,7 @@ ARMSTATE arm;
 
 static bool disasm_callback(uint32_t address, const char *text, void *user)
 {
+  (void)address; (void)user;
   disasm_clear_codepool(&arm);
   printf("%s\n", text);
   return true;
@@ -77,7 +78,7 @@ int main(int argc, char *argv[])
         disasm_cleanup(&arm);
         free(block);
       } else {
-        fprintf(stderr, "Memory allocation error, when attempting to allocate %d bytes.\n", fsize);
+        fprintf(stderr, "Memory allocation error, when attempting to allocate %zu bytes.\n", fsize);
       }
       fclose(fp);
     } else {

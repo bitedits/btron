@@ -9,10 +9,11 @@
  * host.  This is the instrument: the same source is compiled into this program and
  * every one of its symbols is thrown against the host's own hardware FPU on
  * millions of inputs, comparing the returned IEEE-754 bit pattern exactly.  The
- * six integer libcalls at the end of that file -- the 64-bit divide, remainder and
- * the unsigned 64-bit conversions -- are thrown against the host's hardware integer
- * arithmetic in the same program, for the same reason: clang invented the names, so
- * nothing but this test can see them.
+ * six integer libcalls at the end of those two files -- the 64-bit divide,
+ * remainder and signed divide in src/kernel/libint64.c, and the three unsigned
+ * 64-bit conversions in ps2_builtins.c -- are thrown against the host's hardware
+ * integer arithmetic in the same program, for the same reason: clang invented the
+ * names, so nothing but this test can see them.
  *
  * The compares are checked the way the generated MIPS code checks them -- the four
  * caller tests measured out of a disassembly of -msoft-float (`< 0` for lt, `< 1`
@@ -35,6 +36,13 @@
 /* The runtime's own source, not a link against it: its format table and engine are
  * file-static, and only the definitions of the libcalls are exported. */
 #include "../../src/drivers/ps2/ps2_builtins.c"
+
+/* The same reason for the three integer libcalls, which moved to
+ * src/kernel/libint64.c so the i386 lanes could link the ones the DAW asks for.
+ * Including the source rather than linking it matters twice over here: the host
+ * would otherwise resolve __udivdi3 from compiler-rt and grade that, and the
+ * file's fast path and loop are static and unreachable from a link. */
+#include "../../src/kernel/libint64.c"
 
 static uint64_t s_state = 0x20261009ABCDEFull;
 
@@ -456,7 +464,9 @@ static void cop1_compare_form(void)
 /*
  * The six integer libcalls -- __udivdi3, __umoddi3, __divdi3, __floatundidf,
  * __floatundisf, __fixunssfdi -- are the ones the DAW asks for, and the reason
- * they are here rather than narrowed out of the callers is in ps2_builtins.c.
+ * they are answered here rather than narrowed out of the callers is in the two
+ * files that define them (libint64.c for the first three, ps2_builtins.c for the
+ * conversions).
  * They are checked the same way as the float ones: against the host's own
  * hardware arithmetic, which on this machine is a real instruction and not a
  * libcall, so the host is an independent oracle rather than a second copy.

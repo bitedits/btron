@@ -37,7 +37,6 @@ static int DisassembleCryptographicAESInstr(struct instruction *i,
     int instr_id = tab[opcode].instr_id;
 
     const char **registers = AD_RTBL_FP_V_128;
-    int sz = _128_BIT;
 
     ADD_REG_OPERAND(out, Rd, _SZ(_128_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE), _RTBL(registers));
     ADD_REG_OPERAND(out, Rn, _SZ(_128_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE), _RTBL(registers));
@@ -3723,11 +3722,11 @@ static int DisassembleAdvancedSIMDTableLookupInstr(struct instruction *i,
 
     concat(&DECODE_STR(out), "%s %s.%s, {", instr_s, Rd_s, Ta);
 
-    for(int i=Rn; i<(Rn+len); i++){
+    for(int i=Rn; i<(int)(Rn+len); i++){
         const char *Rn_s = GET_FP_REG(rtbl, i);
         ADD_REG_OPERAND(out, i, sz, NO_PREFER_ZR, _SYSREG(AD_NONE), rtbl);
 
-        if(i == (Rn+len) - 1)
+        if(i == (int)((Rn+len) - 1))
             concat(&DECODE_STR(out), " %s.16b", Rn_s);
         else
             concat(&DECODE_STR(out), " %s.16b,", Rn_s);
@@ -4793,24 +4792,20 @@ static int DisassembleFloatingPointImmediateInstr(struct instruction *i,
 
     const char **rtbl = NULL;
     unsigned sz = 0;
-    unsigned datasize = 0;
 
     unsigned ftype = ptype;
 
     if(ftype == 0){
         rtbl = AD_RTBL_FP_32;
         sz = _32_BIT;
-        datasize = 32;
     }
     else if(ftype == 1){
         rtbl = AD_RTBL_FP_64;
         sz = _64_BIT;
-        datasize = 64;
     }
     else{
         rtbl = AD_RTBL_FP_16;
         sz = _16_BIT;
-        datasize = 16;
     }
 
     const char *Rd_s = GET_FP_REG(rtbl, Rd);

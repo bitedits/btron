@@ -46,7 +46,10 @@ void decode_rv32i(uint32_t instruction) {
                 case 0x7: printf("andi x%d, x%d, %d\n", rd, rs1, imm_i); break;
                 case 0x6: printf("ori x%d, x%d, %d\n", rd, rs1, imm_i); break;
                 case 0x1: printf("slli x%d, x%d, %d\n", rd, rs1, imm_i & 0x1F); break;
-                case 0x5: printf((funct7 == 0x20 ? "srai" : "srli"), rd, rs1, imm_i & 0x1F); break;
+                /* The two format strings here were the bare mnemonics, so the
+                 * three operands below had nothing to land in and the line
+                 * printed "srai".  Matches the slli row above. */
+                case 0x5: printf(funct7 == 0x20 ? "srai x%d, x%d, %d\n" : "srli x%d, x%d, %d\n", rd, rs1, imm_i & 0x1F); break;
             }
             break;
         case 0x03: // Load

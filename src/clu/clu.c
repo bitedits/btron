@@ -2,8 +2,11 @@
  * B-System BTRON3 — clu.c
  * Terminal shell command dispatcher & application launcher.
  *
- * All POSIX/CLU filesystem commands are modularized in src/clu/*.c and
- * called via their respective clu_cmd_* entry points declared in cluc.h.
+ * All POSIX/CLU filesystem commands are modularized into the C files under
+ * src/clu and called via their respective clu_cmd_foo entry points declared
+ * in cluc.h.  (The literal glob used to be written here; the "star" that
+ * followed a slash inside this comment opened a nested comment and -Wcomment
+ * said so on every build of this file.)
  *
  * Compile with: -Iinclude
  * Pure C99, adheres to NASA/JPL Power of Ten rules.

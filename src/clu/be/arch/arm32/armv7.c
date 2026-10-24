@@ -2961,24 +2961,27 @@ static int get_symbol(ARMSTATE *state, uint32_t address)
  */
 static int is_utf8_string(const uint8_t *buffer, size_t buffersize, int offset, char *string, int strsize)
 {
+  /* index is the walking cursor in an int; buffersize is size_t.  The signed
+   * test kept the comparison honest (a negative index must not convert to a
+   * huge unsigned index), so both halves are now explicit. */
   int index = offset;
-  while (index < buffersize && buffer[index]) {
+  while (index >= 0 && (size_t)index < buffersize && buffer[index]) {
     if (buffer[index] < ' ' && buffer[index] != '\r' && buffer[index] != '\n' && buffer[index] != '\t')
       break;
     if (buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '\t' || buffer[index] == '\\' || buffer[index] == '"')
       index += 2; /* these characters are escaped */
     else if (buffer[index] < 0x80)
       index += 1;
-    else if (index + 1 < buffersize && (buffer[index] & 0xe0) == 0xc0 && (buffer[index + 1] & 0xc0) == 0x80)
+    else if ((size_t)(index + 1) < buffersize && (buffer[index] & 0xe0) == 0xc0 && (buffer[index + 1] & 0xc0) == 0x80)
       index += 2;
-    else if (index + 2 < buffersize && (buffer[index] & 0xf0) == 0xe0 && (buffer[index + 1] & 0xc0) == 0x80 && (buffer[index + 2] & 0xc0) == 0x80)
+    else if ((size_t)(index + 2) < buffersize && (buffer[index] & 0xf0) == 0xe0 && (buffer[index + 1] & 0xc0) == 0x80 && (buffer[index + 2] & 0xc0) == 0x80)
       index += 3;
-    else if (index + 3 < buffersize && (buffer[index] & 0xf8) == 0xf0 && (buffer[index + 1] & 0xc0) == 0x80 && (buffer[index + 2] & 0xc0) == 0x80 && (buffer[index + 3] & 0xc0) == 0x80)
+    else if ((size_t)(index + 3) < buffersize && (buffer[index] & 0xf8) == 0xf0 && (buffer[index + 1] & 0xc0) == 0x80 && (buffer[index + 2] & 0xc0) == 0x80 && (buffer[index + 3] & 0xc0) == 0x80)
       index += 4;
     else
       break;
   }
-  if (index >= buffersize || index == offset || buffer[index])
+  if ((size_t)index >= buffersize || index == offset || buffer[index])
     return 0; /* not a valid string at the offset */
   int size = index - offset;
   if (string && strsize >= size + 3) {
@@ -3457,7 +3460,7 @@ bool disasm_buffer(ARMSTATE *state, const uint8_t *buffer, size_t buffersize,
       uint16_t hw2 = (remaining >= 4) ? opc[2] | ((uint16_t)opc[3] << 8) : 0;
       disasm_thumb(state, hw, hw2);
     }
-    if (state->ldr_addr != ~0 && state->add_cmt) {
+    if (state->ldr_addr != ~0u && state->add_cmt) {
       /* check the value at the address */
       uint32_t offset = state->ldr_addr - start_address;
       if (offset + 4 <= buffersize) {
@@ -3510,6 +3513,7 @@ bool disasm_buffer(ARMSTATE *state, const uint8_t *buffer, size_t buffersize,
 
 static bool disasm_callback(uint32_t address, const char *text, void *outbuf)
 {
+  (void)address;  /* the editor view prints the text, not the PC */
   disasm_clear_codepool(&arm);
   sprintf(outbuf, "%s", text);
   return true;
@@ -3517,10 +3521,14 @@ static bool disasm_callback(uint32_t address, const char *text, void *outbuf)
 
 char *decodeARM32(long unsigned int start, char *outbuf, int *lendis, long unsigned int out)
 {
+    (void)out;
     struct editor *e = editor();
     disasm_init(&arm, 0);
     disasm_address(&arm, start);
     disasm_buffer(&arm, (const uint8_t *)start, 4, e->seg_size < 32 ? ARMMODE_THUMB : ARMMODE_ARM, disasm_callback, outbuf);
     *lendis = arm.size;
     disasm_cleanup(&arm);
+    /* The buffer the caller passed is the result; falling off the end handed
+     * back whatever the previous call left in the return register. */
+    return outbuf;
 }

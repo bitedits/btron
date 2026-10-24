@@ -148,20 +148,24 @@ char *decodeCOP1(uint32_t operation) {
      uint8_t ndtt = rt & 3;
      uint8_t cc   = rt >> 2;
      uint16_t offset = (uint16_t)((operation & 0xFFFF));
-     char *suffix[4] = { "s","d", "w", "l", 0 };
+     /* Four entries, indexed by suffix[fmt&3]; the trailing 0 was a fifth
+      * initializer for a [4] array, so the compiler dropped it. */
+     char *suffix[4] = { "s","d", "w", "l" };
      switch (fmt) {
          case 0x00: sprintf(str_cop0,  "mfc1 %s, f%i", gpr[rt], fs); break;
          case 0x01: sprintf(str_cop0, "dmfc1 %s, f%i", gpr[rt], fs); break;
          case 0x02: sprintf(str_cop0,  "cfc1 %s, f%i", gpr[rt], fs); break;
          case 0x04: sprintf(str_cop0,  "mtc1 %s, f%i", gpr[rt], fs); break;
          case 0x05: sprintf(str_cop0, "dmtc1 %s, f%i", gpr[rt], fs); break;
-         case 0x06: sprintf(str_cop0,  "ctc1 %i, f%i", gpr[rt], fs); break;
+         case 0x06: sprintf(str_cop0,  "ctc1 %s, f%i", gpr[rt], fs); break;
          case 0x08: // BC
+                    /* cc and offset are integers; "%s" dereferenced them as
+                     * char* and read from address 0..3 and 0..0xFFFF. */
                     switch (ndtt) {
-                        case 0: sprintf(str_cop0,  "bc1f %s, %s", cc, offset); break;
-                        case 1: sprintf(str_cop0,  "bc1t %s, %s", cc, offset); break;
-                        case 2: sprintf(str_cop0, "bc1fl %s, %s", cc, offset); break;
-                        case 3: sprintf(str_cop0, "bc1tl %s, %s", cc, offset); break;
+                        case 0: sprintf(str_cop0,  "bc1f %i, 0x%04X", cc, offset); break;
+                        case 1: sprintf(str_cop0,  "bc1t %i, 0x%04X", cc, offset); break;
+                        case 2: sprintf(str_cop0, "bc1fl %i, 0x%04X", cc, offset); break;
+                        case 3: sprintf(str_cop0, "bc1tl %i, 0x%04X", cc, offset); break;
                         default: break;
                     }
                     break;
@@ -338,8 +342,13 @@ char * decodeMIPS(unsigned long int address, char *outbuf, int*lendis, unsigned 
     }
     else if (opcode == 0x1F) { // SPECIAL3
     }
+    /* opcode is (operation >> 26) & 0x3F, so 0x2F < opcode < 0x40 was the
+     * whole 0x30..0x3F block and the old "(opcode > 0x2F) || (opcode < 0x40)"
+     * held for every value the mask can produce -- it only ever excluded
+     * 0x3B, which is what the pared-down test says.  The parentheses also
+     * make the && bind to the fourth alternative alone, as it already did. */
     else if ((opcode == 0x1A) || (opcode == 0x1B) || ((opcode > 0x1F) && (opcode < 0x2F)) ||
-             (opcode != 0x3B && ((opcode > 0x2F) || (opcode < 0x40))) && rsp[opcode])
+             ((opcode != 0x3B) && rsp[opcode]))
              sprintf(outbuf, "%s", decodeLoadStore(rsp[opcode],operation));
     return outbuf;
 }

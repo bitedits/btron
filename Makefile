@@ -454,6 +454,7 @@ UEFI_STARTUP = src/cores/core_boot.c src/cores/core_smp.c
 UEFI_SRCS    = $(UEFI_STARTUP)          \
                src/cores/core_init.c   \
                src/kernel/libstr.c      \
+               src/kernel/libint64.c    \
                src/drivers/vesa/vesa.c  \
                src/drivers/uefi/ps2_mouse.c \
                src/drivers/virtio/virtio_gpu.c \
@@ -467,6 +468,7 @@ PC98_SRCS    = $(PC98_STARTUP)          \
                src/cores/core_boot.c   \
                src/cores/core_init.c   \
                src/kernel/libstr.c      \
+               src/kernel/libint64.c    \
                src/drivers/vesa/vesa.c  \
                src/drivers/pc98/input/pc98_mouse.c \
                src/drivers/pc98/input/pc98_kbd.c \
@@ -1368,6 +1370,7 @@ PS2_SRCS       = $(PS2_STARTUP)           \
                  $(TINYGL_SRCS)           \
                  $(PS2_GL_SRCS)           \
                  src/kernel/libstr.c      \
+                 src/kernel/libint64.c    \
                  $(COMMON_NO_SDL_SRCS)
 PS2_OBJS       = src/drivers/ps2/boot_ps2.ps2.o         \
                  src/drivers/ps2/ps2_gs_reg.ps2.o      \

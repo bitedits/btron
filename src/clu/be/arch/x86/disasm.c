@@ -1764,7 +1764,7 @@ int32_t eatbyte(uint8_t *data, char *output, int outbufsize, int segsize)
 
 char * decodeEM64T(unsigned long int start, char *outbuf, int *lendis, unsigned long int offset0)
 {
-    uint32_t nextsync, synclen, initskip = 0L;
+    (void)offset0;
     bool autosync = false;
     iflag_t prefer;
     struct editor* e = editor();
@@ -1773,7 +1773,13 @@ char * decodeEM64T(unsigned long int start, char *outbuf, int *lendis, unsigned 
     char *qx = (char *)start;
     char *px = &e->contents[0] + e->content_length;
     *lendis = disasm((uint8_t *)qx, INSN_MAX, outbuf, 4096, e->seg_size, offset, autosync, &prefer);
-    if (!*lendis || *lendis > (px - qx) || ((nextsync || synclen) && (uint32_t)*lendis > nextsync - offset))
+    /* NASM's original carried uint32_t *nextsync / *synclen out of disasm()
+     * and clamped the instruction against the next sync marker.  This port's
+     * disasm() (line 1117) has neither out-parameter and autosync is false,
+     * so the term could never have been true -- but it read two uninitialised
+     * locals, which made the clamp fire at random.  The two real bounds
+     * (zero length, length past the end of the buffer) stay. */
+    if (!*lendis || *lendis > (px - qx))
          *lendis = eatbyte((uint8_t *) qx, outbuf, 4096, e->seg_size);
     return outbuf;
 }

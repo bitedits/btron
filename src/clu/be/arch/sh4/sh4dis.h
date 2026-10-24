@@ -74,7 +74,7 @@ SH4ASM_STATIC void
 sh4asm_opcode_non_inst_(unsigned const *quads, sh4asm_disas_emit_func em) {
     memset(sh4_buf, 0, sizeof(sh4_buf));
     // TODO: make sure the quads get printed in the right order
-    snprintf(sh4_buf, NON_INST_BUF_LEN, ".byte %x%x %x%x\0", quads[1], quads[0], quads[3], quads[2]);
+    snprintf(sh4_buf, NON_INST_BUF_LEN, ".byte %x%x %x%x", quads[1], quads[0], quads[3], quads[2]);
     char const *outp = sh4_buf;
     while (*outp) em(*outp++);
 }

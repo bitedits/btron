@@ -22,6 +22,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+/*
+ * Vendored from the QEMU and SiFive RISC-V disassembler; see the license notice above.
+ *
+ * What this file still reports is upstream's own style, not a defect:
+ * -Wmissing-field-initializers: table entries that leave the tail
+ *   members zero, which is what the tables mean.
+ * -Wunused-parameter: callbacks that all share one signature.
+ * CLU imports the decoder verbatim, so those classes are scoped off for this
+ * translation unit instead of restyling upstream text.  Every other
+ * diagnostic here, and every file outside this island, keeps -Wall -Wextra.
+ */
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include "../../editor.h"
 #include "riscv-disas.h"
@@ -2070,8 +2083,6 @@ static void decode_inst_format(char *buf, size_t buflen, size_t tab, rv_decode *
 {
     char tmp[64];
     const char *fmt;
-
-    int len = inst_length(dec->inst);
 
     snprintf(buf, buflen, "%s", "\0");
 

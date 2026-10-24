@@ -499,7 +499,7 @@ static int DisassembleAddSubtractShiftedOrExtendedInstr(struct instruction *i,
         else{
             unsigned sz = 0;
             const char **registers = NULL;
-            int _64_bit = get_extended_Rm(option, &Rm_s, Rm, &sz, &registers);
+            (void)get_extended_Rm(option, &Rm_s, Rm, &sz, &registers);
 
             ADD_REG_OPERAND(out, Rm, sz, PREFER_ZR, _SYSREG(AD_NONE), _RTBL(registers));
         }
@@ -547,7 +547,7 @@ static int DisassembleAddSubtractShiftedOrExtendedInstr(struct instruction *i,
         else{
             unsigned sz = 0;
             const char **registers = NULL;
-            int _64_bit = get_extended_Rm(option, &Rm_s, Rm, &sz, &registers);
+            (void)get_extended_Rm(option, &Rm_s, Rm, &sz, &registers);
 
             ADD_REG_OPERAND(out, Rm, sz, PREFER_ZR, _SYSREG(AD_NONE), _RTBL(registers));
         }

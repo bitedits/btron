@@ -135,7 +135,7 @@ uint16_t pdp11word(unsigned long int address) {
 
 char * decodePDP11(unsigned long int address, char *outbuf, int *lendis, unsigned long int offset0)
 {
-    struct editor *e = editor();
+    (void)offset0;
     unsigned long int start = address, i;
     unsigned long int finish = address + 2;
     uint16_t operation = pdp11word(start);

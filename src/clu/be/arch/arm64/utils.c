@@ -30,7 +30,7 @@ int HighestSetBit(unsigned int number, unsigned int n){
 int LowestSetBit(unsigned int number, unsigned int n){
     int ret = n;
 
-    for(int i=0; i<n; i++){
+    for(unsigned int i=0; i<n; i++){
         if(number & (1 << i))
             return i;
     }
@@ -41,7 +41,7 @@ int LowestSetBit(unsigned int number, unsigned int n){
 int BitCount(unsigned X, unsigned N){
     int result = 0;
 
-    for(int i=0; i<N; i++){
+    for(unsigned i=0; i<N; i++){
         if(((X >> i) & 1) == 1)
             result++;
     }
@@ -111,7 +111,7 @@ int MoveWidePreferred(unsigned int sf, unsigned int immN, unsigned int immr,
     if(imms < 16)
         return (-immr % 16) <= (15 - imms);
 
-    if(imms >= (width - 15))
+    if(imms >= (unsigned)(width - 15))
         return (immr % 16) <= (imms - (width - 15));
 
     return 0;

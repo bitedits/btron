@@ -184,7 +184,7 @@ static int DisassembleLoadStoreMultStructuresInstr(struct instruction *i,
 
     concat(&DECODE_STR(out), "%s%d { ", instr_s, selem);
 
-    for(int i=Rt; i<(Rt+regcnt)-1; i++){
+    for(int i=Rt; i<(int)((Rt+regcnt)-1); i++){
         ADD_REG_OPERAND(out, i, _SZ(_128_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE), _RTBL(AD_RTBL_FP_V_128));
         const char *Ri_s = GET_FP_REG(AD_RTBL_FP_V_128, i);
 
@@ -306,7 +306,7 @@ static int DisassembleLoadStoreSingleStructuresInstr(struct instruction *i,
 
     concat(&DECODE_STR(out), "%s%d%s { ", instr_s, selem, replicate ? "r" : "");
 
-    for(int i=Rt; i<(Rt+selem)-1; i++){
+    for(int i=Rt; i<(int)((Rt+selem)-1); i++){
         ADD_REG_OPERAND(out, i, _SZ(_128_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE),
                 _RTBL(AD_RTBL_FP_V_128));
         const char *Ri_s = GET_FP_REG(AD_RTBL_FP_V_128, i);
@@ -2727,7 +2727,8 @@ static int DisassembleLoadAndStorePACInstr(struct instruction *i,
     ADD_REG_OPERAND(out, Rt, _SZ(_64_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE), AD_RTBL_GEN_64);
     ADD_REG_OPERAND(out, Rn, _SZ(_64_BIT), NO_PREFER_ZR, _SYSREG(AD_NONE), AD_RTBL_GEN_64);
 
-    int use_key_A = M == 0;
+    /* use_key_A was this test spelled twice; the if (M == 0) below is the one
+     * that picks AD_INSTR_LDRAA/LDRAB. */
     int simm = sign_extend((S << 9) | imm9, 10) << 3;
 
     concat(&DECODE_STR(out), "ldr");

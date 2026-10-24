@@ -20,6 +20,7 @@ struct ad_insn *insn = NULL;
 
 char *decodeARM64(unsigned long int start, char *outbuf, int *lendis, unsigned long int offset0)
 {
+     (void)offset0;  /* Armadillo is fed the buffer address below, not the file offset */
      *lendis = 4;
      opcode = (unsigned int *)start;
      ArmadilloDisassemble(*opcode, (unsigned long)opcode, &insn);

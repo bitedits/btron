@@ -56,17 +56,23 @@
 
 void nasm_error(errflags severity, const char *fmt, ...)
 {
+	(void)severity; (void)fmt;
 //	nasm_do_error(severity & ERR_MASK, severity & ~ERR_MASK);
 }
 
+/* The disabled calls inside this macro were written with // comments that
+ * ended in a line-continuation backslash, so each one commented out the
+ * following "}" too and left the macro body brace-unbalanced.  Every
+ * invocation below is commented out, which is why nothing ever expanded it.
+ * Block comments make the macro well-formed again. */
 #define nasm_err_helpers(_type, _name, _sev)				\
 _type nasm_ ## _name ## f (errflags flags, const char *fmt, ...)	\
 {									\
-//	nasm_do_error(_sev, flags);					\
+	/* nasm_do_error(_sev, flags); */				\
 }									\
 _type nasm_ ## _name (const char *fmt, ...)				\
 {									\
-//	nasm_do_error(_sev, 0);						\
+	/* nasm_do_error(_sev, 0); */					\
 }
 
 //nasm_err_helpers(void,       listmsg,  ERR_LISTMSG)
@@ -84,16 +90,19 @@ _type nasm_ ## _name (const char *fmt, ...)				\
  */
 void nasm_warn(errflags flags, const char *fmt, ...)
 {
+	(void)flags; (void)fmt;
 //	nasm_do_error(ERR_WARNING, flags);
 }
 
 fatal_func nasm_panic_from_macro(const char *file, int line)
 {
+	(void)file; (void)line;
 //	nasm_panic("internal error at %s:%d\n", file, line);
 }
 
 fatal_func nasm_assert_failed(const char *file, int line, const char *msg)
 {
+	(void)file; (void)line; (void)msg;
 //	nasm_panic("assertion %s failed at %s:%d", msg, file, line);
 }
 

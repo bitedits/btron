@@ -88,11 +88,14 @@ static char *ldstnames[] = {
   "stfs","stfsu","stfd","stfdu"
 };
 
+/* Only read by vdabc(), which is compiled out under PPC_GEKKO above. */
+#ifndef PPC_GEKKO
 static char *vmnames[] = {
   "mhaddshs","mhraddshs","mladduhm",NULL,"msumubm","msummbm",
   "msumuhm","msumuhs","msumshm","msumshs","sel","perm",
   "sldoi",NULL,"maddfp","nmsubfp"
 };
+#endif
 
 
 
@@ -137,7 +140,6 @@ static void imm(struct DisasmPara_PPC *dp,ppc_word in,int uimm,int type)
 /* type 2: S/D register is ignored (trap,cmpi) */
 /* type 3: A register is ignored (li) */
 {
-  char *s;
   int i = (int)(in & 0xffff);
 
   dp->type = PPCINSTR_IMM;
@@ -247,7 +249,7 @@ static void trapi(struct DisasmPara_PPC *dp,ppc_word in,unsigned char dmode)
 {
   char *cnd;
 
-  if (cnd = trap_condition[PPCGETD(in)]) {
+  if ((cnd = trap_condition[PPCGETD(in)])) {
     dp->flags |= dmode;
     sprintf(dp->opcode,"t%c%s",dmode?'d':'w',cnd);
     imm(dp,in,0,2);
@@ -266,7 +268,7 @@ static void cmpi(struct DisasmPara_PPC *dp,ppc_word in,int uimm)
     if (i)
       dp->flags |= PPCF_64;
     sprintf(dp->opcode,"%si",cmpname[uimm*2+i]);
-    if (i = (int)PPCGETCRD(in)) {
+    if ((i = (int)PPCGETCRD(in))) {
       sprintf(oper,"cr%c,",'0'+i);
       dp->operands += 4;
     }
@@ -347,7 +349,7 @@ static void bc(struct DisasmPara_PPC *dp,ppc_word in)
 
   if (d >= 0x8000)
     d -= 0x10000;
-  if (offs = branch(dp,in,"",(in&2)?1:0,d)) {
+  if ((offs = branch(dp,in,"",(in&2)?1:0,d))) {
     oper += offs;
     *oper++ = ',';
   }
@@ -460,7 +462,7 @@ static void cmp(struct DisasmPara_PPC *dp,ppc_word in)
     if (i)
       dp->flags |= PPCF_64;
     strcpy(dp->opcode,cmpname[((in&PPCIDX2MASK)?2:0)+i]);
-    if (i = (int)PPCGETCRD(in))
+    if ((i = (int)PPCGETCRD(in)))
       oper += sprintf(oper,"cr%c,",'0'+i);
     ra_rb(oper,in);
   }
@@ -474,7 +476,7 @@ static void trap(struct DisasmPara_PPC *dp,ppc_word in,unsigned char dmode)
   char *cnd;
   int to = (int)PPCGETD(in);
 
-  if (cnd = trap_condition[to]) {
+  if ((cnd = trap_condition[to])) {
     dp->flags |= dmode;
     sprintf(dp->opcode,"t%c%s",dmode?'d':'w',cnd);
     ra_rb(dp->operands,in);
@@ -819,6 +821,12 @@ static void vdab(struct DisasmPara_PPC *dp,ppc_word in,char *name,
 }
 
 
+/* The four-operand AltiVec form exists only on processors that are not the
+ * Gekko; ppc_disasm.h:25 defines PPC_GEKKO for this port, and the one call
+ * site (PPC_Disassemble case 4) is already #ifndef PPC_GEKKO.  Guarding the
+ * definition the same way keeps -Wunused-function honest instead of
+ * silencing it. */
+#ifndef PPC_GEKKO
 static void vdabc(struct DisasmPara_PPC *dp,ppc_word in)
 /* four operands AltiVec instruction: vxxx vD,vA,vB,vC */
 {
@@ -832,6 +840,7 @@ static void vdabc(struct DisasmPara_PPC *dp,ppc_word in)
   else
     ill(dp,in);
 }
+#endif
 
 
 static void vldst(struct DisasmPara_PPC *dp,ppc_word in,char *name)
@@ -2776,6 +2785,7 @@ ppc_word *PPC_Disassemble(struct DisasmPara_PPC *dp)
 
 char * decodePPC(unsigned long int start, char *outbuf, int *lendis, unsigned long int offset0)
 {
+     (void)offset0;
      dp.opcode = ppc_opcode;
      dp.operands = ppc_operands;
      dp.iaddr = (unsigned int *)start;

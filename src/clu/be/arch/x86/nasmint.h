@@ -7,6 +7,15 @@
  * Important: the preprocessor may truncate numbers too large for it.
  * Therefore, test the signed types only ... truncation won't generate
  * a 01111111... bit pattern.
+ *
+ * CLU compiles this fallback even on platforms that do have <inttypes.h>,
+ * because HAVE_INTTYPES_H is set by NASM's configure, which this tree does
+ * not run.  <stdint.h> is usually reachable anyway (through string.h,
+ * limits.h users, and the CLU headers), so every constant the system already
+ * supplied keeps the system's spelling; only the genuinely absent ones are
+ * synthesized here.  A guard, not a diagnostic suppression: two live
+ * definitions of INT64_C in one preprocessing environment is a defect worth
+ * removing rather than hiding.
  */
 
 #ifndef NASM_NASMINT_H
@@ -40,8 +49,12 @@ typedef signed __int64		int64_t;
 typedef unsigned __int64	uint64_t;
 #define _scn64			"I64"
 #define _pri64			"I64"
+#ifndef INT64_C
 #define INT64_C(x)		x ## i64
+#endif
+#ifndef UINT64_C
 #define UINT64_C(x)		x ## ui64
+#endif
 
 #elif LONG_MAX == 9223372036854775807L
 
@@ -50,8 +63,12 @@ typedef unsigned __int64	uint64_t;
 //typedef unsigned long		uint64_t;
 #define _scn64			"l"
 #define _pri64			"l"
+#ifndef INT64_C
 #define INT64_C(x)		x ## L
+#endif
+#ifndef UINT64_C
 #define UINT64_C(x)		x ## UL
+#endif
 
 #elif LLONG_MAX == 9223372036854775807LL
 
@@ -60,8 +77,12 @@ typedef signed long long	int64_t;
 typedef unsigned long long	uint64_t;
 #define _scn64			"ll"
 #define _pri64			"ll"
+#ifndef INT64_C
 #define INT64_C(x)		x ## LL
+#endif
+#ifndef UINT64_C
 #define UINT64_C(x)		x ## ULL
+#endif
 
 #else
 
@@ -78,8 +99,12 @@ typedef signed int		int32_t;
 typedef unsigned int		uint32_t;
 #define _scn32			""
 #define _pri32			""
+#ifndef INT32_C
 #define INT32_C(x)		x
+#endif
+#ifndef UINT32_C
 #define UINT32_C(x)		x ## U
+#endif
 
 #elif LONG_MAX == 2147483647L
 
@@ -88,8 +113,12 @@ typedef signed long		int32_t;
 typedef unsigned long		uint32_t;
 #define _scn32			"l"
 #define _pri32			"l"
+#ifndef INT32_C
 #define INT32_C(x)		x ## L
+#endif
+#ifndef UINT32_C
 #define UINT32_C(x)		x ## UL
+#endif
 
 #else
 
@@ -106,8 +135,12 @@ typedef signed int		int16_t;
 typedef unsigned int		uint16_t;
 #define _scn16			""
 #define _pri16			""
+#ifndef INT16_C
 #define INT16_C(x)		x
+#endif
+#ifndef UINT16_C
 #define UINT16_C(x)		x ## U
+#endif
 
 #elif SHRT_MAX == 32767
 
@@ -116,8 +149,12 @@ typedef signed short		int16_t;
 typedef unsigned short		uint16_t;
 #define _scn16			"h"
 #define _pri16			""
+#ifndef INT16_C
 #define INT16_C(x)		x
+#endif
+#ifndef UINT16_C
 #define UINT16_C(x)		x ## U
+#endif
 
 #else
 
@@ -134,8 +171,12 @@ typedef signed char		int8_t;
 typedef unsigned char		uint8_t;
 #define _scn8			"hh"
 #define _pri8			""
+#ifndef INT8_C
 #define INT8_C(x)		x
+#endif
+#ifndef UINT8_C
 #define UINT8_C(x)		x ## U
+#endif
 
 #else
 
@@ -200,20 +241,44 @@ typedef unsigned char		uint8_t;
 #define SCNx32		_scn32 "x"
 #define SCNx64		_scn64 "x"
 
+#ifndef INT8_MIN
 #define INT8_MIN	INT8_C(-128)
+#endif
+#ifndef INT8_MAX
 #define INT8_MAX	INT8_C(127)
+#endif
+#ifndef UINT8_MAX
 #define UINT8_MAX	UINT8_C(255)
+#endif
 
+#ifndef INT16_MIN
 #define INT16_MIN	INT16_C(-32768)
+#endif
+#ifndef INT16_MAX
 #define INT16_MAX	INT16_C(32767)
+#endif
+#ifndef UINT16_MAX
 #define UINT16_MAX	UINT16_C(65535)
+#endif
 
+#ifndef INT32_MIN
 #define INT32_MIN	INT32_C(-2147483648)
+#endif
+#ifndef INT32_MAX
 #define INT32_MAX	INT32_C(2147483647)
+#endif
+#ifndef UINT32_MAX
 #define UINT32_MAX	UINT32_C(4294967295)
+#endif
 
+#ifndef INT64_MIN
 #define INT64_MIN	INT64_C(-9223372036854775808)
+#endif
+#ifndef INT64_MAX
 #define INT64_MAX	INT64_C(9223372036854775807)
+#endif
+#ifndef UINT64_MAX
 #define UINT64_MAX	UINT64_C(18446744073709551615)
+#endif
 
 #endif /* NASM_NASMINT_H */

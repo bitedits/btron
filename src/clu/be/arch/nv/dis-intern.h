@@ -299,7 +299,12 @@ void atombf_d DPROTO;
 #define atombf atombf_a, atombf_d
 
 static inline int var_ok(int fmask, int ptype, struct varinfo *varinfo) {
-	return (!fmask || (varinfo->fmask[0] & fmask) == fmask) && (!ptype || (varinfo->modes[0] != -1 && ptype & 1 << varinfo->modes[0]));
+	/* varinfo->fmask is a uint32_t word while the table fields carrying the
+	 * wanted mask are int; name the conversion instead of letting the usual
+	 * arithmetic conversions decide it, which is what made this comparison
+	 * signed against unsigned. */
+	uint32_t want = (uint32_t) fmask;
+	return (!fmask || (varinfo->fmask[0] & want) == want) && (!ptype || (varinfo->modes[0] != -1 && ptype & 1 << varinfo->modes[0]));
 }
 
 extern struct disisa g80_isa_s;

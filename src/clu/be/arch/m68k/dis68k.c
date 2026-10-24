@@ -195,9 +195,12 @@ int getmode(int instruction) {
 }
 
 void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned long int offset0) {
+	(void)offset0;
 	unsigned long int end = start + 10;
 	address = start;
-	char operand_s[100];
+	/* operand_s is declared once per decoded word below (line 208 in the
+	 * original numbering); the copy here was shadowed by it and never
+	 * referenced. */
 
 	while ((address < end)) {
 		const uint32_t start_address = address;
@@ -290,7 +293,10 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 						}
 						char source_s[50];
 						sprintmode(smode, sreg, size, source_s);
-						sprintf(operand_s, "%s,A%i", source_s, sreg);
+						/* The An destination is bits 9..11 (dreg), not the source
+						 * register; printing sreg here labelled every ADDA/SUBA
+						 * with the source's number.  dreg existed for this. */
+						sprintf(operand_s, "%s,A%i", source_s, dreg);
 						decoded = true;
 					} break;
 					case 4  :
@@ -428,9 +434,9 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 						int count = (word & 0x0E00) >> 9;
 						if (((word & 0x0020) >> 5) == 0) { /* imm */
 							if (count == 0) count = 8;
-							sprintf(operand_s, "#%i,D%i", count, (word & 0x0007));
+							sprintf(operand_s, "#%i,D%i", count, dreg);
 						} else { /* count in dreg */
-							sprintf(operand_s, "D%i,D%i", count, (word & 0x0007));
+							sprintf(operand_s, "D%i,D%i", count, dreg);
 						}
 						decoded = true;
 					} break;
@@ -475,7 +481,7 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 						if (offset != 0) {
 							if (offset >= 128) offset -= 256;
 							if (!rawmode) {
-								sprintf(operand_s, "$%08x", address + offset);
+								sprintf(operand_s, "$%08lx", address + offset);
 							} else {
 								sprintf(operand_s, "*%+d", offset);
 							}
@@ -483,7 +489,7 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 							offset = getword();
 							if (offset >= 32768l) offset -= 65536l;
 							if (!rawmode) {
-								sprintf(operand_s, "$%08x" , address - 2 + offset);
+								sprintf(operand_s, "$%08lx" , address - 2 + offset);
 							} else {
 								sprintf(operand_s, "*%+d", offset);
 							}
@@ -629,7 +635,7 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 						int offset = getword();
 						if (offset >= 32768) offset -= 65536;
 						const int dreg = word & 0x0007;
-						sprintf(operand_s, "D%i,$%08x", dreg, address - 2 + offset);
+						sprintf(operand_s, "D%i,$%08lx", dreg, address - 2 + offset);
 						decoded = true;
 					} break;
 					case 33 : { /* EXG */
@@ -783,10 +789,10 @@ void decodeM68K(unsigned long int start, char *outbuf, int *outlen, unsigned lon
 						sprintf(opcode_s, "MOVE");
 						if ((word & 0x0008) == 0) {
 							/* to USP */
-							sprintf(operand_s, "A%i,USP", word & 0x0007);
+							sprintf(operand_s, "A%i,USP", sreg);
 						} else {
 							/* from USP */
-							sprintf(operand_s, "USP,A%i", word & 0x0007);
+							sprintf(operand_s, "USP,A%i", sreg);
 						}
 						decoded = true;
 					} break;

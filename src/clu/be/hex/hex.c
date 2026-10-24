@@ -70,7 +70,6 @@ void editor_render_hex(struct editor* e, struct charbuf* b) {
     unsigned int offset;
     int row = 0;
     int col = 0;
-    int current_offset =  editor_offset_at_cursor(e);
 
     for (offset = start_offset; offset < end_offset; offset++) {
 
@@ -180,7 +179,6 @@ void editor_replace_byte_hex(struct editor* e, char x) {
     hexstr_set(0,0); hexstr_set(1,0); hexstr_set(2,0);
     hexstr_idx_set(0);
     unsigned int offset = editor_offset_at_cursor(e);
-    unsigned char prev = e->contents[offset];
     e->contents[offset] = x;
     editor_move_cursor(e, KEY_RIGHT, 1);
     editor_statusmessage(e, STATUS_INFO, "Replaced byte at offset %09x with %02x", offset, (unsigned char) x);

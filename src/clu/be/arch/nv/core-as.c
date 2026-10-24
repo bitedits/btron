@@ -21,6 +21,21 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
+/*
+ * Vendored from envyas / nvdisasm; see the license notice above.
+ *
+ * What this file still reports is upstream's own style, not a defect:
+ * -Wmissing-field-initializers: table entries that leave the tail
+ *   members zero, which is what the tables mean.
+ * -Wsign-compare: int counters against size_t table sizes.
+ * -Wunused-parameter: callbacks that all share one signature.
+ * CLU imports the decoder verbatim, so those classes are scoped off for this
+ * translation unit instead of restyling upstream text.  Every other
+ * diagnostic here, and every file outside this island, keeps -Wall -Wextra.
+ */
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include "dis-intern.h"
 #include "envyas.h"

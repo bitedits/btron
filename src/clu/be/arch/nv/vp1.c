@@ -21,6 +21,19 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
+/*
+ * Vendored from envyas / nvdisasm; see the license notice above.
+ *
+ * What this file still reports is upstream's own style, not a defect:
+ * -Wmissing-braces: rows of nested structs written flat.
+ * -Wmissing-field-initializers: table entries that leave the tail
+ *   members zero, which is what the tables mean.
+ * CLU imports the decoder verbatim, so those classes are scoped off for this
+ * translation unit instead of restyling upstream text.  Every other
+ * diagnostic here, and every file outside this island, keeps -Wall -Wextra.
+ */
+#pragma GCC diagnostic ignored "-Wmissing-braces"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
 #include "dis-intern.h"
 

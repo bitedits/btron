@@ -362,8 +362,8 @@ which is the ARM physical address with bits 31:30 replaced by an alias:
   0x0000_0000 … 0x3FFF_FFFF   non-coherent direct
 
 BTRON places every mailbox block in BTRON_NOCACHE_MBOX_* inside the
-.btron.nocache window at BTRON_NOCACHE_BASE 0x01800000, size 0x00200000, and
-maps it attr2 (non-cacheable). `static volatile uint32_t * const mbox =
+.btron.nocache window at BTRON_NOCACHE_BASE 0x01C00000 (28 MB), size 0x00200000,
+and maps it attr2 (non-cacheable). `static volatile uint32_t * const mbox =
 (volatile uint32_t *)BTRON_NOCACHE_MBOX_BOOT;` (startup_arm.c:406) is the
 proof that the coherency hazard is closed on the CPU side. This is not
 cosmetic: before the MMU, all RAM was effectively uncached, so the bug could

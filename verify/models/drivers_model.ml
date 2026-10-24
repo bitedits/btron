@@ -344,10 +344,16 @@ type mem_region = {
   attr : mem_attr;
 }
 
+(* Mirrors include/btron/arm64_mem.h and src/drivers/bcm283x/cpu/link.ld: the
+   static image ends below BTRON_NOCACHE_BASE, the 2 MB attr2 window runs from
+   there to BTRON_NOCACHE_END, and the bump heap starts at HEAP_BASE 0x02000000.
+   Move the window and this table moves with it -- scripts/check_structure.sh
+   compares the real header against link.ld, and arm64_mmu_layout_ok() checks the
+   same three bounds on the device. *)
 let btron_regions = [
-  { name = "Low RAM (.text/.rodata/.data/.bss)"; base = 0x00000000; size = 0x01800000; attr = AttrNormalWB };
-  { name = "Non-Cacheable DMA & Mailbox Window";  base = 0x01800000; size = 0x00200000; attr = AttrNormalNC };
-  { name = "Dynamic Bump Heap";                  base = 0x01A00000; size = 0x00600000; attr = AttrNormalWB };
+  { name = "Low RAM (.text/.rodata/.data/.bss)"; base = 0x00000000; size = 0x01C00000; attr = AttrNormalWB };
+  { name = "Non-Cacheable DMA & Mailbox Window";  base = 0x01C00000; size = 0x00200000; attr = AttrNormalNC };
+  { name = "Dynamic Bump Heap";                  base = 0x01E00000; size = 0x00200000; attr = AttrNormalWB };
   { name = "VideoCore Scanout Framebuffer";      base = 0x3C000000; size = 0x01000000; attr = AttrNormalNC };
   { name = "BCM2711 PCIe ECAM Window";           base = 0xFD500000; size = 0x00010000; attr = AttrDevice };
   { name = "BCM2711 Peripherals MMIO (UART/GIC)";base = 0xFE000000; size = 0x01000000; attr = AttrDevice };

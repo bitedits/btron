@@ -124,7 +124,7 @@ void uart_hex32(uint32_t v) {
 /*
  * Bare-metal heap: use a fixed high address (32MB) so it stays clear of:
  *   - kernel text/data/BSS at 0x80000..__bss_end
- *   - the non-cacheable DMA window at 24-26 MB (btron/arm64_mem.h)
+ *   - the non-cacheable DMA window (BTRON_NOCACHE_BASE, btron/arm64_mem.h)
  * 32MB gives us 1GB - 32MB = ~992MB of headroom on the far side.
  */
 #define HEAP_BASE ((uintptr_t)0x02000000)  /* 32 MB — clear of all text, data, and BSS */
@@ -1199,7 +1199,7 @@ void arm64_mmu_init(uintptr_t fb_base, uint32_t fb_bytes) {
 
     /* L2 Table: 512 entries of 2MB (covers 0 to 1GB)
      * Code, data, .bss and the bump heap are all write-back cacheable.  The two
-     * RAM exceptions are the BTRON_NOCACHE_BASE window (24MB, 2MB) shared by
+     * RAM exceptions are the BTRON_NOCACHE_BASE window (2MB) shared by
      * the xHCI / DMA / mailbox drivers, which sits in the gap between
      * __bss_end and HEAP_BASE on purpose so no static object can land in it,
      * and the scanout framebuffer itself: the VideoCore picks that address and
@@ -1416,10 +1416,10 @@ void _start(void) {
         "b 4b\n\t"
         "5:\n\t"
 
-        /* Zero .nocache too.  Its VMA is 25MB into the address space, so it is
-         * an image-less NOLOAD section that neither the ELF loader nor the .bss
-         * clear above reaches; without this a DWC2 setup packet starts life as
-         * whatever the previous boot left at that address. */
+        /* Zero .nocache too.  Its VMA is the non-cacheable window, above _end,
+         * so it is an image-less NOLOAD section that neither the ELF loader nor
+         * the .bss clear above reaches; without this a DWC2 setup packet starts
+         * life as whatever the previous boot left at that address. */
         "ldr x0, =__nocache_start\n\t"
         "ldr x1, =__nocache_end\n\t"
         "9: cmp x0, x1\n\t"

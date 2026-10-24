@@ -61,6 +61,20 @@ extern uintptr_t g_mmio_base;
 #define HEAP_LIMIT          ((uintptr_t)0x1B000000)  /* 432 MB limit */
 extern uintptr_t heap_ptr;
 
+/* The two [MEM] bands in this file (`mem` on the console, btron_core_mem_log()
+ * on the serial line) print the heap and the non-cacheable window as literal
+ * text, because fb_log() and uart_puts() take a plain string.  These make a
+ * drift between that text and the addresses the page tables actually install a
+ * compile error instead of a confident lie on the screen -- the window moved
+ * twice already, and the console is what an operator reading the boot log trusts.
+ * The second line is the layout invariant itself: .bss must end below the
+ * window (link.ld enforces that at link time) and the window must end below the
+ * heap, which is exactly what arm64_mmu_layout_ok() re-checks on the device. */
+_Static_assert(BTRON_NOCACHE_BASE == 0x01C00000UL && BTRON_NOCACHE_END == 0x01E00000UL,
+               "[MEM] band text no longer matches BTRON_NOCACHE_BASE/END");
+_Static_assert(HEAP_BASE == 0x02000000UL && HEAP_BASE >= BTRON_NOCACHE_END,
+               "[MEM] heap band text no longer matches HEAP_BASE, or the window moved past it");
+
 /* Display Resolution (Standard VideoCore Framebuffer) */
 #define BTRON_SCREEN_W      1024
 #define BTRON_SCREEN_H      768
@@ -597,7 +611,7 @@ static void pi4_shell_exec(const char *cmd, uint32_t *gpu_fb)
         fb_log("[MEM]   0x00000000-0xFCFFFFFF  RAM (usable)\n");
         fb_log("[MEM]   0xFD000000-0xFFFFFFFF  MMIO / PCIe\n");
         fb_log("[MEM]   Kernel heap: 0x02000000-0x38000000\n");
-        fb_log("[MEM]   Non-cacheable DMA window: 0x01800000-0x01A00000\n");
+        fb_log("[MEM]   Non-cacheable DMA window: 0x01C00000-0x01E00000\n");
 
     } else if (tkl_strcmp(cmd, "ver") == 0) {
         fb_log("B-System/BTRON3 3.20  aarch64-bcm2711\n");
@@ -3030,7 +3044,7 @@ void btron_core_mem_log(void) {
         uart_puts("[MEM]   0x3F000000-0x3FFFFFFF  Peripherals / VideoCore Mailbox / MMIO (16 MB)\n");
     }
     uart_puts("[MEM] Heap: 0x02000000-0x38000000 (864 MB Kernel Heap)\n");
-    uart_puts("[MEM] Non-cacheable DMA window: 0x01800000-0x01A00000 (XHCI rings, DMA CBs, mailboxes)\n");
+    uart_puts("[MEM] Non-cacheable DMA window: 0x01C00000-0x01E00000 (XHCI rings, DMA CBs, mailboxes)\n");
 }
 
 void btron_core_hfds_log(void) {

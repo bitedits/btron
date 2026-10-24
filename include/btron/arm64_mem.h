@@ -7,13 +7,24 @@
  * arm64_mmu_init() maps exactly this 2 MB range with MAIR attr2 (Normal
  * Non-Cacheable), along with whatever span the VideoCore allocated for the
  * scanout framebuffer; the rest of the cacheable low RAM is attr1 (Normal,
- * inner and outer write-back).  The window used to sit at 16 MB, which is
- * inside .bss, so the
- * tail of the static data segment silently ran uncached; it now lives in the
- * gap between __bss_end and the bump heap, and arm64_mmu_layout_ok() reports
- * whether that is still true (the on-device MEM band prints it as `ok1`).
+ * inner and outer write-back).
+ *
+ * The window has been moved twice for the same reason: the static image grows,
+ * and any part of it that lands in here silently stops being cached.  It sat at
+ * 16 MB until .bss reached that far, then at 24 MB until the aarch64 desktop's
+ * drag-preview snapshots pushed __bss_end to 0x18D9400 (24.85 MB).  It is now
+ * at 28 MB, which leaves 3 MB of .bss headroom below it and keeps the whole
+ * window under the bump heap at 32 MB, so no static object can be assigned an
+ * address inside it.
+ *
+ * The headroom is not a matter of faith: link.ld places .nocache above .bss, so
+ * a .bss that outgrows this window fails the link with a section-overlap error
+ * rather than booting an image whose data is uncached.  scripts/check_structure.sh
+ * additionally refuses the tree when the address link.ld writes and
+ * BTRON_NOCACHE_SECTION below stop agreeing, and arm64_mmu_layout_ok() re-checks
+ * all of it on the device (the MEM band prints it as `ok1`).
  */
-#define BTRON_NOCACHE_BASE  0x01800000UL   /* 24 MB */
+#define BTRON_NOCACHE_BASE  0x01C00000UL   /* 28 MB */
 #define BTRON_NOCACHE_SIZE  0x00200000UL   /*  2 MB */
 #define BTRON_NOCACHE_END   (BTRON_NOCACHE_BASE + BTRON_NOCACHE_SIZE)
 

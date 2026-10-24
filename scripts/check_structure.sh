@@ -13,6 +13,13 @@
 #         Offenders are a ratchet in scripts/structure_baseline.txt: they may be
 #         removed, never added.
 #
+# Rule 3  one non-cacheable window: link.ld places the image-less .nocache
+#         section at the address include/btron/arm64_mem.h calls
+#         BTRON_NOCACHE_SECTION, and a linker script cannot include a C header,
+#         so the two spell the same number separately. They must agree, and the
+#         section must sit above the hand-assigned mailbox/DMA-CB blocks in that
+#         header, because nothing else arbitrates the two.
+#
 # Run from the repo root: scripts/check_structure.sh
 
 set -u
@@ -94,12 +101,59 @@ for offender in $baseline; do
     fi
 done
 
+# ── Rule 3: the non-cacheable window is one address, written twice ────
+# DWC2 and xHCI hand these addresses to bus masters that have no cache, so the
+# section must land exactly where arm64_mmu_init() maps MAIR attr2.  Drift in the
+# downward direction shows up as a link error (.bss overlaps .nocache); drift in
+# the other direction is silent and reads back stale interrupt-IN reports on the
+# device, which is what this check is for.
+MEM_H=include/btron/arm64_mem.h
+LINK_LD=src/drivers/bcm283x/cpu/link.ld
+
+ld_addr=$(awk '
+    match($0, /\.[ \t]*=[ \t]*0[xX][0-9A-Fa-f]+[ \t]*;/) {
+        v = $0; sub(/.*=[ \t]*/, "", v); sub(/[ \t]*;.*/, "", v); last = v
+    }
+    /^[ \t]*\.nocache([ \t(]|$)/ { print last; exit }
+' "$LINK_LD" 2>/dev/null)
+
+h_base=$(sed -n 's/^[[:space:]]*#[[:space:]]*define[[:space:]]\{1,\}BTRON_NOCACHE_BASE[[:space:]]\{1,\}\(0x[0-9A-Fa-f]*\).*/\1/p' "$MEM_H")
+h_sect=$(sed -n 's/^[[:space:]]*#[[:space:]]*define[[:space:]]\{1,\}BTRON_NOCACHE_SECTION[[:space:]]\{1,\}([[:space:]]*BTRON_NOCACHE_BASE[[:space:]]*+[[:space:]]*\(0x[0-9A-Fa-f]*\)[[:space:]]*UL*).*/\1/p' "$MEM_H")
+h_dma=$(sed -n 's/^[[:space:]]*#[[:space:]]*define[[:space:]]\{1,\}BTRON_NOCACHE_DMA_CB[[:space:]]\{1,\}([[:space:]]*BTRON_NOCACHE_BASE[[:space:]]*+[[:space:]]*\(0x[0-9A-Fa-f]*\)[[:space:]]*UL*).*/\1/p' "$MEM_H")
+
+if [ -z "$ld_addr" ] || [ -z "$h_base" ] || [ -z "$h_sect" ]; then
+    echo "ERROR: check_structure could not read the non-cacheable window"
+    echo "       link.ld .nocache address: ${ld_addr:-<none>}"
+    echo "       $MEM_H: BASE=${h_base:-<none>} SECTION offset=${h_sect:-<none>}"
+    echo "       rule 3 expects '#define BTRON_NOCACHE_BASE 0x..', a matching"
+    echo "       '#define BTRON_NOCACHE_SECTION (BTRON_NOCACHE_BASE + 0x..UL)' and"
+    echo "       a '. = 0x..;' line immediately above .nocache in $LINK_LD"
+    fail=1
+else
+    ld_val=$(( ld_addr ))
+    h_addr=$(( h_base + h_sect ))
+    if [ "$ld_val" -ne "$h_addr" ]; then
+        echo "ERROR: link.ld puts .nocache at $(printf '0x%08X' "$ld_val") but"
+        echo "       $MEM_H says BTRON_NOCACHE_SECTION is $(printf '0x%08X' "$h_addr")"
+        echo "       driver objects shared with a non-caching bus master would then sit"
+        echo "       in write-back RAM; change both together (see arm64_mmu_layout_ok)"
+        fail=1
+    fi
+    if [ -n "$h_dma" ] && [ $(( h_sect )) -le $(( h_dma )) ]; then
+        echo "ERROR: BTRON_NOCACHE_SECTION $(printf '0x%X' "$(( h_sect ))") does not clear"
+        echo "       BTRON_NOCACHE_DMA_CB $(printf '0x%X' "$(( h_dma ))"): xHCI/DMA blocks are"
+        echo "       assigned by hand below the section and nothing arbitrates the two"
+        fail=1
+    fi
+fi
+
 # Informational: testing hostedness is fine (POSIX-only code), restating the
 # libc mapping is not. Nothing to fix here, just a count of what is guarded.
 hosted=$(grep -rl '__STDC_HOSTED__' src include 2>/dev/null | wc -w | tr -d ' ')
 echo "check_structure: $hosted files still test __STDC_HOSTED__ directly (POSIX capability checks)"
 
 if [ "$fail" -eq 0 ]; then
-    echo "check_structure: OK (one main per target, libc shim not duplicated)"
+    echo "check_structure: OK (one main per target, libc shim not duplicated,"
+    echo "                 non-cacheable window is one address in both files)"
 fi
 exit "$fail"

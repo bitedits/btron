@@ -41,6 +41,7 @@ void lilcu64_shim_pulse_bell(float vol_mul, float pitch_mul)
     (void)pitch_mul;
 }
 void lilcu64_set_audio_owner(int owner) { (void)owner; }
+void lilcu64_synth_set_rate(uint32_t sample_rate) { (void)sample_rate; }
 void lilcu64_voice_mix_float(uint8_t bus, float *mono, size_t frames)
 {
     (void)bus;
@@ -301,6 +302,14 @@ static int capture(int track, int bpm, int den)
             fprintf(stderr, "unknown shim %d\n", shim);
             return 0;
         }
+        if (shim == LC_SHIM_FLOAT && dur < 0.50f) {
+            fprintf(stderr, "float dur %.3f is in the dance-phrase range\n", dur);
+            return 0;
+        }
+        if (shim == LC_SHIM_DANCE && art == LC_CAP_PHRASE && dur >= 0.50f) {
+            fprintf(stderr, "dance phrase dur %.3f is in the glass range\n", dur);
+            return 0;
+        }
         phrase = (shim == LC_SHIM_DANCE && art == LC_CAP_PHRASE) ? 1 : 0;
         gi = group_of(shim, phrase, gm, muted, name);
         if (gi < 0) {
@@ -315,6 +324,8 @@ static int capture(int track, int bpm, int den)
         e->ch = 0;
         e->ord = i;
         e->key = (uint8_t)key_of(shim, hz);
+        /* Capture stores the partial peak 0.11*volMul. Velocity carries volMul. */
+        if (shim == LC_SHIM_FLOAT && vol > 0.001f) vol = vol / 0.11f;
         e->vel = (uint8_t)vel_of(shim, art, vol);
         e->start = ticks_of(t, bpm, den, 0);
         e->dur = ticks_of((double)dur, bpm, den, 1);

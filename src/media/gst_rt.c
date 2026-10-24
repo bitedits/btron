@@ -462,8 +462,9 @@ static float pick_dur(const ProgRow *r, int vel, float evsec, int mode)
     orch_check(r != 0, __LINE__); orch_check(mode >= 0 && mode <= 2, __LINE__);
     if (mode == 2 && evsec > 0.02f) return evsec;
     if (r->kind == ORCH_KIND_HAT) return (vel >= 100) ? 0.28f : 0.055f;
+    if (r->kind == ORCH_KIND_DING && evsec > 0.02f) return evsec;
     if (r->dur10) fixed = (float)r->dur10 / 100.0f;
-    if (r->shot || r->kind == ORCH_KIND_PIANO) return fixed;
+    if (r->shot) return fixed;
     if (mode == 1) return 8.0f;
     if (evsec > 0.02f) return evsec;
     return 8.0f;
@@ -1380,6 +1381,7 @@ int gst_rt_boot(uint32_t sample_rate)
     g.curve_k = 25;
     lilcu64_set_audio_owner(1);
     wa_init(sample_rate);
+    lilcu64_synth_set_rate(sample_rate);
     wa_set_reverb(1, 0.0f, 0.0f, 0.0f, 0.0f);
     lc_set_score_base(0.0);
     s_booted = 1;
@@ -1400,6 +1402,7 @@ void gst_rt_shutdown(void)
         release_all_slots();
         lilcu64_set_audio_owner(0);
         wa_init(44100u);
+        lilcu64_synth_set_rate(44100u);
         s_booted = 0;
     }
     g.state = ORCH_GST_NULL;

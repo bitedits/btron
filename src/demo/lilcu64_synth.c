@@ -504,6 +504,12 @@ void lilcu64_set_audio_owner(int owner)
     s_audio_owner = owner ? 1 : 0;
 }
 
+void lilcu64_synth_set_rate(uint32_t sample_rate)
+{
+    if (sample_rate == 44100u || sample_rate == 48000u)
+        s_sample_rate = sample_rate;
+}
+
 int lilcu64_synth_init(uint32_t sample_rate) {
     if (s_audio_owner) return 0;
     s_sample_rate = sample_rate ? sample_rate : LILCU64_AUDIO_RATE;

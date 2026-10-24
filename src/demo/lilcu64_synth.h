@@ -71,6 +71,7 @@ int  lilcu64_synth_pump_virtio(size_t frames);
 
 /* Orchestra owns the device. init, pump, close and render then return. */
 void lilcu64_set_audio_owner(int owner);
+void lilcu64_synth_set_rate(uint32_t sample_rate);
 
 /* Mono sum of one bus. No 30000/32767 and no int16. Advances those voices. */
 void lilcu64_voice_mix_float(uint8_t bus, float *mono, size_t frames);

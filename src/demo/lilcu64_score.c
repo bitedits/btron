@@ -1983,6 +1983,53 @@ static void fill_note(Note *n, float hz, float vol, float dur)
     n->slide = 0.0f;
 }
 
+/* One captured glass partial. The chord call stays in shimFloat for the demo. */
+static void tone_glass(double t, float hz, float vol, float dur)
+{
+    double nT;
+    float d;
+    float peak;
+    WaNode *o;
+    orch_check(hz > 1.0f, __LINE__);
+    orch_check(vol >= 0.0f && vol < 2.0f, __LINE__);
+    d = dur;
+    if (d < 0.02f) d = 0.02f;
+    if (d > 30.0f) d = 30.0f;
+    peak = 0.11f * vol;
+    if (peak < 0.0001f) peak = 0.0001f;
+    nT = s_T + t;
+    o = osc_take(WA_SINE, nT, nT + (double)d);
+    if (!o) return;
+    wa_freq(o, WA_SET, hz * 0.985f, nT);
+    wa_freq(o, WA_EXP, hz, nT + 0.04);
+    wa_gain(o, WA_SET, 0.0001f, nT);
+    wa_gain(o, WA_LIN, peak, nT + 0.03);
+    wa_gain(o, WA_EXP, 0.0001f, nT + (double)d);
+}
+
+/* One captured dance-phrase sine. The five-note lick stays in shimDance. */
+static void tone_dance(double t, float hz, float vol, float dur)
+{
+    double nT;
+    float d;
+    float peak;
+    WaNode *o;
+    orch_check(hz > 1.0f, __LINE__);
+    orch_check(vol >= 0.0f && vol < 2.0f, __LINE__);
+    d = dur;
+    if (d < 0.02f) d = 0.02f;
+    if (d > 30.0f) d = 30.0f;
+    peak = vol;
+    if (peak < 0.0001f) peak = 0.0001f;
+    nT = s_T + t;
+    o = osc_take(WA_SINE, nT, nT + (double)d);
+    if (!o) return;
+    wa_freq(o, WA_SET, hz, nT);
+    wa_gain(o, WA_SET, 0.0001f, nT);
+    wa_gain(o, WA_LIN, peak, nT + 0.02);
+    wa_gain(o, WA_EXP, 0.0001f, nT + (double)d);
+}
+
 static void note_1_12(int shim, double t, float hz, float vol, float dur)
 {
     Note n;
@@ -1994,7 +2041,9 @@ static void note_1_12(int shim, double t, float hz, float vol, float dur)
     else if (shim == LC_SHIM_FROG) shimFrogCroak(t, sc, vol, 0);
     else if (shim == LC_SHIM_ADD_BELL) shimPulseBell(t, vol, sc);
     else if (shim == LC_SHIM_WADDLE) shimWaddleD(t, hz, vol, n.d);
-    else if (shim == LC_SHIM_FLOAT) shimFloat(t, hz, vol, 0, 0);
+    /* Blues-run notes are the short GM 4 events. Rhodes partials are 0.65 s. */
+    else if (shim == LC_SHIM_FLOAT && dur < 0.50f) tone_dance(t, hz, vol, dur);
+    else if (shim == LC_SHIM_FLOAT) tone_glass(t, hz, vol, dur);
     else if (shim == LC_SHIM_DANCE) shimDance(t, sc, vol, 0, 0);
     else if (shim == LC_SHIM_DING) shimDing(t, hz, vol, dur > 0.05f ? dur : 0.70f);
     else if (shim == LC_SHIM_KICK) shimKick(t, hz, vol);

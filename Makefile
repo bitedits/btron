@@ -716,6 +716,14 @@ mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
 	$(CC) $(CFLAGS) -Isrc $^ -o mkbtronfs
 	@echo "[FS] mkbtronfs built."
 
+# Host album encoder. Not linked into btron. Writes SYS/*.orch and SYS/*.mid.
+album_encode: src/tools/album_encode.c src/demo/lilcu64_score.c \
+		src/demo/lilcu64_wa.c src/demo/lilcu64_insert.c \
+		src/media/orchestra_session.c src/media/orchestra_smf.c \
+		src/media/gst_rt.c
+	$(CC) $(CFLAGS) -Werror -Isrc/demo $^ -lm -o album_encode
+	@echo "[ALBUM] album_encode built."
+
 # The manifest's payloads are prerequisites and not merely its input: with only the manifest and
 # the tool listed, make rebuilds btron_sys.vol when either changes and *never* when a document the
 # volume copies changes, so the image an ELF carries is the volume some other target happened to

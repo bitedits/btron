@@ -713,6 +713,14 @@
             transition: color 260ms, border-color 260ms, gap 260ms;
         }
 
+        .entry-simple {
+            display: inline-flex;
+            align-items: center;
+            text-decoration: none;
+            color: var(--ink);
+            border-bottom: 1px solid var(--ink);
+        }
+
         .entry:hover {
             color: var(--tron-teal);
             border-color: var(--tron-teal);
@@ -1358,11 +1366,18 @@
                         <span>Headless C99 framebuffer · 1280 × 800</span>
                     </figcaption>
                 </figure>
-                <p class="opening-note reveal">
-                    下のすべての窓は、この机の上にあります。十九の札は別々の製品ではなく、同じ約束の十九の使い方です。
-                    Every window on this page is cut from the framebuffer of one operating system, on this desk,
-                    at this resolution.
-                </p>
+                <br>
+                <div class="band-intro reveal">
+                    <p> メインフレームが人間を端末と規則の奥に隠した時代、企業が完全な制御を犠牲にして簡素さの幻想を売った世界で、オペレーティングシステムは真の避難所として生まれた——機械が完全にそれを使う者のものである場所、「正しいこと」が市場の規模より大切にされる場所。
+                        MITの初期ハッカーたちとホームブリュー・コンピュータ・クラブから、BSDとNetBSDのミニマリズム、坂村健のTRONの開放性、そしてトラヴィス・ガイゼルブレヒトの軽量カーネル（NewOS、Little Kernel）へと一本の線が続いている。時間と空間とハードウェアに対する完全な主権、悪魔的な保護も余分なコードも一切ない主権。
+                        だからこそGeek OSとリアルタイムシステムは、コンピュータを商品としてではなく創造の素材として愛する者たちの避難所であり続ける——ミニマリズムと移植性と精密な制御の真の文化を嗅げる場所、15〜20キロバイトのカーネルが今なお世界を支えられる場所。
+                        </p>
+                    <p class="en">
+                       In an era when mainframes relegated humans to the status of mere terminals governed by rigid rules—a world where corporations traded away total control to peddle an illusion of simplicity—the operating system emerged as a true sanctuary. It was a space where a machine belonged entirely to its user, and where "doing things the right way" held more value than the sheer scale of a market.
+                       A single thread connects the early hackers at MIT and the Homebrew Computer Club to the minimalism of BSD and NetBSD, the openness of Ken Sakamura’s TRON, and the lightweight kernels—NewOS and Little Kernel—crafted by Travis Geiselbrecht. It represents absolute sovereignty over time, space, and hardware—a sovereignty unencumbered by intrusive "protections" or superfluous code.
+                       This is why Geek OS and real-time systems remain a refuge for those who cherish the computer not as a mere commodity, but as a medium for creation—a place where one can still sense a genuine culture of minimalism, portability, and precise control; a place where a kernel of just 15 to 20 kilobytes can still sustain the world.
+                    </p>
+                </div>
             </div>
         </section>
 
@@ -1391,7 +1406,84 @@
                     </p>
                 </div>
 
-                <!-- 1. Editor -->
+                <!-- 1, 2, 3 — the mounting, exploring, and reading -->
+                <div class="plate-row reveal">
+
+
+                    <div class="cell">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/DriveSetup_Menu_Opened.png" width="750" height="548"
+                                    alt="ボリューム (Volumes) — ディスクメニューと区画操作、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>750 × 548 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">01 — Volumes / storage</p>
+                        <h4 class="jp-title">ボリューム (Volumes) <span class="stamp stamp-live">公開中</span></h4>
+                        <p> ボリュームは聴覚である。メディアが現れる以前に、外の世界の音を聞く窓がある
+                            POSIX の生デバイスを見つけ、MBR／GPT の区画表を初期化し、B-FS V1／V2 でフォーマットし、マウントとアンマウントをノンブロッキングで回す
+                            載せるという行為は、計算機が最初に耳を開くことである
+                            自らのストレージを机の上に示せないオペレーティング・システムには、何も載せる基盤がない。
+                        <p class="en">
+                            Volumes is hearing. Before the media emerge there is a window that hears the outer world.
+                            It finds POSIX raw devices, initializes MBR/GPT partition tables, formats B-FS V1/V2, and mounts and unmounts without blocking.
+                            To mount is to open the computer’s first ear.
+                            An operating system that cannot show its own storage has nothing to put media on.
+                        </p>
+                        <a class="entry" href="b-system/apps/Volumes.html">区画とフォーマットの仕様 →</a>
+                    </div>
+
+                    <div class="cell">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Cabinet_Menu_Opened.png" width="570" height="396"
+                                    alt="キャビネット (Cabinet) — 実身一覧とファイルメニュー、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>570 × 396 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">02 — Cabinet / filing</p>
+                        <h4 class="jp-title">キャビネット (Cabinet) <span class="stamp stamp-live">公開中</span></h4>
+                        <p> キャビネットは視覚である。階層に縛られずに実身と仮身を辿る窓がある
+                            双方向リンクの多重構造を机の上で見せ、属性インスペクタでレコードまで降る
+                            探るという行為は、ハイパーメディアのグラフそのものをディレクトリとして見ることに等しい
+                            自らのファイリングを机の上に示せないオペレーティング・システムには、何を探索する基盤もない。
+                        </p>
+                        <p class="en">
+                            Cabinet is seeing. There is a window that explores real bodies and virtual bodies unbound by hierarchy.
+                            It shows the multi-structure of bidirectional links on the desk and descends to the record in the attribute inspector.
+                            To explore is to see the hypermedia graph itself as the directory.
+                            An operating system that cannot show its own filing has nothing to explore.
+                        </p>
+                        <a class="entry" href="b-system/apps/Cabinet.html">実身・仮身の探索 →</a>
+                    </div>
+
+                    <div class="cell">
+                        <figure class="plate">
+                        <div class="field">
+                                <img src="b-system/img/screens/Browser_Menu_Opened.png" width="730" height="536"
+                                    alt="ブラウザ (Browser) — TAD 文書の閲覧とファイルメニュー、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption><span>730 × 536 · RGBA</span></figcaption>
+                        </figure>
+                        <p class="role">03 — Browser / TAD reader</p>
+                        <h4 class="jp-title">ブラウザ (Browser) <span class="stamp stamp-live">公開中</span></h4>
+                        <p> ブラウザは嗅覚である。TAD ハイパーテキストを読む窓がある
+                            ふせん移動と履歴スタックと埋め込み図形を、同じ文書モデルの上で描く
+                            読むという行為は、文書の匂いを嗅ぐことに等しい
+                            このページの仕様書をネイティブな TAD レコードとして読む閲覧器は、メディアが現れる以前の嗅覚である。
+                        </p>
+                        <p class="en">
+                            Browser is smelling. There is a window that reads TAD hypertext.
+                            It draws sticky-note movement, the history stack and embedded figures on the same document model.
+                            To read is to smell the semantics. The viewer that reads this site’s own
+                            specification pages as native TAD records is the sense of smell before the media emerge.
+                        </p>
+                        <a class="entry" href="b-system/apps/Browser.html">閲覧器の仕様 →</a>
+                    </div>
+
+                </div>
+
+                <!-- 4. Editor -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1450,7 +1542,7 @@
                     </div>
                 </div>
 
-                <!-- 2. Terminal -->
+                <!-- 5. Terminal -->
                 <div class="showcase flip reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1512,77 +1604,6 @@
                 </div>
 
 
-                <!-- 3, 4, 5 — the reading, filing and mounting row -->
-                <div class="plate-row reveal">
-                    <div class="cell">
-                        <figure class="plate">
-                            <div class="field">
-                                <img src="b-system/img/screens/Browser_Menu_Opened.png" width="730" height="536"
-                                    alt="ブラウザ (Browser) — TAD 文書の閲覧とファイルメニュー、実機フレームバッファから自動抽出">
-                            </div>
-                            <figcaption><span>730 × 536 · RGBA</span></figcaption>
-                        </figure>
-                        <p class="role">03 — Browser / TAD reader</p>
-                        <h4 class="jp-title">ブラウザ (Browser) <span class="stamp stamp-live">公開中</span></h4>
-                        <p> ブラウザは嗅覚である。TAD ハイパーテキストを読む窓がある
-                            ふせん移動と履歴スタックと埋め込み図形を、同じ文書モデルの上で描く
-                            読むという行為は、文書の匂いを嗅ぐことに等しい
-                            このページの仕様書をネイティブな TAD レコードとして読む閲覧器は、メディアが現れる以前の嗅覚である。
-                        </p>
-                        <p class="en">
-                            Browser is smelling. There is a window that reads TAD hypertext.
-                            It draws sticky-note movement, the history stack and embedded figures on the same document model.
-                            To read is to smell the semantics. The viewer that reads this site’s own
-                            specification pages as native TAD records is the sense of smell before the media emerge.
-                        </p>
-                        <a class="entry" href="b-system/apps/Browser.html">閲覧器の仕様 →</a>
-                    </div>
-                    <div class="cell">
-                        <figure class="plate">
-                            <div class="field">
-                                <img src="b-system/img/screens/Cabinet_Menu_Opened.png" width="570" height="396"
-                                    alt="キャビネット (Cabinet) — 実身一覧とファイルメニュー、実機フレームバッファから自動抽出">
-                            </div>
-                            <figcaption><span>570 × 396 · RGBA</span></figcaption>
-                        </figure>
-                        <p class="role">02 — Cabinet / filing</p>
-                        <h4 class="jp-title">キャビネット (Cabinet) <span class="stamp stamp-live">公開中</span></h4>
-                        <p> キャビネットは視覚である。階層に縛られずに実身と仮身を辿る窓がある
-                            双方向リンクの多重構造を机の上で見せ、属性インスペクタでレコードまで降る
-                            探るという行為は、ハイパーメディアのグラフそのものをディレクトリとして見ることに等しい
-                            自らのファイリングを机の上に示せないオペレーティング・システムには、何を探索する基盤もない。
-                        </p>
-                        <p class="en">
-                            Cabinet is seeing. There is a window that explores real bodies and virtual bodies unbound by hierarchy.
-                            It shows the multi-structure of bidirectional links on the desk and descends to the record in the attribute inspector.
-                            To explore is to see the hypermedia graph itself as the directory.
-                            An operating system that cannot show its own filing has nothing to explore.
-                        </p>
-                        <a class="entry" href="b-system/apps/Cabinet.html">実身・仮身の探索 →</a>
-                    </div>
-                    <div class="cell">
-                        <figure class="plate">
-                            <div class="field">
-                                <img src="b-system/img/screens/DriveSetup_Menu_Opened.png" width="750" height="548"
-                                    alt="ボリューム (Volumes) — ディスクメニューと区画操作、実機フレームバッファから自動抽出">
-                            </div>
-                            <figcaption><span>750 × 548 · RGBA</span></figcaption>
-                        </figure>
-                        <p class="role">01 — Volumes / storage</p>
-                        <h4 class="jp-title">ボリューム (Volumes) <span class="stamp stamp-live">公開中</span></h4>
-                        <p> ボリュームは聴覚である。メディアが現れる以前に、外の世界の音を聞く窓がある
-                            POSIX の生デバイスを見つけ、MBR／GPT の区画表を初期化し、B-FS V1／V2 でフォーマットし、マウントとアンマウントをノンブロッキングで回す
-                            載せるという行為は、計算機が最初に耳を開くことである
-                            自らのストレージを机の上に示せないオペレーティング・システムには、何も載せる基盤がない。
-                        <p class="en">
-                            Volumes is hearing. Before the media emerge there is a window that hears the outer world.
-                            It finds POSIX raw devices, initializes MBR/GPT partition tables, formats B-FS V1/V2, and mounts and unmounts without blocking.
-                            To mount is to open the computer’s first ear.
-                            An operating system that cannot show its own storage has nothing to put media on.
-                        </p>
-                        <a class="entry" href="b-system/apps/Volumes.html">区画とフォーマットの仕様 →</a>
-                    </div>
-                </div>
 
                 <!-- 6 — thinking -->
                 <div class="showcase flip reveal">
@@ -1649,10 +1670,11 @@
         <!-- ═══════════════════════════════════════════════════════════ -->
         <section id="clu">
             <div class="wrap">
+
                 <div class="band-head reveal">
                     <span class="band-index">02 / CLU</span>
                     <h2 class="jp-title">第二部：CLU アプリケーション</h2>
-                    <p class="band-eyebrow">Sokhatsky Commander Suite · CLU Commands</p>
+                    <p class="band-eyebrow">Sokhatsky Commander Suite · CLU Commands · Chokanji Pack</p>
                 </div>
 
                 <div class="band-intro reveal">
@@ -1666,7 +1688,7 @@
                     </p>
                 </div>
 
-                <!-- 6. Sokhatsky Commander suite -->
+                <!-- 7. Sokhatsky Commander suite -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1704,7 +1726,7 @@
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">06 — Suite / Sokhatsky Commander</p>
+                        <p class="role">07 — Sokhatsky Commander Suite</p>
                         <h3 class="jp-title">ファイル管理 (SC) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 キーボード駆動の左右二面パネルです。sc が実身を並べ、tv が多言語と禁則処理つきで文書を読み、be が hex と五つの命令体系の逆アセンブルを同じ窓に出します。純粋 C99・NASA/JPL Power of Ten 準拠・依存ゼロで、POSIX ホストには bin/sc と bin/tv のターゲットが立っています。
@@ -1728,7 +1750,7 @@
                     </div>
                 </div>
 
-                <!-- 7. CLU verbs -->
+                <!-- 8. CLU verbs -->
                 <div class="showcase flip reveal">
                     <div class="plate-column">
                         <figure class="spec-plate">
@@ -1745,7 +1767,7 @@ recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">07 — CLU / Command Line Utilities</p>
+                        <p class="role">08 — CLU / Command Line Utilities</p>
                         <h3 class="jp-title">CLU コマンド <span class="nw">(BTRON)</span> <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 実身／仮身のマルチレコードを直接駆動するネイティブのコマンド群です。二十の動詞が gterm の一列の dispatch から呼ばれ、各コマンドは将来、独立したワンショット ELF（型 9 の実行プログラムレコード RT_PROG）として /SYS/bin に置かれます。MIPS R5900、ARM32／64、x86-64、M68k で同じ決定論的な動きをねらう設計です。
@@ -1763,8 +1785,50 @@ recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
                         <a class="entry" href="b-system/apps/Commands.html">動詞の一覧と設計理由 →</a>
                     </div>
                 </div>
+
+                <!-- 9. Chokanji Pack -->
+                <div class="showcase reveal">
+
+                    <div class="plate-column">
+                        <figure class="spec-plate">
+<pre>gterm <b>shell_execute_cmd</b>  →  clu_verb(args, out, ud)
+
+  <b>cd ls fs stat info finfo</b>     traverse &amp; inspect
+  <b>tp mkf cp ln rm ren empf</b>     move &amp; refile
+  <b>apd chmod touch chtime</b>       attributes
+  <b>df sync quake</b>                volume · clock · launch
+
+apps   <em>clu_launch_app</em>  xmb | glgears | lilcu
+recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
+                            <figcaption>CLU — twenty verbs, one dispatch, zero ports</figcaption>
+                        </figure>
+                    </div>
+
+                    <div class="copy">
+                        <p class="role">09 — Chokanji B-right/V FS</p>
+                        <h3 class="jp-title">ファイル管理 (COW2) <span class="stamp stamp-live">公開中</span></h3>
+                        <p> Japanese text about ./src/chokanji/ applications.
+                        </p>
+                        <ul class="spec">
+                            <li><strong>sc</strong><span><code>sc.c</code>、<code>files.c</code>、<code>input.c</code>、<code>menus.c</code> の二面パネル</span></li>
+                            <li><strong>tv</strong><span>CJK 全角とチベット合字、禁則改行、2048 行のバッファ</span></li>
+                            <li><strong>be</strong><span>x86-64 / AArch64 / AArch32 / RISC-V / PowerPC の disassembler</span></li>
+                            <li><strong>sh</strong><span><code>src/clu/sh/sh.c</code> — まだ机のリンクに載らない単体出典</span></li>
+                        </ul>
+                        <ul class="missing">
+                            <li>図版は実行中の端末窓からそのまま採ったものです</li>
+                            <li>窓の内側の termios 組み込みは、clu 側がまだ未提供と申告しています</li>
+                        </ul>
+                        <p class="en">
+                        <p> English text about ./src/chokanji/ applications.
+                        </p>
+                        <a class="entry" href="b-system/apps/Commander.html">ファイル管理の仕様 →</a>
+                    </div>
+
+                </div>
             </div>
         </section>
+
 
         <!-- ═══════════════════════════════════════════════════════════ -->
         <!-- PART 3: AUTHORING APPLICATIONS                             -->
@@ -1772,9 +1836,9 @@ recs   <b>RT_PROG</b> = 9   <b>OBJ_EXEC</b> 0x8000   /SYS/bin/*.elf</pre>
         <section id="applications">
             <div class="wrap">
                 <div class="band-head reveal">
-                    <span class="band-index">03 / Authoring</span>
+                    <span class="band-index">03 / Depths</span>
                     <h2 class="jp-title">第三部：創作アプリケーション</h2>
-                    <p class="band-eyebrow">DAW · DPS · 3DS · NLE</p>
+                    <p class="band-eyebrow">DPS · NLE · 3DS · DAW</p>
                 </div>
 
                 <div class="band-intro reveal">
@@ -1791,7 +1855,87 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                     </p>
                 </div>
 
-                <!-- 8. Orchestra — DAW -->
+                <!-- 7. Clarity — DPS -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Clarity_Menu_Opened.png" width="910" height="656"
+                                    alt="電子帳票 (Clarity) — メニュー展開と本文、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Clarity</b> — File menu opened</span>
+                                <span>910 × 656 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">07 — DPS / Desktop Publishing System</p>
+                        <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+電子帳票は、まだ何も書かれていない一枚の紙である。頁の幾何そのものが正しさの単位となり、和式の伝統判型十四種とチベット横長ペーチャ経典が同じエンジンの上に並ぶ。形が現れる前の、最も澄んだ窓。原稿リンクから印刷所入稿用 PDF までを一手順で通す。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>和式伝統判型 14 種</strong><span>四六判の縦書き段組まで仕様として持つ</span></li>
+                            <li><strong>チベット Pecha 組版</strong><span>560 × 110 mm の横長、朱黒二重枠と左余白表題</span></li>
+                            <li><strong>学術 PostScript 論文</strong><span>数式混植と査読注釈の自動連動</span></li>
+                            <li><strong>出力</strong><span>木版風 PDF / EPS、四六判・袋綴じ PDF</span></li>
+                        </ul>
+                        <p class="en">
+                            Clarity is the blank sheet before any mark is made. Page geometry is the unit of correctness;
+                            fourteen traditional Japanese formats and Tibetan pecha sit on the same engine. The purest
+                            window, before form arises. From manuscript link to press-ready PDF in a single sequence.
+                        </p>
+                        <a class="entry" href="b-system/apps/Clarity.html">機能仕様と内部構造 →</a>
+                    </div>
+                </div>
+
+                <!-- 8 & 9 — announced, no screenshots -->
+                <div class="announced reveal">
+                    <div class="announced-card">
+                        <p class="role">08 — NLE / Non-Linear Editor</p>
+                        <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+カットは、時間の流れを等しい瞬間の列として扱う。すべてのフレームは、まだ区別される前の同じ重みを持つ。切るという行為は、まず平等を見ることから始まる。届け前であるが、消費する側の図面はすでに書かれている。B-Video は表示経路と再生契約を、B-Media は平面ごとの予算を定める。
+                        </p>
+                        <ul class="missing">
+                            <li>床の仕様：B-Video（表示経路・バッファ・再生契約）</li>
+                            <li>床の仕様：B-Media（抽象パイプラインと平面予算）</li>
+                            <li>音の席は Orchestra が先に埋めている</li>
+                            <li>このページのどの画像もカットの画面ではない</li>
+                        </ul>
+                        <p class="en">
+                            Cut treats the stream of time as a sequence of equal moments. Every frame carries the same
+                            weight before distinction. To cut is first to see equality. Announced, not yet shipped; the
+                            contracts it will consume — B-Video for display path and playback, B-Media for per-plane
+                            budgets — are already written.
+                        </p>
+                        <a class="entry" href="b-media/video.html">B-Video の表示契約 →</a>
+                        <a class="entry" href="b-media/index.html">B-Media の床 →</a>
+                    </div>
+                    <div class="announced-card">
+                        <p class="role">09 — 3DS / 3D System</p>
+                        <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
+                        <p>
+スタジオは、形が立ち上がる場所である。ひとつの空間の中で、それぞれの物体が他と異なるものとして現れ、見分けられる。区別そのものが創造の行為となる。まだお届けしていませんが、床はすでに動いています。B-GL は TinyGL と VirtIO-GPU（virgl）を本番バックエンドに持ち、ローポリのシーングラフは Lil Cu 64 と MSX Geo3D が毎日走らせています。
+                        </p>
+                        <ul class="missing">
+                            <li>本番バックエンド 2：TinyGL、VirtIO-GPU (virgl)</li>
+                            <li>ハードウェアバックエンド 4 は別枠で宣言済み</li>
+                            <li>既存の実装例：デモシーン、MSX Geo3D</li>
+                            <li>アプリの窓はまだない — 図面は基盤側</li>
+                        </ul>
+                        <p class="en">
+                            Studio is the place where form arises. Within a single space each object appears as distinct
+                            from the others and is discerned. Distinction itself becomes the act of creation. Announced,
+                            not yet shipped; the floor already moves. B-GL holds TinyGL and VirtIO-GPU as production
+                            backends, exercised daily by the demoscene and by MSX Geo3D.
+                        </p>
+                        <a class="entry" href="b-media/gl.html">基盤 B-GL の仕様 →</a>
+                    </div>
+                </div>
+
+                <!-- 10. Orchestra — DAW -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -1829,7 +1973,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">08 — DAW / Digital Audio Workstation</p>
+                        <p class="role">10 — DAW / Digital Audio Workstation</p>
                         <h3 class="jp-title">管弦楽 (Orchestra) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 管弦楽は、音が実際に鳴り、すべてを貫いて消える場所である。手書きの合成手続きだけが残り、SoundFont もサンプルも用いない。遅延は窓の枚数ではなくデバイス側の待ち行列が決める。成したことが、そのまま残滓なく消えていく。窓は八つ、マニュアルは第十二章。
@@ -1850,85 +1994,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                     </div>
                 </div>
 
-                <!-- 9. Clarity — DPS -->
-                <div class="showcase flip reveal">
-                    <div class="plate-column">
-                        <figure class="plate">
-                            <div class="field">
-                                <img src="b-system/img/screens/Clarity_Menu_Opened.png" width="910" height="656"
-                                    alt="電子帳票 (Clarity) — メニュー展開と本文、実機フレームバッファから自動抽出">
-                            </div>
-                            <figcaption>
-                                <span><b>Clarity</b> — File menu opened</span>
-                                <span>910 × 656 · RGBA</span>
-                            </figcaption>
-                        </figure>
-                    </div>
-                    <div class="copy">
-                        <p class="role">09 — DPS / Desktop Publishing System</p>
-                        <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
-                        <p>
-電子帳票は、まだ何も書かれていない一枚の紙である。頁の幾何そのものが正しさの単位となり、和式の伝統判型十四種とチベット横長ペーチャ経典が同じエンジンの上に並ぶ。形が現れる前の、最も澄んだ窓。原稿リンクから印刷所入稿用 PDF までを一手順で通す。
-                        </p>
-                        <ul class="spec">
-                            <li><strong>和式伝統判型 14 種</strong><span>四六判の縦書き段組まで仕様として持つ</span></li>
-                            <li><strong>チベット Pecha 組版</strong><span>560 × 110 mm の横長、朱黒二重枠と左余白表題</span></li>
-                            <li><strong>学術 PostScript 論文</strong><span>数式混植と査読注釈の自動連動</span></li>
-                            <li><strong>出力</strong><span>木版風 PDF / EPS、四六判・袋綴じ PDF</span></li>
-                        </ul>
-                        <p class="en">
-                            Clarity is the blank sheet before any mark is made. Page geometry is the unit of correctness;
-                            fourteen traditional Japanese formats and Tibetan pecha sit on the same engine. The purest
-                            window, before form arises. From manuscript link to press-ready PDF in a single sequence.
-                        </p>
-                        <a class="entry" href="b-system/apps/Clarity.html">機能仕様と内部構造 →</a>
-                    </div>
-                </div>
 
-                <!-- 10 & 11 — announced, no screenshots -->
-                <div class="announced reveal">
-                    <div class="announced-card">
-                        <p class="role">10 — 3DS / 3D System</p>
-                        <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
-                        <p>
-スタジオは、形が立ち上がる場所である。ひとつの空間の中で、それぞれの物体が他と異なるものとして現れ、見分けられる。区別そのものが創造の行為となる。まだお届けしていませんが、床はすでに動いています。B-GL は TinyGL と VirtIO-GPU（virgl）を本番バックエンドに持ち、ローポリのシーングラフは Lil Cu 64 と MSX Geo3D が毎日走らせています。
-                        </p>
-                        <ul class="missing">
-                            <li>本番バックエンド 2：TinyGL、VirtIO-GPU (virgl)</li>
-                            <li>ハードウェアバックエンド 4 は別枠で宣言済み</li>
-                            <li>既存の実装例：デモシーン、MSX Geo3D</li>
-                            <li>アプリの窓はまだない — 図面は基盤側</li>
-                        </ul>
-                        <p class="en">
-                            Studio is the place where form arises. Within a single space each object appears as distinct
-                            from the others and is discerned. Distinction itself becomes the act of creation. Announced,
-                            not yet shipped; the floor already moves. B-GL holds TinyGL and VirtIO-GPU as production
-                            backends, exercised daily by the demoscene and by MSX Geo3D.
-                        </p>
-                        <a class="entry" href="b-media/gl.html">基盤 B-GL の仕様 →</a>
-                    </div>
-                    <div class="announced-card">
-                        <p class="role">11 — NLE / Non-Linear Editor</p>
-                        <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
-                        <p>
-カットは、時間の流れを等しい瞬間の列として扱う。すべてのフレームは、まだ区別される前の同じ重みを持つ。切るという行為は、まず平等を見ることから始まる。届け前であるが、消費する側の図面はすでに書かれている。B-Video は表示経路と再生契約を、B-Media は平面ごとの予算を定める。
-                        </p>
-                        <ul class="missing">
-                            <li>床の仕様：B-Video（表示経路・バッファ・再生契約）</li>
-                            <li>床の仕様：B-Media（抽象パイプラインと平面予算）</li>
-                            <li>音の席は Orchestra が先に埋めている</li>
-                            <li>このページのどの画像もカットの画面ではない</li>
-                        </ul>
-                        <p class="en">
-                            Cut treats the stream of time as a sequence of equal moments. Every frame carries the same
-                            weight before distinction. To cut is first to see equality. Announced, not yet shipped; the
-                            contracts it will consume — B-Video for display path and playback, B-Media for per-plane
-                            budgets — are already written.
-                        </p>
-                        <a class="entry" href="b-media/video.html">B-Video の表示契約 →</a>
-                        <a class="entry" href="b-media/index.html">B-Media の床 →</a>
-                    </div>
-                </div>
             </div>
         </section>
 
@@ -1940,7 +2006,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                 <div class="band-head reveal">
                     <span class="band-index">04 / Playing</span>
                     <h2 class="jp-title">第四部：クロスメディアバーとゲームの機</h2>
-                    <p class="band-eyebrow">XMB · B-Game SDK · Quake · MSX · Iris · Genesis · Amiga · Ares</p>
+                    <p class="band-eyebrow">B-Game SDK · XMB · Quake · MSX · Iris · Genesis · Amiga · Ares</p>
                 </div>
 
                 <div class="band-intro reveal">
@@ -1953,6 +2019,41 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                         emulates today, one is the operating system booting on real console silicon, and three are
                         placeholders with a selected candidates.
                     </p>
+                </div>
+
+                <!-- 11. Game SDK -->
+                <div class="showcase flip reveal">
+                    <div class="plate-column">
+                        <figure class="plate">
+                            <div class="field">
+                                <img src="b-system/img/screens/Demoscene_Application.png" width="730" height="576"
+                                    alt="デモシーン・Game SDK (Lil Cu 64) — 実行画面、実機フレームバッファから自動抽出">
+                            </div>
+                            <figcaption>
+                                <span><b>Lil Cu 64</b> — Demoscene runtime</span>
+                                <span>730 × 576 · RGBA</span>
+                            </figcaption>
+                        </figure>
+                    </div>
+                    <div class="copy">
+                        <p class="role">11 — B-Game SDK / B-Sound DSP</p>
+                        <h3 class="jp-title"><span class="nw">リル・キューブ 64</span> (SDK) <span class="stamp stamp-live">公開中</span></h3>
+                        <p>
+ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーングラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓の中で時間を共有しています。創作側と遊び側が出会うのはここです。
+                        </p>
+                        <ul class="spec">
+                            <li><strong>音色の使い方</strong><span>23 のシム音源を呼ぶ</span></li>
+                            <li><strong>幾何</strong><span>ローポリ + シーングラフの階層</span></li>
+                            <li><strong>律</strong><span>音律・MIDI 周波数・プログラム表</span></li>
+                            <li><strong>振る舞い</strong><span>空間音響・トラッカー調時・適応型機構</span></li>
+                        </ul>
+                        <p class="en">
+                            The SDK is where the two families meet: the hand-written synthesis procedures that Orchestra
+                            budgets for the stage are the same palette a game calls.
+                        </p>
+                        <a class="entry" href="b-system/apps/SDK.html">Game SDK の仕様 →</a>
+                        <a class="entry" href="b-media/sound.html">B-Sound 合成器 →</a>
+                    </div>
                 </div>
 
                 <!-- 12. XMB -->
@@ -1988,42 +2089,8 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                     </div>
                 </div>
 
-                <!-- 13. Game SDK -->
-                <div class="showcase flip reveal">
-                    <div class="plate-column">
-                        <figure class="plate">
-                            <div class="field">
-                                <img src="b-system/img/screens/Demoscene_Application.png" width="730" height="576"
-                                    alt="デモシーン・Game SDK (Lil Cu 64) — 実行画面、実機フレームバッファから自動抽出">
-                            </div>
-                            <figcaption>
-                                <span><b>Lil Cu 64</b> — Demoscene runtime</span>
-                                <span>730 × 576 · RGBA</span>
-                            </figcaption>
-                        </figure>
-                    </div>
-                    <div class="copy">
-                        <p class="role">13 — B-Game SDK / B-Sound DSP</p>
-                        <h3 class="jp-title"><span class="nw">リル・キューブ 64</span> (SDK) <span class="stamp stamp-live">公開中</span></h3>
-                        <p>
-ゲームをつくるための SDK と、その上で回っているデモシーンです。ローポリの 3D 幾何とシーングラフ、運動学の状態機械、二十三種のプロシージャル音源パレットと B-Sound の DSP が、同じ窓の中で時間を共有しています。創作側と遊び側が出会うのはここです。
-                        </p>
-                        <ul class="spec">
-                            <li><strong>音色の使い方</strong><span>23 のシム音源を呼ぶ</span></li>
-                            <li><strong>幾何</strong><span>ローポリ + シーングラフの階層</span></li>
-                            <li><strong>律</strong><span>音律・MIDI 周波数・プログラム表</span></li>
-                            <li><strong>振る舞い</strong><span>空間音響・トラッカー調時・適応型機構</span></li>
-                        </ul>
-                        <p class="en">
-                            The SDK is where the two families meet: the hand-written synthesis procedures that Orchestra
-                            budgets for the stage are the same palette a game calls.
-                        </p>
-                        <a class="entry" href="b-system/apps/SDK.html">Game SDK の仕様 →</a>
-                        <a class="entry" href="b-media/sound.html">B-Sound 合成器 →</a>
-                    </div>
-                </div>
 
-                <!-- 14. Quake -->
+                <!-- 13. Quake -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="plate">
@@ -2061,7 +2128,7 @@ PlayStation 2 の実機そのものに起動する席です。メガドライブ
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">14 — Light client / Episode 1</p>
+                        <p class="role">13 — Quake Light / Episode 1</p>
                         <h3 class="jp-title"><span class="nw">Quake Light Sport</span> <span class="stamp stamp-live">公開中</span></h3>
                         <p>
 id Software の Quake 1 に対して、クリーンルームで書き直した C99 の軽量クライアントです。約五千行をエンジン本体、VirtIO-GPU レンダラ、QuakeC のバイトコード VM、BSP ワールドの四つに分け、共有データの pak0.pak はそのまま読みます。下の図版はすべて spawn 視点から <code>make quake-screens</code> が自動で採ったものです。
@@ -2080,7 +2147,7 @@ id Software の Quake 1 に対して、クリーンルームで書き直した C
                     </div>
                 </div>
 
-                <!-- 15. MSX -->
+                <!-- 14. MSX -->
                 <div class="showcase flip reveal">
                     <div class="plate-column">
                         <div class="diptych">
@@ -2101,7 +2168,7 @@ id Software の Quake 1 に対して、クリーンルームで書き直した C
                         </div>
                     </div>
                     <div class="copy">
-                        <p class="role">15 — Machine / MSX1 … turboR</p>
+                        <p class="role">14 — MSX / turboR</p>
                         <h3 class="jp-title">ゲームシステム (MSX) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
                             カートリッジ実行環境。CPU、VDP、音源、スロット、キーボード、ジオメトリ演算を別個の C
@@ -2205,7 +2272,7 @@ id Software の Quake 1 に対して、クリーンルームで書き直した C
                     </div>
                 </div>
 
-                <!-- 16. Iris (PS2) -->
+                <!-- 15. Iris (PS2) -->
                 <div class="showcase reveal">
                     <div class="plate-column">
                         <figure class="spec-plate">
@@ -2226,7 +2293,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         </figure>
                     </div>
                     <div class="copy">
-                        <p class="role">16 — Console / native target</p>
+                        <p class="role">15 — Console / native target</p>
                         <h3 class="jp-title">イリス <span class="nw">(Iris&nbsp;PS2)</span> <span class="stamp stamp-silicon">実機稼働</span></h3>
                         <p>
                             Iris はエミュレータではありません。B-System が PlayStation 2 の実機そのものに起動します。
@@ -2248,10 +2315,10 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     </div>
                 </div>
 
-                <!-- 17, 18, 19 — reserved seats -->
+                <!-- 16, 17, 18 — reserved seats -->
                 <div class="announced reveal">
                     <div class="announced-card">
-                        <p class="role">17 — Machine / announced</p>
+                        <p class="role">16 — Machine / announced</p>
                         <h4 class="jp-title">メガドライブ (Genesis) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 席だけの宣言です。<code>src/emulators/sega/</code> はツリーにありますが、中には空の目印だけが置いてあります。68000 のコアも、VDP の再現も、まだ書かれていません。
@@ -2263,7 +2330,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         <p class="en">Genesis is a reserved seat. No core, no frame, no screenshot.</p>
                     </div>
                     <div class="announced-card">
-                        <p class="role">18 — Machine / announced</p>
+                        <p class="role">17 — Machine / announced</p>
                         <h4 class="jp-title">アミーガ (Amiga) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 同じく席だけです。<code>src/emulators/amiga/</code> は空の目印を持つプレースホルダです。なお 68000 系の CPU そのものはカーネルの側に存在します。<code>src/cores/core_m68k.c</code>
@@ -2280,7 +2347,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                         </p>
                     </div>
                     <div class="announced-card">
-                        <p class="role">19 — Machine / plan only</p>
+                        <p class="role">18 — Machine / plan only</p>
                         <h4 class="jp-title">アレス <span class="nw">(Ares&nbsp;N64)</span> <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
 計画段階の名前です。ツリーには何もありません。B-GL のロードマップが四つのハードウェアバックエンドを掲げるなかで、N64 はその訪問先として名前を残しています。
@@ -2321,7 +2388,6 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                             Tickless mode in NuttX is not a faster clock. It is the choice to stop the strikes and keep a scale of 100 microseconds, 100 × 1&nbsp;000 = 100&nbsp;000 nanoseconds. B-System never starts those strikes, so the figure placed beside them is the contract on the interrupt itself: the handler must return within 50 microseconds, 50 × 1&nbsp;000 = 50&nbsp;000 nanoseconds, half the tickless scale. That 50&nbsp;000 is a ceiling. The INPUT period and the ISR budget below are the same two numbers. The first two rows only set them next to the clocks they stand in for.
                     </p>
                 </div> <br>
-
 
                 <figure class="plate reveal plate-follow">
                     <div class="field paramita-field">
@@ -2423,12 +2489,12 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
 
                 <div class="band-intro follow reveal">
                     <p>
-一から六は計算機の六感。七から十は四つの深さ — まだ何もない紙、等しい瞬間の列、立ち上がる形、そしてすべてを貫く音。机は一つであり、道も一つである。
+一から六は計算機の六感。七から十は四つの深さ — まだ何もない紙、等しい瞬間の列、立ち上がる形、そしてすべてを貫く音。
                     </p>
                     <p class="en">
                         One through six are the six senses of the machine. Seven through ten are the four depths —
                         the blank sheet, the sequence of equal moments, the arising of form, and the sound that
-                        pervades and vanishes. One desk, one path.
+                        pervades and vanishes.
                     </p>
                 </div>
             </div>
@@ -2440,10 +2506,10 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                 <div class="band-head reveal">
                     <span class="band-index">07 / Vow</span>
                     <h2 class="jp-title">菩萨<h2>
-                    <p class="band-eyebrow">Bodhisattva</p>
+                    <p class="band-eyebrow">Bodhisattva · EULA</p>
                 </div>
                 <p class="reveal"> このシステムは、純粋な心と完璧な倫理観を持つ人々の利用を想定しています。</p>
-                <p class="en reveal">This system is intended for use by people with pure hearts and perfect ethics.</p>
+                <p class="en reveal">This system is intended for use by people with pure hearts and perfect ethics. See <a href="https://5ht.co/license/" class="entry-simple">DHARMA</a> license.</p>
                 <div class="closing-entries reveal">
                     <a class="entry" href="b-system/apps/Commander.html">Commander →</a>
                     <a class="entry" href="b-system/apps/XMB.html">XMB →</a>

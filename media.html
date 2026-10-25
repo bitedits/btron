@@ -1027,28 +1027,39 @@
         }
 
         /* ── Path plate (ten perfections) ─────────────────────────────────── */
-        #paramita .plate .field {
+        #paramita .plate .field,
+        .plate .field.paramita-field {
             padding: 0;
             border-bottom: 0;
             background: var(--plate);
         }
-        #paramita .plate .field::after {
+        #paramita .plate .field::after,
+        .plate .field.paramita-field::after {
             display: none;
         }
-        #paramita .spec {
+        #paramita .spec,
+        .plate .field.paramita-field .spec {
             margin: 0;
             border-top: 0;
             width: 100%;
         }
-        #paramita .spec li {
+        #paramita .spec li,
+        .plate .field.paramita-field .spec li {
             padding: 0.75rem clamp(1.2rem, 2.5vw, 1.8rem);
+            /* first : second = 1 : φ (not) 33.3% / 66.6% */
+            grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
         }
-        #paramita .spec li:first-child {
+        #paramita .spec li:first-child,
+        .plate .field.paramita-field .spec li:first-child {
             padding-top: 1.1rem;
         }
-        #paramita .spec li:last-child {
+        #paramita .spec li:last-child,
+        .plate .field.paramita-field .spec li:last-child {
             border-bottom: 0;
             padding-bottom: 1.1rem;
+        }
+        .plate-follow {
+            margin-top: clamp(1.4rem, 3vw, 2rem);
         }
         #paramita .band-intro.follow {
             margin-top: clamp(2.4rem, 6vw, 4rem);
@@ -1225,7 +1236,9 @@
                 gap: 0.7rem;
             }
 
-            .spec li {
+            .spec li,
+            #paramita .spec li,
+            .plate .field.paramita-field .spec li {
                 grid-template-columns: minmax(0, 1fr);
                 gap: 0.15rem;
             }
@@ -2291,126 +2304,46 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     </p>
                 </div>
 
-                <div class="table-grid two reveal">
-                    <figure class="plate plate-table">
-                        <div class="field">
-                            <table class="tech-table">
-                                <thead>
-                                    <tr>
-                                        <th>Parameter</th>
-                                        <th>B-System</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td class="dim">Sample rates</td>
-                                        <td class="num">48000 · 44100 Hz</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Host period</td>
-                                        <td class="num">1024 frames</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Render quantum</td>
-                                        <td class="num">Q = 32</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">UI plane budget</td>
-                                        <td class="num">8333 µs / 4000 µs</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">INPUT plane budget</td>
-                                        <td class="num">1000 µs / 500 µs</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Audio path</td>
-                                        <td class="win">Pure waveform · DSP SDK · no samples</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Session file</td>
-                                        <td class="num">73&nbsp;408 bytes fixed</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Sound cores in tree</td>
-                                        <td>MSX PSG/SCC/OPLL/Y8950 · B-Sound · 68000 path</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Assurance</td>
-                                        <td class="win">NASA/JPL Power of Ten · Coq InterCore · zero heap after boot</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Composition</td>
-                                        <td class="num">5 system + 2 CLU + 4 authoring + 8 playing = 19</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <figcaption>
-                            <span><b>Audio &amp; plane constants</b></span>
-                            <span>Readable in sources</span>
-                        </figcaption>
-                    </figure>
+                <figure class="plate reveal">
+                    <div class="field paramita-field">
+                        <ul class="spec">
+                            <li><strong>Sample rates</strong><span>48000 · 44100 Hz</span></li>
+                            <li><strong>Host period</strong><span>1024 frames</span></li>
+                            <li><strong>Render quantum</strong><span>Q = 32</span></li>
+                            <li><strong>UI plane</strong><span>ASYNC_UI_PERIOD_US 8333 → 8&nbsp;333&nbsp;000&nbsp;ns · ASYNC_UI_BUDGET_US 4000 → 4&nbsp;000&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>INPUT plane</strong><span>ASYNC_INPUT_PERIOD_US 1000 → 1&nbsp;000&nbsp;000&nbsp;ns · ASYNC_INPUT_BUDGET_US 500 → 500&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>ISR budget</strong><span>ASYNC_ISR_BUDGET_US 50 → 50&nbsp;000&nbsp;ns · TRB 32 · mouse 8 · HID 16</span></li>
+                            <li><strong>Audio path</strong><span>Pure waveform · DSP SDK · no samples</span></li>
+                            <li><strong>Session file</strong><span>73 408 bytes fixed</span></li>
+                            <li><strong>Sound cores</strong><span>MSX PSG/SCC/OPLL/Y8950 · B-Sound · 68000 path</span></li>
+                            <li><strong>Assurance</strong><span>NASA/JPL Power of Ten · Coq InterCore · zero heap after boot</span></li>
+                            <li><strong>Composition</strong><span>5 system + 2 CLU + 4 authoring + 8 playing = 19</span></li>
+                        </ul>
+                    </div>
+                    <figcaption>
+                        <span><b>Audio &amp; plane constants</b></span>
+                        <span>Readable in sources</span>
+                    </figcaption>
+                </figure>
 
-                    <figure class="plate plate-table">
-                        <div class="field">
-                            <table class="tech-table">
-                                <thead>
-                                    <tr>
-                                        <th>Contract</th>
-                                        <th>B-System</th>
-                                        <th>Typical NuttX media build</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td class="dim">Scheduling</td>
-                                        <td class="win">Hard per-plane µs budgets from first kernel line</td>
-                                        <td>Priority + timeslice; budgets often policy, not kernel invariant</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Heap after boot</td>
-                                        <td class="win">Zero — all static / pre-baked</td>
-                                        <td>Dynamic alloc common in drivers &amp; media stacks</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">IPC / queues</td>
-                                        <td class="win">InterCore Nexus: non-blocking zero-copy CAS star, Coq-closed</td>
-                                        <td>POSIX mq / pipes; locks &amp; priority inheritance</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">IRQ model</td>
-                                        <td class="win">Deterministic; interrupt work bounded under 5&nbsp;µs class on Tier&nbsp;1</td>
-                                        <td>ISR + work queue; bound depends on board port</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">MMIO / drivers</td>
-                                        <td class="win">Same C99 path on PC-98 → Pi → PS2 → UEFI; no port layer</td>
-                                        <td>Board-specific Kconfig + driver trees per SoC</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Interconnect</td>
-                                        <td class="win">VirtIO + native silicon (PS2 GS/VU, etc.) under one window contract</td>
-                                        <td>PCIe / bus drivers vary by vendor tree</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Audio synthesis</td>
-                                        <td class="win">Hand-written waveform + extensible DSP SDK (powers MSX cores today)</td>
-                                        <td>Usually external codec + buffered PCM; synthesis not in kernel contract</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="dim">Formal surface</td>
-                                        <td class="win">602 closed Coq judgements, zero axioms on Nexus</td>
-                                        <td>No public kernel-level formalization of IPC fabric</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <figcaption>
-                            <span><b>B-System · NuttX</b> — scheduling, MMIO, IRQ, fabric</span>
-                            <span>For media RTOS evaluation</span>
-                        </figcaption>
-                    </figure>
-                </div>
+                <figure class="plate reveal plate-follow">
+                    <div class="field paramita-field">
+                        <ul class="spec">
+                            <li><strong>Tick / resolution</strong><span>NuttX sched/Kconfig: USEC_PER_TICK default 10000 → 10&nbsp;000&nbsp;000&nbsp;ns (100&nbsp;Hz) without tickless; default 100 → 100&nbsp;000&nbsp;ns with SCHED_TICKLESS. RR_INTERVAL default 0&nbsp;ms</span></li>
+                            <li><strong>INPUT plane</strong><span>B-System async_rt.h: period 1&nbsp;000&nbsp;000&nbsp;ns, budget 500&nbsp;000&nbsp;ns. NuttX: no media-plane period or budget constant</span></li>
+                            <li><strong>UI plane</strong><span>B-System async_rt.h: period 8&nbsp;333&nbsp;000&nbsp;ns, budget 4&nbsp;000&nbsp;000&nbsp;ns. NuttX: no presentation-plane constant</span></li>
+                            <li><strong>ISR work bound</strong><span>B-System ASYNC_ISR_BUDGET_US = 50 → 50&nbsp;000&nbsp;ns; TRB 32, mouse 8, HID 16. NuttX: no ISR drain budget</span></li>
+                            <li><strong>Heap after boot</strong><span>B-System: zero after init (NASA/JPL Power of Ten). NuttX: kmm_malloc remains available</span></li>
+                            <li><strong>IPC fabric</strong><span>B-System: InterCore Nexus, 602 closed Coq judgements, 0 axioms. NuttX: POSIX mq / pipes / semaphores</span></li>
+                            <li><strong>Audio synthesis</strong><span>B-System: waveform DSP SDK in-tree (MSX PSG/SCC/OPLL). NuttX: no synthesis contract</span></li>
+                            <li><strong>MMIO / drivers</strong><span>B-System: one C99 path. NuttX: per-board Kconfig trees</span></li>
+                        </ul>
+                    </div>
+                    <figcaption>
+                        <span><b>B-System · NuttX</b> — ns budgets from async_rt.h vs CONFIG_USEC_PER_TICK</span>
+                        <span>Sources: btron.pro/b-media · nuttx.apache.org</span>
+                    </figcaption>
+                </figure>
 
                 <div class="foundation-marks reveal">
                     <a class="entry" href="b-media/index.html">B-Media：パイプラインと予算 →</a>

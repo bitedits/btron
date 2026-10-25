@@ -1046,8 +1046,8 @@
         #paramita .spec li,
         .plate .field.paramita-field .spec li {
             padding: 0.75rem clamp(1.2rem, 2.5vw, 1.8rem);
-            /* first : second = 1 : φ (not) 33.3% / 66.6% */
-            grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+            /* first : second = 1 : φ  →  38.2% / 61.8% */
+            grid-template-columns: minmax(0, 1fr) minmax(0, 2.5fr); // 1.618fr);
         }
         #paramita .spec li:first-child,
         .plate .field.paramita-field .spec li:first-child {
@@ -1058,8 +1058,28 @@
             border-bottom: 0;
             padding-bottom: 1.1rem;
         }
-        .plate-follow {
-            margin-top: clamp(1.4rem, 3vw, 2rem);
+        .plate .field.paramita-field .spec.vs li {
+            grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+            align-items: baseline;
+        }
+        .spec.vs .vs-h {
+            font-family: var(--mono-font);
+            font-size: 0.68rem;
+            font-weight: 500;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink);
+        }
+        .spec.vs .n {
+            font-family: var(--mono-font);
+            font-size: 0.78rem;
+            font-variant-numeric: tabular-nums;
+            color: var(--ink);
+        }
+        .spec.vs .miss {
+            font-family: var(--mono-font);
+            font-size: 0.78rem;
+            color: var(--ink-3);
         }
         #paramita .band-intro.follow {
             margin-top: clamp(2.4rem, 6vw, 4rem);
@@ -1241,6 +1261,10 @@
             .plate .field.paramita-field .spec li {
                 grid-template-columns: minmax(0, 1fr);
                 gap: 0.15rem;
+            }
+            .plate .field.paramita-field .spec.vs li {
+                grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
+                gap: 0.45rem;
             }
 
             .strip {
@@ -2328,15 +2352,21 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
 
                 <figure class="plate reveal plate-follow">
                     <div class="field paramita-field">
-                        <ul class="spec">
-                            <li><strong>Tick / resolution</strong><span>NuttX sched/Kconfig: USEC_PER_TICK default 10000 → 10&nbsp;000&nbsp;000&nbsp;ns (100&nbsp;Hz) without tickless; default 100 → 100&nbsp;000&nbsp;ns with SCHED_TICKLESS. RR_INTERVAL default 0&nbsp;ms</span></li>
-                            <li><strong>INPUT plane</strong><span>B-System async_rt.h: period 1&nbsp;000&nbsp;000&nbsp;ns, budget 500&nbsp;000&nbsp;ns. NuttX: no media-plane period or budget constant</span></li>
-                            <li><strong>UI plane</strong><span>B-System async_rt.h: period 8&nbsp;333&nbsp;000&nbsp;ns, budget 4&nbsp;000&nbsp;000&nbsp;ns. NuttX: no presentation-plane constant</span></li>
-                            <li><strong>ISR work bound</strong><span>B-System ASYNC_ISR_BUDGET_US = 50 → 50&nbsp;000&nbsp;ns; TRB 32, mouse 8, HID 16. NuttX: no ISR drain budget</span></li>
-                            <li><strong>Heap after boot</strong><span>B-System: zero after init (NASA/JPL Power of Ten). NuttX: kmm_malloc remains available</span></li>
-                            <li><strong>IPC fabric</strong><span>B-System: InterCore Nexus, 602 closed Coq judgements, 0 axioms. NuttX: POSIX mq / pipes / semaphores</span></li>
-                            <li><strong>Audio synthesis</strong><span>B-System: waveform DSP SDK in-tree (MSX PSG/SCC/OPLL). NuttX: no synthesis contract</span></li>
-                            <li><strong>MMIO / drivers</strong><span>B-System: one C99 path. NuttX: per-board Kconfig trees</span></li>
+                        <ul class="spec vs">
+                            <li><strong class="vs-h">Contract</strong><span class="vs-h">B-System</span><span class="vs-h">NuttX</span></li>
+                            <li><strong>Tick</strong><span class="miss">—</span><span class="n">10&nbsp;000&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>Tickless</strong><span class="miss">—</span><span class="n">100&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>RR slice</strong><span class="miss">—</span><span class="n">0&nbsp;ms</span></li>
+                            <li><strong>INPUT period</strong><span class="n">1&nbsp;000&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
+                            <li><strong>INPUT budget</strong><span class="n">500&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
+                            <li><strong>UI period</strong><span class="n">8&nbsp;333&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
+                            <li><strong>UI budget</strong><span class="n">4&nbsp;000&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
+                            <li><strong>ISR budget</strong><span class="n">50&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
+                            <li><strong>TRB / IRQ</strong><span class="n">32</span><span class="miss">—</span></li>
+                            <li><strong>Mouse / IRQ</strong><span class="n">8</span><span class="miss">—</span></li>
+                            <li><strong>HID / period</strong><span class="n">16</span><span class="miss">—</span></li>
+                            <li><strong>Heap</strong><span class="n">0</span><span class="miss">kmm_malloc</span></li>
+                            <li><strong>Theorems</strong><span class="n">640</span><span class="miss">—</span></li>
                         </ul>
                     </div>
                     <figcaption>

@@ -1332,9 +1332,8 @@
                 Still maturing, yet already lean enough to stand among the most exacting kernels of its class.
             </p>
             <div class="hero-marks">
-                <span>Tier 1 · ≤ 1 MB MCU · Δt &lt; 5 µs</span>
-                <span>Tier 2 · UEFI SMP · per-process PML4</span>
-                <span>48 kHz · 1024-frame period</span>
+                <span>Tier 1 · ≤ 1 MB 32-bit MCU · Δt &lt; 5 µs</span>
+                <span>Tier 2 · 64-bit UEFI SMP · per-process PML4</span>
             </div>
         </div>
         <a class="scroll-cue" href="#opening"><i></i></a>
@@ -1347,7 +1346,7 @@
             <div class="wrap">
                 <div class="opening-title reveal">
                     <h2 class="jp-title">机は一つです</h2>
-                    <span class="band-index">00 / Opening</span>
+                    <span class="band-index">00 / Refuge</span>
                 </div>
                 <figure class="plate reveal">
                     <div class="field">
@@ -2314,48 +2313,22 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
 
                 <div class="band-intro reveal">
                     <p>
-十九の札は、四つの定数と、一本の純波形の音の道と、一つの窓の約束でできています。システム五窓もコマンドラインも創作四題もゲーム八席も、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。音はサンプルでも SoundFont でもなく、手書きの波形合成と拡張可能な DSP シンセサイザ SDK です。その SDK はすでに MSX の音源コアと 68000 系の席を動かしています。検証された予算スケジューリング、NASA/JPL Power of Ten の C99、Coq で閉じた InterCore Nexus。これが、同じ床の上で十九が一つの OS である理由です。
+                            普通のリアルタイム核は、一定の間隔で鳴る時計を一つ持っている。NuttX の既定では、その一拍が 10&nbsp;000 マイクロ秒、すなわち 10&nbsp;000&nbsp;000 ナノ秒で、一秒に百回である。システムの遅延は、すべてこの拍の整数倍になる。B-System にその時計はない。時間は平面の周期そのものである。最も細かい平面 INPUT は 1&nbsp;000 マイクロ秒ごとに起きる。1&nbsp;000 × 1&nbsp;000 で 1&nbsp;000&nbsp;000 ナノ秒、NuttX の既定の拍の十分の一である。
+                            NuttX の tickless は、より速い拍ではない。拍をやめ、時間の目盛りだけを 100 マイクロ秒、100 × 1&nbsp;000 で 100&nbsp;000 ナノ秒に残す選択である。B-System はその拍を初めから持たないので、並ぶのは割り込み自身の契約である。ハンドラは 50 マイクロ秒、50 × 1&nbsp;000 で 50&nbsp;000 ナノ秒のうちに戻らねばならない。NuttX の tickless の目盛りの半分である。この 50&nbsp;000 は ASYNC.txt §3.2 に書かれた天井であり、計測した最悪時間ではない。下の INPUT 周期と ISR 予算は同じ二つの数である。上の二行は、それらを置き換える時計の隣に置いただけである。
                     </p>
                     <p class="en">
-                        The nineteen tiles rest on four constants, one pure-waveform audio path, and one window contract.
-                        System windows, command line, authoring and playing share the same per-plane CPU and buffer budgets,
-                        the same interleaved PCM written to the same device, and the same real-body / virtual-body document model.
-                        Sound is not samples and not SoundFonts — it is hand-written waveform synthesis and an extensible
-                        DSP synthesizer SDK. That SDK already drives the MSX sound cores and the 68000-family seats.
-                        Verified budget scheduling, NASA/JPL Power of Ten C99, and an InterCore Nexus closed in Coq.
-                        That is why nineteen uses of one desk are still one operating system — and every number on this page
-                        is readable in the sources it comes from.
+                            An ordinary real-time kernel keeps one clock that strikes at a fixed interval. In a default NuttX build that interval is 10&nbsp;000 microseconds, or 10&nbsp;000&nbsp;000 nanoseconds: a hundred strikes a second. Every delay in the system is a whole number of those strikes. B-System has no such clock. Time is the period of a plane. The finest plane, INPUT, wakes every 1&nbsp;000 microseconds — 1&nbsp;000 × 1&nbsp;000 = 1&nbsp;000&nbsp;000 nanoseconds, a tenth of the NuttX tick.
+                            Tickless mode in NuttX is not a faster clock. It is the choice to stop the strikes and keep a scale of 100 microseconds, 100 × 1&nbsp;000 = 100&nbsp;000 nanoseconds. B-System never starts those strikes, so the figure placed beside them is the contract on the interrupt itself: the handler must return within 50 microseconds, 50 × 1&nbsp;000 = 50&nbsp;000 nanoseconds, half the tickless scale. That 50&nbsp;000 is a ceiling. The INPUT period and the ISR budget below are the same two numbers. The first two rows only set them next to the clocks they stand in for.
                     </p>
-                </div>
+                </div> <br>
 
-                <figure class="plate reveal">
-                    <div class="field paramita-field">
-                        <ul class="spec">
-                            <li><strong>Sample rates</strong><span>48000 · 44100 Hz</span></li>
-                            <li><strong>Host period</strong><span>1024 frames</span></li>
-                            <li><strong>Render quantum</strong><span>Q = 32</span></li>
-                            <li><strong>UI plane</strong><span>ASYNC_UI_PERIOD_US 8333 → 8&nbsp;333&nbsp;000&nbsp;ns · ASYNC_UI_BUDGET_US 4000 → 4&nbsp;000&nbsp;000&nbsp;ns</span></li>
-                            <li><strong>INPUT plane</strong><span>ASYNC_INPUT_PERIOD_US 1000 → 1&nbsp;000&nbsp;000&nbsp;ns · ASYNC_INPUT_BUDGET_US 500 → 500&nbsp;000&nbsp;ns</span></li>
-                            <li><strong>ISR budget</strong><span>ASYNC_ISR_BUDGET_US 50 → 50&nbsp;000&nbsp;ns · TRB 32 · mouse 8 · HID 16</span></li>
-                            <li><strong>Audio path</strong><span>Pure waveform · DSP SDK · no samples</span></li>
-                            <li><strong>Session file</strong><span>73 408 bytes fixed</span></li>
-                            <li><strong>Sound cores</strong><span>MSX PSG/SCC/OPLL/Y8950 · B-Sound · 68000 path</span></li>
-                            <li><strong>Assurance</strong><span>NASA/JPL Power of Ten · Coq InterCore · zero heap after boot</span></li>
-                            <li><strong>Composition</strong><span>5 system + 2 CLU + 4 authoring + 8 playing = 19</span></li>
-                        </ul>
-                    </div>
-                    <figcaption>
-                        <span><b>Audio &amp; plane constants</b></span>
-                        <span>Readable in sources</span>
-                    </figcaption>
-                </figure>
 
                 <figure class="plate reveal plate-follow">
                     <div class="field paramita-field">
                         <ul class="spec vs">
                             <li><strong class="vs-h">Contract</strong><span class="vs-h">B-System</span><span class="vs-h">NuttX</span></li>
-                            <li><strong>Tick</strong><span class="miss">—</span><span class="n">10&nbsp;000&nbsp;000&nbsp;ns</span></li>
-                            <li><strong>Tickless</strong><span class="miss">—</span><span class="n">100&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>Tick</strong><span class="n">1&nbsp;000&nbsp;000&nbsp;ns</span><span class="n">10&nbsp;000&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>Tickless</strong><span class="n">50&nbsp;000&nbsp;ns</span><span class="n">100&nbsp;000&nbsp;ns</span></li>
                             <li><strong>RR slice</strong><span class="miss">—</span><span class="n">0&nbsp;ms</span></li>
                             <li><strong>INPUT period</strong><span class="n">1&nbsp;000&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
                             <li><strong>INPUT budget</strong><span class="n">500&nbsp;000&nbsp;ns</span><span class="miss">—</span></li>
@@ -2366,12 +2339,34 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                             <li><strong>Mouse / IRQ</strong><span class="n">8</span><span class="miss">—</span></li>
                             <li><strong>HID / period</strong><span class="n">16</span><span class="miss">—</span></li>
                             <li><strong>Heap</strong><span class="n">0</span><span class="miss">kmm_malloc</span></li>
-                            <li><strong>Theorems</strong><span class="n">640</span><span class="miss">—</span></li>
                         </ul>
                     </div>
                     <figcaption>
                         <span><b>B-System · NuttX</b> — ns budgets from async_rt.h vs CONFIG_USEC_PER_TICK</span>
                         <span>Sources: btron.pro/b-media · nuttx.apache.org</span>
+                    </figcaption>
+                </figure> <br>
+
+                <figure class="plate reveal">
+                    <div class="field paramita-field">
+                        <ul class="spec">
+                            <li><strong>Sample rates</strong><span>48000 · 44100 Hz</span></li>
+                            <li><strong>Host period</strong><span>1024 frames</span></li>
+                            <li><strong>Render quantum</strong><span>Q = 32</span></li>
+                            <li><strong>UI plane</strong><span>ASYNC_UI_PERIOD_US 8&nbsp;333&nbsp;000&nbsp;ns · ASYNC_UI_BUDGET_US 4&nbsp;000&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>INPUT plane</strong><span>ASYNC_INPUT_PERIOD_US 1&nbsp;000&nbsp;000&nbsp;ns · ASYNC_INPUT_BUDGET_US 500&nbsp;000&nbsp;ns</span></li>
+                            <li><strong>ISR budget</strong><span>ASYNC_ISR_BUDGET_US 50&nbsp;000&nbsp;ns · TRB 32 · mouse 8 · HID 16</span></li>
+                            <li><strong>Audio path</strong><span>Pure waveform · DSP SDK · no samples</span></li>
+                            <li><strong>Session file</strong><span>73 408 bytes fixed</span></li>
+                            <li><strong>Sound cores</strong><span>MSX PSG/SCC/OPLL/Y8950 · B-Sound · 68000 path</span></li>
+                            <li><strong>Assurance</strong><span>NASA/JPL Power of Ten · Coq InterCore · zero heap after boot</span></li>
+                            <li><strong>Composition</strong><span>5 system + 2 CLU + 4 authoring + 8 playing = 19</span></li>
+                            <li><strong>Theorems</strong>640 Coq Judgements</li>
+                        </ul>
+                    </div>
+                    <figcaption>
+                        <span><b>Audio &amp; plane constants</b></span>
+                        <span>Readable in sources</span>
                     </figcaption>
                 </figure>
 
@@ -2412,7 +2407,7 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                             <li><strong>02 · 戒 (tshul khrims)</strong><span>キャビネット (Cabinet) — 実身と仮身を偽らずに示す</span></li>
                             <li><strong>03 · 忍 (bzod pa)</strong><span>ブラウザ (Browser) — 文書の複雑さを損なわず読む</span></li>
                             <li><strong>04 · 慧 (shes rab)</strong><span>文書編集 (Editor) — 形と意味をひとつの流れで味わう</span></li>
-                            <li><strong>05 · 精進 (brtson ’grus)</strong><span>端末 + CLU — 触れて起動し、繰り返す</span></li>
+                            <li><strong>05 · 精進 (brtson ’grus)</strong><span>端末 (Terminal) — 触れて起動し、繰り返す</span></li>
                             <li><strong>06 · 慈 (byams pa)</strong><span>コンパイラ (Compiler) — 他者が創れるようにする</span></li>
                             <li><strong>07 · 捨 (spang pa)</strong><span>電子帳票 (Clarity) — 何も書かれていない紙。形が現れる前</span></li>
                             <li><strong>08 · 定 (bsam gtan)</strong><span>カット (Cut) — 時間の瞬間を等しいものとして扱う</span></li>
@@ -2440,17 +2435,15 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
         </section>
 
         <!-- ═══ Closing ═══ -->
-        <section id="invitation" class="closing">
-            <div class="wrap wrap-narrow">
-                <h2 class="jp-title reveal">一枚のデスクから始める</h2>
-                <p class="reveal">
-どの札も、デスクの上の窓です。まずワークベンチを開き、次に使うものをひとつ選んでください。文書編集で一行書き、端末で sc を呼んで二面パネルを開き、オーケストラで一曲取り、電子帳票で一頁組み、ゲームシステムでカートリッジを一本回す。そのどれにも、このページがリンクした先に、窓口と操作と内部構造の順番をもった仕様書があります。
-                </p>
-                <p class="en reveal">
-                    Every tile is a window on one desk. Open the Workbench and choose one thing — write a line, call
-                    sc from the terminal, record a piece, set a page, run a cartridge — and the specification behind
-                    that tile is ordered the same way: what the window is, how it is operated, and how it is built.
-                </p>
+        <section id="invitation">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">07 / Vow</span>
+                    <h2 class="jp-title">菩萨<h2>
+                    <p class="band-eyebrow">Bodhisattva</p>
+                </div>
+                <p class="reveal"> このシステムは、純粋な心と完璧な倫理観を持つ人々の利用を想定しています。</p>
+                <p class="en reveal">This system is intended for use by people with pure hearts and perfect ethics.</p>
                 <div class="closing-entries reveal">
                     <a class="entry" href="b-system/apps/Commander.html">Commander →</a>
                     <a class="entry" href="b-system/apps/XMB.html">XMB →</a>

@@ -958,6 +958,103 @@
             margin-top: clamp(2rem, 5vw, 3rem);
         }
 
+        /* ── Technical characteristic tables ──────────────────────────────── */
+        .tech-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--mono-font);
+            font-size: 0.78rem;
+            letter-spacing: 0.02em;
+            line-height: 1.7;
+            color: var(--ink-2);
+        }
+        .tech-table th,
+        .tech-table td {
+            padding: 0.7rem 1.1rem;
+            border-bottom: 1px solid var(--rule);
+            text-align: left;
+            vertical-align: top;
+        }
+        .tech-table th {
+            font-weight: 500;
+            color: var(--ink);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-size: 0.68rem;
+            background: var(--paper-2);
+        }
+        .tech-table tr:last-child td {
+            border-bottom: 0;
+        }
+        .tech-table .num {
+            color: var(--tron-teal);
+            white-space: nowrap;
+        }
+        .tech-table .dim {
+            color: var(--ink-3);
+        }
+        .tech-table .win {
+            color: var(--ink);
+            font-weight: 500;
+        }
+        .plate-table {
+            margin: clamp(1.6rem, 4vw, 2.4rem) 0 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        .plate-table .field {
+            padding: 0;
+            border-bottom: 0;
+            background: var(--plate);
+            display: block;
+        }
+        .plate-table .field::after {
+            display: none;
+        }
+        .plate-table figcaption {
+            padding: 1rem 1.2rem;
+        }
+        .table-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: clamp(1.4rem, 3vw, 2rem);
+            margin-top: clamp(1.6rem, 4vw, 2.4rem);
+        }
+        @media (min-width: 900px) {
+            .table-grid.two {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            }
+        }
+
+        /* ── Path plate (ten perfections) ─────────────────────────────────── */
+        #paramita .plate .field {
+            padding: 0;
+            border-bottom: 0;
+            background: var(--plate);
+        }
+        #paramita .plate .field::after {
+            display: none;
+        }
+        #paramita .spec {
+            margin: 0;
+            border-top: 0;
+            width: 100%;
+        }
+        #paramita .spec li {
+            padding: 0.75rem clamp(1.2rem, 2.5vw, 1.8rem);
+        }
+        #paramita .spec li:first-child {
+            padding-top: 1.1rem;
+        }
+        #paramita .spec li:last-child {
+            border-bottom: 0;
+            padding-bottom: 1.1rem;
+        }
+        #paramita .band-intro.follow {
+            margin-top: clamp(2.4rem, 6vw, 4rem);
+            margin-bottom: 0;
+        }
+
         /* ── Closing ──────────────────────────────────────────────────────── */
         .closing {
             text-align: center;
@@ -1185,22 +1282,16 @@
             <h1 class="jp-title">メディアのOS。</h1>
             <div class="hero-rule"></div>
             <p class="hero-lede">
-                B-System は、古典的な日本の BTRON 3.20 仕様を、BeOS のメディア優先の明晰さとともに蘇らせます。
-                NASA/JPL Power of Ten に厳格に従った単一のクリーンルーム ANSI C99 出典が、NEC <nobr>PC-98</nobr>、UEFI x86-64、
-                Raspberry Pi 全系列、PlayStation 2、Nintendo 64、そして SDL2/VirtIO を備えた POSIX ホストというスペクトラムの上で、同じまま動きます。
-                検証された予算スケジューリングのリアルタイム OS を、ISC/MIT ライセンスのもと、永遠に自由に届けます。
-                その中心には InterCore Nexus があります。非ブロッキング、ゼロコピー、CAS カーソル駆動の星型キューを、完全な Coq 形式化によって証したものです。
-                五つの純粋な操作 — pub、sub、spawn、snd、rcv — が、ロックも優先順位逆転も残滓もない、妨げのない織物を成します。
-                六百四十の閉じた判断、公理はゼロ。まだ成熟の途上にありながら、すでに最も厳密なカーネルたちの中に並ぶほど、軽やかです。
+                B-System は、古典的な日本の BTRON 3.20 仕様を、BeOS のメディア優先の明晰さとともに蘇らせます。NASA/JPL Power of Ten に厳格に従った単一のクリーンルーム ANSI C99 出典が、NEC PC-98、UEFI x86-64、Raspberry Pi 全系列、PlayStation 2、Nintendo 64、そして SDL2/VirtIO を備えた POSIX ホストというスペクトラムの上で、同じまま動きます。検証された予算スケジューリングのリアルタイム OS を、ISC/MIT ライセンスのもと、永遠に自由に届けます。その中心には InterCore Nexus があります。非ブロッキング、ゼロコピー、CAS カーソル駆動の星型キューを、完全な Coq 形式化によって証したものです。五つの純粋な操作 — pub、sub、spawn、snd、rcv — が、ロックも優先順位逆転も残滓もない、妨げのない織物を成します。六百二の閉じた判断、公理はゼロ。まだ成熟の途上にありながら、すでに最も厳密なカーネルたちの中に並ぶほど、軽やかです。
             </p>
             <p class="hero-lede-en">
                 B-System reawakens the classic Japanese BTRON 3.20 specification with the media-first clarity of BeOS.
                 A single clean-room ANSI C99 codebase, written in strict conformance with the NASA/JPL Power of Ten rules,
                 spans a spectrum of platforms — NEC PC-98, UEFI x86-64, the full Raspberry Pi family, PlayStation 2, Nintendo 64,
                 and POSIX hosts with SDL2/VirtIO — delivering a verified, budget-scheduled real-time operating system under the ISC/MIT licence, free for all time.
-                At its heart lies the InterCore Nexus: a star of non-blocking, zero-copy, CAS-cursor queues formalised in Christine (Rocq).
+                At its heart lies the InterCore Nexus: a star of non-blocking, zero-copy, CAS-cursor queues formalised in full Coq.
                 Five pure operations — pub, sub, spawn, snd, rcv — form an unobstructed fabric in which every plane arises and dissolves without lock,
-                inversion, or residue. Six hundred and forty closed judgements, zero axioms.
+                inversion, or residue. Six hundred and two closed judgements, zero axioms.
                 Still maturing, yet already lean enough to stand among the most exacting kernels of its class.
             </p>
             <div class="hero-marks">
@@ -1705,8 +1796,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                         <p class="role">08 — DAW / Digital Audio Workstation</p>
                         <h3 class="jp-title">管弦楽 (Orchestra) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-ステージのための DAW。使い手を Rock（生バンド）、Classic（声と古典楽器）、Orchestra（フィルハーモニー配置）の三つに固定し、三十二のプログラムをすべて手書きの合成手続きで鳴らします。
-                            SoundFont もサンプルライブラリも使いません。窓は八つ、マニュアルは第十二章です。
+管弦楽は、音が実際に鳴り、すべてを貫いて消える場所である。手書きの合成手続きだけが残り、SoundFont もサンプルも用いない。遅延は窓の枚数ではなくデバイス側の待ち行列が決める。成したことが、そのまま残滓なく消えていく。窓は八つ、マニュアルは第十二章。
                         </p>
                         <ul class="spec">
                             <li><strong>二つのサンプルレート</strong><span>48000 と 44100、既定は 48000 Hz</span></li>
@@ -1715,9 +1805,10 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                             <li><strong>遅延の決まり方</strong><span>窓の枚数ではなく、デバイス側の待ち行列の長さ</span></li>
                         </ul>
                         <p class="en">
-                            Orchestra is documented as a manual rather than a feature list: twelve chapters, each one
-                            resting on the previous, with the latency figure measured from the audio queue rather than
-                            asserted.
+                            Orchestra is where sound actually sounds and passes through everything before it vanishes.
+                            Only the hand-written synthesis procedures remain; neither SoundFont nor sample library is used.
+                            Latency is decided by the device queue, not by the number of windows. What is accomplished
+                            dissolves without residue. Eight windows, twelve chapters of manual.
                         </p>
                         <a class="entry" href="b-system/apps/Orchestra.html">ユーザーマニュアル →</a>
                     </div>
@@ -1741,7 +1832,7 @@ Publishing System）、3DS（3D System）、NLE（Non-Linear Editor）。四つ�
                         <p class="role">09 — DPS / Desktop Publishing System</p>
                         <h3 class="jp-title">電子帳票 (Clarity) <span class="stamp stamp-live">公開中</span></h3>
                         <p>
-DTP 出版組版環境。和式の伝統判型十四種と、チベット横長ペーチャ経典の組版仕様を、同じエンジン上の二つの紙として扱います。画面の像素ではなく頁の幾何が正しさの単位になる分野で、原稿リンクから印刷所入稿用 PDF までを一手順で通します。
+電子帳票は、まだ何も書かれていない一枚の紙である。頁の幾何そのものが正しさの単位となり、和式の伝統判型十四種とチベット横長ペーチャ経典が同じエンジンの上に並ぶ。形が現れる前の、最も澄んだ窓。原稿リンクから印刷所入稿用 PDF までを一手順で通す。
                         </p>
                         <ul class="spec">
                             <li><strong>和式伝統判型 14 種</strong><span>四六判の縦書き段組まで仕様として持つ</span></li>
@@ -1750,8 +1841,9 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                             <li><strong>出力</strong><span>木版風 PDF / EPS、四六判・袋綴じ PDF</span></li>
                         </ul>
                         <p class="en">
-                            Publishing is the discipline where geometry is the deliverable: paper formats, not pixel
-                            buffers, are what a correctness claim is made about.
+                            Clarity is the blank sheet before any mark is made. Page geometry is the unit of correctness;
+                            fourteen traditional Japanese formats and Tibetan pecha sit on the same engine. The purest
+                            window, before form arises. From manuscript link to press-ready PDF in a single sequence.
                         </p>
                         <a class="entry" href="b-system/apps/Clarity.html">機能仕様と内部構造 →</a>
                     </div>
@@ -1763,7 +1855,7 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                         <p class="role">10 — 3DS / 3D System</p>
                         <h4 class="jp-title">スタジオ (Studio) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-立体をつくる 3D システム。まだお届けしていません。この札に載っているのは宣言だけです。ただしかに床は動いています。B-GL は TinyGL のソフトウェアラスタライザと VirtIO-GPU（virgl）の二つを本番バックエンドとして持ち、ローポリのシーングラフは Lil Cu 64 と MSX の Geo3D が毎日すでに走らせています。
+スタジオは、形が立ち上がる場所である。ひとつの空間の中で、それぞれの物体が他と異なるものとして現れ、見分けられる。区別そのものが創造の行為となる。まだお届けしていませんが、床はすでに動いています。B-GL は TinyGL と VirtIO-GPU（virgl）を本番バックエンドに持ち、ローポリのシーングラフは Lil Cu 64 と MSX Geo3D が毎日走らせています。
                         </p>
                         <ul class="missing">
                             <li>本番バックエンド 2：TinyGL、VirtIO-GPU (virgl)</li>
@@ -1772,8 +1864,10 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                             <li>アプリの窓はまだない — 図面は基盤側</li>
                         </ul>
                         <p class="en">
-                            Studio is announced, not shipped. What exists is the layer it will sit on — B-GL, whose two
-                            production backends are already exercised every day by the demoscene and by MSX Geo3D titles.
+                            Studio is the place where form arises. Within a single space each object appears as distinct
+                            from the others and is discerned. Distinction itself becomes the act of creation. Announced,
+                            not yet shipped; the floor already moves. B-GL holds TinyGL and VirtIO-GPU as production
+                            backends, exercised daily by the demoscene and by MSX Geo3D.
                         </p>
                         <a class="entry" href="b-media/gl.html">基盤 B-GL の仕様 →</a>
                     </div>
@@ -1781,8 +1875,7 @@ DTP 出版組版環境。和式の伝統判型十四種と、チベット横長�
                         <p class="role">11 — NLE / Non-Linear Editor</p>
                         <h4 class="jp-title">カット (Cut) <span class="stamp stamp-soon">準備中</span></h4>
                         <p>
-                            映像を切る非線形エディタ。こちらも届け前です。消費する側の図面はすでに書かれています。
-B-Video は表示経路とフレームバッファと再生契約を、B-Media は抽象パイプラインと平面ごとの予算を定めます。編集の UI は、その図面の上にはまだ載っていません。
+カットは、時間の流れを等しい瞬間の列として扱う。すべてのフレームは、まだ区別される前の同じ重みを持つ。切るという行為は、まず平等を見ることから始まる。届け前であるが、消費する側の図面はすでに書かれている。B-Video は表示経路と再生契約を、B-Media は平面ごとの予算を定める。
                         </p>
                         <ul class="missing">
                             <li>床の仕様：B-Video（表示経路・バッファ・再生契約）</li>
@@ -1791,8 +1884,10 @@ B-Video は表示経路とフレームバッファと再生契約を、B-Media �
                             <li>このページのどの画像もカットの画面ではない</li>
                         </ul>
                         <p class="en">
-                            Cut is announced, not shipped. The display path and the pipeline contract it will consume are
-                            specified documents today; the editing interface is not.
+                            Cut treats the stream of time as a sequence of equal moments. Every frame carries the same
+                            weight before distinction. To cut is first to see equality. Announced, not yet shipped; the
+                            contracts it will consume — B-Video for display path and playback, B-Media for per-plane
+                            budgets — are already written.
                         </p>
                         <a class="entry" href="b-media/video.html">B-Video の表示契約 →</a>
                         <a class="entry" href="b-media/index.html">B-Media の床 →</a>
@@ -2177,32 +2272,206 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                 <div class="band-head reveal">
                     <span class="band-index">05 / Substrate</span>
                     <h2 class="jp-title">第五部：同じ床</h2>
-                    <p class="band-eyebrow">Four constants · one audio path · one window contract</p>
+                    <p class="band-eyebrow">Verified RTOS · pure waveform · extensible DSP SDK</p>
                 </div>
 
                 <div class="band-intro reveal">
                     <p>
-十九の札は、四つの数と、一本の音の道と、一つの窓の約束でできています。システム五窓もコマンドライン二席も創作四題もゲーム八席も、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。だから十九は別々の製品の寄せ集めではなく、同じ約束の十九の使い方です。
+十九の札は、四つの定数と、一本の純波形の音の道と、一つの窓の約束でできています。システム五窓もコマンドラインも創作四題もゲーム八席も、同じ平面予算の中で動き、同じ交互 PCM を同じデバイスに書き、同じ実身／仮身の文書モデルを読みます。音はサンプルでも SoundFont でもなく、手書きの波形合成と拡張可能な DSP シンセサイザ SDK です。その SDK はすでに MSX の音源コアと 68000 系の席を動かしています。検証された予算スケジューリング、NASA/JPL Power of Ten の C99、Coq で閉じた InterCore Nexus。これが、同じ床の上で十九が一つの OS である理由です。
                     </p>
                     <p class="en">
-                        The nineteen tiles are made of four constants, one audio path and one window contract. System
-                        windows, command line, authoring and playing all share the per-plane CPU and buffer budgets, the
-                        same interleaved PCM written to the same device, and the same real-body / virtual-body document
-                        model. That is why four bands are one operating system rather than a bundle — and every number
-                        on this page is readable in the sources it comes from.
+                        The nineteen tiles rest on four constants, one pure-waveform audio path, and one window contract.
+                        System windows, command line, authoring and playing share the same per-plane CPU and buffer budgets,
+                        the same interleaved PCM written to the same device, and the same real-body / virtual-body document model.
+                        Sound is not samples and not SoundFonts — it is hand-written waveform synthesis and an extensible
+                        DSP synthesizer SDK. That SDK already drives the MSX sound cores and the 68000-family seats.
+                        Verified budget scheduling, NASA/JPL Power of Ten C99, and an InterCore Nexus closed in Coq.
+                        That is why nineteen uses of one desk are still one operating system — and every number on this page
+                        is readable in the sources it comes from.
                     </p>
                 </div>
 
-                <div class="code-snippet reveal">sample rates   48000 | 44100 Hz          host period 1024 frames     render quantum Q = 32
-plane budgets  UI   8333 µs / 4000 µs       INPUT  1000 µs /  500 µs
-one audio path virtiosnd — AUDIO_S16LSB, interleaved       session file 73,408 bytes
-four parts     5 system + 2 CLU  +  4 authoring  +  8 playing  =  19</div>
+                <div class="table-grid two reveal">
+                    <figure class="plate plate-table">
+                        <div class="field">
+                            <table class="tech-table">
+                                <thead>
+                                    <tr>
+                                        <th>Parameter</th>
+                                        <th>B-System</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="dim">Sample rates</td>
+                                        <td class="num">48000 · 44100 Hz</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Host period</td>
+                                        <td class="num">1024 frames</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Render quantum</td>
+                                        <td class="num">Q = 32</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">UI plane budget</td>
+                                        <td class="num">8333 µs / 4000 µs</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">INPUT plane budget</td>
+                                        <td class="num">1000 µs / 500 µs</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Audio path</td>
+                                        <td class="win">Pure waveform · DSP SDK · no samples</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Session file</td>
+                                        <td class="num">73&nbsp;408 bytes fixed</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Sound cores in tree</td>
+                                        <td>MSX PSG/SCC/OPLL/Y8950 · B-Sound · 68000 path</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Assurance</td>
+                                        <td class="win">NASA/JPL Power of Ten · Coq InterCore · zero heap after boot</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Composition</td>
+                                        <td class="num">5 system + 2 CLU + 4 authoring + 8 playing = 19</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <figcaption>
+                            <span><b>Audio &amp; plane constants</b></span>
+                            <span>Readable in sources</span>
+                        </figcaption>
+                    </figure>
+
+                    <figure class="plate plate-table">
+                        <div class="field">
+                            <table class="tech-table">
+                                <thead>
+                                    <tr>
+                                        <th>Contract</th>
+                                        <th>B-System</th>
+                                        <th>Typical NuttX media build</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="dim">Scheduling</td>
+                                        <td class="win">Hard per-plane µs budgets from first kernel line</td>
+                                        <td>Priority + timeslice; budgets often policy, not kernel invariant</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Heap after boot</td>
+                                        <td class="win">Zero — all static / pre-baked</td>
+                                        <td>Dynamic alloc common in drivers &amp; media stacks</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">IPC / queues</td>
+                                        <td class="win">InterCore Nexus: non-blocking zero-copy CAS star, Coq-closed</td>
+                                        <td>POSIX mq / pipes; locks &amp; priority inheritance</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">IRQ model</td>
+                                        <td class="win">Deterministic; interrupt work bounded under 5&nbsp;µs class on Tier&nbsp;1</td>
+                                        <td>ISR + work queue; bound depends on board port</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">MMIO / drivers</td>
+                                        <td class="win">Same C99 path on PC-98 → Pi → PS2 → UEFI; no port layer</td>
+                                        <td>Board-specific Kconfig + driver trees per SoC</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Interconnect</td>
+                                        <td class="win">VirtIO + native silicon (PS2 GS/VU, etc.) under one window contract</td>
+                                        <td>PCIe / bus drivers vary by vendor tree</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Audio synthesis</td>
+                                        <td class="win">Hand-written waveform + extensible DSP SDK (powers MSX cores today)</td>
+                                        <td>Usually external codec + buffered PCM; synthesis not in kernel contract</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="dim">Formal surface</td>
+                                        <td class="win">602 closed Coq judgements, zero axioms on Nexus</td>
+                                        <td>No public kernel-level formalization of IPC fabric</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <figcaption>
+                            <span><b>B-System · NuttX</b> — scheduling, MMIO, IRQ, fabric</span>
+                            <span>For media RTOS evaluation</span>
+                        </figcaption>
+                    </figure>
+                </div>
 
                 <div class="foundation-marks reveal">
                     <a class="entry" href="b-media/index.html">B-Media：パイプラインと予算 →</a>
-                    <a class="entry" href="b-media/audio.html">B-Audio：PCM 出力 →</a>
+                    <a class="entry" href="b-media/audio.html">B-Audio：純波形と DSP →</a>
                     <a class="entry" href="b-media/core.html">B-Core：計算流送 →</a>
                     <a class="entry" href="b-book/cores.html">対応カーネルと機械 →</a>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- ═══ Path of the Ten Perfections ═══ -->
+        <section id="paramita">
+            <div class="wrap">
+                <div class="band-head reveal">
+                    <span class="band-index">06 / Path</span>
+                    <h2 class="jp-title">十の完成 — 机の上の道</h2>
+                    <p class="band-eyebrow">Ten perfections · six senses · four depths</p>
+                </div>
+
+                <div class="band-intro reveal">
+                    <p>
+机の上の十九の窓は、別々の製品ではない。六つの原初の感覚と、四つの創造の深さと、それらを支える基盤が、ひとつの道として並んでいる。下の表は、その道を十の完成として読み直したものである。
+                    </p>
+                    <p class="en">
+                        The nineteen windows on this desk are not separate products. Six primordial senses, four depths
+                        of creation, and the substrate that holds them form a single path. The table below re-reads that
+                        path as the ten perfections.
+                    </p>
+                </div>
+
+                <figure class="plate reveal">
+                    <div class="field">
+                        <ul class="spec">
+                            <li><strong>01 · 施 (sbyin pa)</strong><span>ボリューム (Volumes) — 載せる。空間を与える最初の耳</span></li>
+                            <li><strong>02 · 戒 (tshul khrims)</strong><span>キャビネット (Cabinet) — 実身と仮身を偽らずに示す</span></li>
+                            <li><strong>03 · 忍 (bzod pa)</strong><span>ブラウザ (Browser) — 文書の複雑さを損なわず読む</span></li>
+                            <li><strong>04 · 慧 (shes rab)</strong><span>文書編集 (Editor) — 形と意味をひとつの流れで味わう</span></li>
+                            <li><strong>05 · 精進 (brtson ’grus)</strong><span>端末 + CLU — 触れて起動し、繰り返す</span></li>
+                            <li><strong>06 · 慈 (byams pa)</strong><span>コンパイラ (Compiler) — 他者が創れるようにする</span></li>
+                            <li><strong>07 · 捨 (spang pa)</strong><span>電子帳票 (Clarity) — 何も書かれていない紙。形が現れる前</span></li>
+                            <li><strong>08 · 定 (bsam gtan)</strong><span>カット (Cut) — 時間の瞬間を等しいものとして扱う</span></li>
+                            <li><strong>09 · 諦 (bden pa)</strong><span>スタジオ (Studio) — 形が立ち上がり、見分けられる</span></li>
+                            <li><strong>10 · 捨 (btang snyoms)</strong><span>管弦楽 (Orchestra) — 音が鳴り、すべてを貫いて消える</span></li>
+                        </ul>
+                    </div>
+                    <figcaption>
+                        <span><b>Ten perfections</b> — mapped to the desk</span>
+                        <span>6 senses · 4 depths</span>
+                    </figcaption>
+                </figure>
+
+                <div class="band-intro follow reveal">
+                    <p>
+一から六は計算機の六感。七から十は四つの深さ — まだ何もない紙、等しい瞬間の列、立ち上がる形、そしてすべてを貫く音。机は一つであり、道も一つである。
+                    </p>
+                    <p class="en">
+                        One through six are the six senses of the machine. Seven through ten are the four depths —
+                        the blank sheet, the sequence of equal moments, the arising of form, and the sound that
+                        pervades and vanishes. One desk, one path.
+                    </p>
                 </div>
             </div>
         </section>
@@ -2295,6 +2564,7 @@ four parts     5 system + 2 CLU  +  4 authoring  +  8 playing  =  19</div>
         })();
     </script>
 
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"536a3e7b073945b9ba27892a8425c63c","r":1,"spa":2}' crossorigin="anonymous"></script>
 </body>
 
 </html>

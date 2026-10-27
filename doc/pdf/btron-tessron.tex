@@ -93,7 +93,7 @@ A critical epistemological consideration must be established at the outset of th
 
 \textbf{If formal mechanized verification were admitted as a comparative criterion, TessronOS would face immediate categorical disqualification.} TessronOS contains zero formal specifications, zero mechanized proofs, and zero machine-checked semantics; its correctness relies entirely on empirical testing and manual inspection of C code. 
 
-Therefore, to maintain a rigorous, objective, and fair peer-level academic audit, we deliberately bracket out Coq-level verification. We constrain this investigation strictly to **isomorphic, empirically comparable implementation artifacts**: concrete C and assembly codebases, hardware register transactions, cache-coherency protocols, bus-arbitration dynamics, on-disk file systems, and empirical scheduling behavior.
+Therefore, to maintain a rigorous, objective, and fair peer-level academic audit, we deliberately bracket out Coq-level verification. We constrain this investigation strictly to \textbf{isomorphic, empirically comparable implementation artifacts}: concrete C and assembly codebases, hardware register transactions, cache-coherency protocols, bus-arbitration dynamics, on-disk file systems, and empirical scheduling behavior.
 
 %-------------------------------------------------------------------------
 \section{Architectural Pedigree and System Models}
@@ -309,7 +309,7 @@ Let $N$ be the number of active symmetric cores spinning on a ticket spinlock ho
 \begin{lemma}[Cross-Core Priority Inversion in TessronOS]
 In TessronOS, \texttt{disint()} disables local interrupts only on the CPU executing the critical section. If Core 0 is executing a low-priority task that acquires \texttt{knl\_klock} to perform an $O(M)$ walk of the global ready queue, and a hard real-time interrupt fires on Core 1 awakening a high-priority task $\tau_{\text{crit}}$, Core 1 will spin unconditionally on \texttt{knl\_klock}. The interrupt dispatch latency of $\tau_{\text{crit}}$ is therefore bounded not by local interrupt latency, but by the maximum hold duration of \texttt{knl\_klock} across all other cores:
 \begin{equation}
-T_{\text{dispatch\_worst}} = \max_{j \ne 1} (T_{\text{hold}}(c_j)) + T_{\text{bus\_arbitration}}
+T_{\text{dispatch}}^{\text{worst}} = \max_{j \ne 1} \bigl(T_{\text{hold}}(c_j)\bigr) + T_{\text{bus\_arb}}
 \end{equation}
 This violates Ken Sakamura's fundamental real-time guarantee of strictly bounded interrupt response time.
 \end{lemma}
@@ -352,7 +352,10 @@ TessronOS uses a \textbf{single global priority ready queue} (\texttt{knl\_ready
 \begin{lemma}[Cacheline Invalidation Penalty in Global Runqueues]
 In a symmetric multicore system sharing a single ready queue across $M$ cores, each task migration between core $c_i$ and core $c_j$ ($i \ne j$) incurs a cold-cache penalty:
 \begin{equation}
-T_{\text{migrate}} = T_{\text{L1\_miss}} \cdot \mathcal{S}_{\text{working\_set}} + T_{\text{TLB\_flush}}
+\begin{aligned}
+T_{\text{migrate}} &= T_{\text{L1\_miss}} \cdot \mathcal{S}_{\text{working\_set}} \\
+&\quad + T_{\text{TLB\_flush}}
+\end{aligned}
 \end{equation}
 On modern out-of-order superscalar architectures like the Cortex-A76, transferring modified TCB and stack cachelines across the L3 cluster snoop bus degrades memory throughput and inflates interrupt latency.
 \end{lemma}
@@ -535,7 +538,7 @@ In B-System, baremetal graphics presentation on the Raspberry Pi 400 is augmente
 
 A paramount metric in real-time operating system design is the temporal computational cost of compositing interactive displays. In a software-composited window architecture, the total CPU cycle cost per composited frame is governed by:
 \begin{equation}
-T_{\text{frame}} = T_{\text{traverse}} + T_{\text{per\_pixel\_eval}} + T_{\text{blend\_math}} + T_{\text{bus\_transfer}}
+T_{\text{frame}} = T_{\text{traverse}} + T_{\text{eval}} + T_{\text{blend}} + T_{\text{bus}}
 \end{equation}
 
 Table~\ref{tab:compositor_economy} provides a rigorous quantitative comparison of the CPU cycle and bus transfer economies between TessronOS and B-System.

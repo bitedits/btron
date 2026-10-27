@@ -100,45 +100,48 @@ B-System is architecturally synthesized as a high-throughput, deterministic \tex
 \begin{figure*}[t]
 \centering
 \begin{tikzpicture}[node distance=1.35cm, auto,
-    tier_cloud/.style={rectangle, draw=blue!80!black, fill=blue!8, text width=15.8cm, rounded corners, minimum height=2.2cm},
-    tier_swarm/.style={rectangle, draw=orange!80!black, fill=orange!8, text width=15.8cm, rounded corners, minimum height=2.4cm},
-    tier_edge/.style={rectangle, draw=teal!80!black, fill=teal!8, text width=15.8cm, rounded corners, minimum height=2.5cm},
-    sub_box/.style={rectangle, draw, fill=white, text width=4.7cm, text centered, rounded corners, minimum height=1.5cm, font=\scriptsize},
-    link_line/.style={draw, -latex', thick, dashed},
-    bus_line/.style={draw, latex'-latex', line width=1.5pt, blue!70!black}]
+    tier_cloud/.style={rectangle, draw=blue!80!black, fill=blue!8, text width=16.0cm, rounded corners, minimum height=2.2cm},
+    tier_swarm/.style={rectangle, draw=orange!80!black, fill=orange!8, text width=16.0cm, rounded corners, minimum height=2.2cm},
+    tier_edge/.style={rectangle, draw=teal!80!black, fill=teal!8, text width=16.0cm, rounded corners, minimum height=2.2cm},
+    sub_box/.style={rectangle, draw, fill=white, text width=4.8cm, text centered, rounded corners, minimum height=1.35cm, font=\scriptsize},
+    bus_channel/.style={rectangle, draw=blue!70!black, fill=blue!12, rounded corners=3pt, font=\scriptsize\bfseries, inner sep=4pt},
+    bus_channel_teal/.style={rectangle, draw=teal!70!black, fill=teal!12, rounded corners=3pt, font=\scriptsize\bfseries, inner sep=4pt},
+    bus_line/.style={draw, latex'-latex', line width=1.4pt, blue!70!black},
+    bus_line_teal/.style={draw, latex'-latex', line width=1.4pt, teal!70!black}]
 
-    % Tier 1: Data Center
-    \node [tier_cloud] (cloud) at (0, 4.6) {};
-    \node [anchor=north west, font=\small\bfseries, color=blue!80!black] at (-7.7, 5.5) {TIER 3: DATA CENTER STRATEGIC HYPERVISION (Synrc HV on seL4 Microkit + BEAM)};
+    % Tier 3: Data Center Strategic Hypervision
+    \node [tier_cloud] (cloud) at (0, 5.0) {};
+    \node [anchor=north west, font=\small\bfseries, color=blue!80!black] at (-7.8, 5.95) {TIER 3: DATA CENTER STRATEGIC HYPERVISION (Synrc HV on seL4 Microkit + BEAM)};
     
-    \node [sub_box] (beam) at (-5.0, 4.3) {\textbf{Erlang/OTP 20 BEAM Core}\\Fault-Tolerant Actor System\\Swarm Supervision Trees\\Global Dynamic C2 Planning};
-    \node [sub_box] (synrc_pd) at (0, 4.3) {\textbf{Synrc Syscall Provider}\\Isolated seL4 Protection Domain\\Microkit 1K-LOC Unikernel\\VirtIO Multi-Tenant Engine};
-    \node [sub_box] (alpine) at (5.0, 4.3) {\textbf{Alpine Linux Driver PD}\\Confined Hardware Drivers\\sDDF Shared-Memory Rings\\NIST SP 800-53 Certified};
+    \node [sub_box] (beam) at (-5.1, 4.7) {\textbf{Erlang/OTP 20 BEAM Core}\\Fault-Tolerant Actor System\\Swarm Supervision Trees\\Global Dynamic C2 Planning};
+    \node [sub_box] (synrc_pd) at (0, 4.7) {\textbf{Synrc Syscall Provider}\\Isolated seL4 Protection Domain\\Microkit 1K-LOC Unikernel\\VirtIO Multi-Tenant Engine};
+    \node [sub_box] (alpine) at (5.1, 4.7) {\textbf{Alpine Linux Driver PD}\\Confined Hardware Drivers\\sDDF Shared-Memory Rings\\NIST SP 800-53 Certified};
 
-    % Tier 2: Tactical Swarm
-    \node [tier_swarm] (swarm) at (0, 1.6) {};
-    \node [anchor=north west, font=\small\bfseries, color=orange!80!black] at (-7.7, 2.6) {TIER 2: TACTICAL SWARM MESH COORDINATION (Skynet Reference Server \& Link32 Protocol)};
+    % Inter-Tier Bus: Tier 3 <-> Tier 2
+    \node [bus_channel] (bus32) at (0, 3.15) {$\updownarrow$ \quad Inter-Tier Bus: High-Throughput sDDF Telemetry Rings / ZeroMQ Gateway \quad $\updownarrow$};
+    \draw [bus_line] (0, 3.9) -- (bus32.north);
+    \draw [bus_line] (bus32.south) -- (0, 2.4);
+
+    % Tier 2: Tactical Swarm Mesh Coordination
+    \node [tier_swarm] (swarm) at (0, 1.3) {};
+    \node [anchor=north west, font=\small\bfseries, color=orange!80!black] at (-7.8, 2.25) {TIER 2: TACTICAL SWARM MESH COORDINATION (Skynet Reference Server \& Link32 Protocol)};
     
-    \node [sub_box] (skynet_srv) at (-5.0, 1.3) {\textbf{Skynet Tactical Server}\\Microsecond TDMA Engine\\256 Time Slots ($1000\mu\text{s}$)\\Lock-Free Queue Management};
-    \node [sub_box] (link32) at (0, 1.3) {\textbf{Link32 S-Message Protocol}\\32-Byte Header, FNV-1a Hash\\secp384r1 ECDH Session Setup\\AES-256-GCM Military Crypto};
-    \node [sub_box] (npg_topics) at (5.0, 1.3) {\textbf{Multicast Participation Groups}\\NPG 1 (Control), NPG 6 (PLI)\\NPG 100 (C2), NPG 103 (Coord)\\Non-Blocking UDP Multicast};
+    \node [sub_box] (skynet_srv) at (-5.1, 1.0) {\textbf{Skynet Tactical Server}\\Microsecond TDMA Engine\\256 Time Slots ($1000\mu\text{s}$)\\Lock-Free Queue Management};
+    \node [sub_box] (link32) at (0, 1.0) {\textbf{Link32 S-Message Protocol}\\32-Byte Header, FNV-1a Hash\\secp384r1 ECDH Session Setup\\AES-256-GCM Military Crypto};
+    \node [sub_box] (npg_topics) at (5.1, 1.0) {\textbf{Multicast Participation Groups}\\NPG 1 (Control), NPG 6 (PLI)\\NPG 100 (C2), NPG 103 (Coord)\\Non-Blocking UDP Multicast};
 
-    % Tier 3: Edge UAV Flight Avionics
-    \node [tier_edge] (edge) at (0, -1.6) {};
-    \node [anchor=north west, font=\small\bfseries, color=teal!80!black] at (-7.7, -0.6) {TIER 1: PHYSICAL UAV EDGE FLIGHT AVIONICS (5HT's B-System SAS-RTOS Cleanroom Engine)};
+    % Inter-Tier Bus: Tier 2 <-> Tier 1
+    \node [bus_channel_teal] (bus21) at (0, -0.55) {$\updownarrow$ \quad Tactical Swarm Mesh: Link32 RF Multicast Mesh / Micro-TDMA ($1000\mu\text{s}$) \quad $\updownarrow$};
+    \draw [bus_line_teal] (0, 0.2) -- (bus21.north);
+    \draw [bus_line_teal] (bus21.south) -- (0, -1.3);
+
+    % Tier 1: Physical UAV Edge Flight Avionics
+    \node [tier_edge] (edge) at (0, -2.4) {};
+    \node [anchor=north west, font=\small\bfseries, color=teal!80!black] at (-7.8, -1.45) {TIER 1: PHYSICAL UAV EDGE FLIGHT AVIONICS (5HT's B-System SAS-RTOS Cleanroom Engine)};
     
-    \node [sub_box] (avionics) at (-5.0, -1.9) {\textbf{Multi-Rate SAS-RTOS}\\Attitude Loop @ 8 kHz ($<5\mu\text{s}$)\\MPSC Actor Concurrency\\Zero-TLB Flush Determinism};
-    \node [sub_box] (simd) at (0, -1.9) {\textbf{128-bit NEON SIMD Engine}\\Phase-Peeled Vector Blitter\\Optical Flow \& Matrix EKF\\BCM2711 2D DMA Offload};
-    \node [sub_box] (rovo) at (5.0, -1.9) {\textbf{Hyper-Data TAD Sensor Log}\\Binary Segment Stream\\Real Object / Virtual Object\\64-bit B-FS Extent Blackbox};
-
-    % Inter-Tier Busses
-    \draw [bus_line] (0, 3.4) -- (0, 2.8) node [midway, right, font=\tiny\bfseries] {High-Throughput sDDF Telemetry Rings / ZeroMQ Gateway};
-    \draw [bus_line] (0, 0.4) -- (0, -0.2) node [midway, right, font=\tiny\bfseries] {Link32 Tactical RF Multicast Mesh / Micro-TDMA ($1000\mu\text{s}$)};
-
-    \draw [link_line] (-5.0, 3.4) -- (-5.0, 2.1);
-    \draw [link_line] (5.0, 3.4) -- (5.0, 2.1);
-    \draw [link_line] (-5.0, 0.4) -- (-5.0, -1.1);
-    \draw [link_line] (5.0, 0.4) -- (5.0, -1.1);
+    \node [sub_box] (avionics) at (-5.1, -2.7) {\textbf{Multi-Rate SAS-RTOS}\\Attitude Loop @ 8 kHz ($<5\mu\text{s}$)\\MPSC Actor Concurrency\\Zero-TLB Flush Determinism};
+    \node [sub_box] (simd) at (0, -2.7) {\textbf{128-bit NEON SIMD Engine}\\Phase-Peeled Vector Blitter\\Optical Flow \& Matrix EKF\\BCM2711 2D DMA Offload};
+    \node [sub_box] (rovo) at (5.1, -2.7) {\textbf{Hyper-Data TAD Sensor Log}\\Binary Segment Stream\\Real Object / Virtual Object\\64-bit B-FS Extent Blackbox};
 \end{tikzpicture}
 \caption{The Three-Tier Autonomous Swarm Architecture: Edge UAV Flight Avionics (B-System SAS-RTOS) seamlessly interfaced with Tactical Swarm Mesh Coordination (Skynet / Link32) and Data Center Strategic Hypervision (Synrc HV on seL4 Microkit + BEAM).}
 \label{fig:continuum_architecture}
@@ -230,9 +233,9 @@ The highest-priority requirement of an airborne operating system is temporal det
 \begin{equation}
 \label{eq:control_loops}
 \begin{aligned}
-\text{Inner Loop (Motor Rate Mixing):} &\quad 8{,}000\,\text{Hz} \quad (\Delta T = 125\,\mu\text{s}) \\
-\text{Angular Attitude Loop:} &\quad 1{,}000\,\text{Hz} \quad (\Delta T = 1{,}000\,\mu\text{s}) \\
-\text{Outer Position/Trajectory Loop:} &\quad 100\,\text{Hz} \quad (\Delta T = 10{,}000\,\mu\text{s})
+\text{Motor Rate Loop:} &\quad 8{,}000\,\text{Hz} \quad (\Delta T = 125\,\mu\text{s}) \\
+\text{Attitude Loop:}   &\quad 1{,}000\,\text{Hz} \quad (\Delta T = 1{,}000\,\mu\text{s}) \\
+\text{Position Loop:}   &\quad 100\,\text{Hz}   \quad (\Delta T = 10{,}000\,\mu\text{s})
 \end{aligned}
 \end{equation}
 
@@ -257,7 +260,7 @@ B-System solves swarm coordination by embedding the \textbf{Skynet Link32 tactic
 \subsection{Domain 3: SWaP-C Edge Perception and Vectorized Visual Odometry}
 On sub-250g or attritable FPV attack drones, deploying heavy AI co-processors (e.g., Nvidia Jetson Orin Nano, 15--25W power envelope, 80--120g mass) is physically impossible due to battery energy density constraints. Edge perception must run on low-power host CPUs (e.g., Broadcom BCM2711, 4--7W). However, standard OpenCV optical flow routines written in scalar C saturate memory buses with unaligned single-word stores, limiting frame rates to $<15$ fps.
 
-B-System adapts its ultra-optimized **128-bit NEON SIMD Display Primitives vector blitter** (\texttt{btron\_row\_blit}, \path{include/btron/fast_blit.h}) into an airborne edge perception engine:
+B-System adapts its ultra-optimized \textbf{128-bit NEON SIMD Display Primitives vector blitter} (\texttt{btron\_row\_blit}, \path{include/btron/fast_blit.h}) into an airborne edge perception engine:
 \begin{itemize}[leftmargin=*]
     \item \textbf{Phase-Peeled SIMD Image Streaming:} Sensor camera frames (grayscale or Bayer pattern) are processed using B-System's 16-byte phase-peeling algorithm. The vector engine executes unrolled 64-byte burst streaming using 128-bit quad-word registers (\texttt{ldp/stp q0-q3}):
     \begin{lstlisting}[language=C]
@@ -288,7 +291,7 @@ B-System implements a decentralized state estimator:
 \subsection{Domain 5: Formal Verification and DO-178C DAL-A Airworthiness}
 The deployment of autonomous drone swarms in civil airspace and military defense requires compliance with rigorous airworthiness certification standards, specifically RTCA DO-178C / EUROCAE ED-12C Design Assurance Level A (DAL-A)~\cite{do178c}. Under DAL-A, any software failure that could cause catastrophic hull loss must be mitigated through formal methods.
 
-B-System is developed alongside the **VeriMath Cleanroom Initiative** in the \textsc{Coq} proof assistant~\cite{sokhatsky2026verimath}:
+B-System is developed alongside the \textbf{VeriMath Cleanroom Initiative} in the \textsc{Coq} proof assistant~\cite{sokhatsky2026verimath}:
 \begin{itemize}[leftmargin=*]
     \item \textbf{Mechanized Scheduling Correctness:} Task scheduling loops, lock-free queue state transitions, and memory allocation transitions are mathematically formalized in the Calculus of Inductive Constructions (\textsc{CIC}).
     \item \textbf{Proof of Absence of Data Races:} In Coq, we formally verify that no two actors can access overlapping memory spans simultaneously outside atomic MPSC CAS operations, guaranteeing complete absence of deadlocks, race conditions, and priority inversions.
@@ -298,7 +301,7 @@ B-System is developed alongside the **VeriMath Cleanroom Initiative** in the \te
 \subsection{Domain 6: Drone-to-Cloud Hypervision via Synrc HV}
 Tactical UAVs must seamlessly stream target telemetry, video feeds, and mission events to command headquarters without compromising system security. Conventional cloud connectors (HTTP/REST, gRPC, MQTT over TLS) require hundreds of megabytes of Python or Node.js runtime bloat and introduce massive attack surfaces.
 
-B-System bridges directly into **Synrc Hypervision (\texttt{hv})**~\cite{synrc_hv_spec}:
+B-System bridges directly into \textbf{Synrc Hypervision (\texttt{hv})}~\cite{synrc_hv_spec}:
 \begin{itemize}[leftmargin=*]
     \item \textbf{Capability-Guarded Data Center Ingestion:} \texttt{hv} runs seL4 Microkit on enterprise server racks. Incoming Link32 UDP multicast streams are terminated by the isolated Alpine Linux driver protection domain and transferred across capability-controlled sDDF shared-memory rings directly into the Erlang/OTP BEAM runtime.
     \item \textbf{Fault-Tolerant Actor Orchestration:} Within the BEAM domain, distributed actors dynamically model every physical drone in the swarm. If a physical drone is shot down, its virtual actor detects heartbeat loss, triggers the supervisor tree, and broadcasts dynamic waypoint updates (NPG 100) to redistribute mission targets among surviving aircraft.
@@ -308,7 +311,7 @@ B-System bridges directly into **Synrc Hypervision (\texttt{hv})**~\cite{synrc_h
 \subsection{Domain 7: Hyper-Data Mission Logging and B-FS Blackbox}
 Post-mission intelligence exploitation, forensic crash investigation, and after-action debriefing require tamper-evident, deterministic flight data recording. On conventional autopilots, writing logs to flash media (SD cards, eMMC) introduces unpredictable storage latency: when flash wear-leveling or block erasure occurs, write calls block for 50--200 ms, stalling flight control threads.
 
-B-System resolves this via its **canonical TRON Application Databus (TAD)** and **B-FS (V2)** architecture:
+B-System resolves this via its \textbf{canonical TRON Application Databus (TAD)} and \textbf{B-FS (V2)} architecture:
 \begin{itemize}[leftmargin=*]
     \item \textbf{Zero-Copy Binary TAD Segment Records:} Flight events, sensor telemetry, and Link32 messages are formatted directly as canonical BTRON binary TAD segment records (16-bit type ID, 16-bit segment length). Records are streamed into memory-mapped ring buffers without string conversion, JSON serialization, or heap allocation.
     \item \textbf{Extent-Based B-FS V2 Blackbox:} In \path{include/btron/fs/bfs_disk.h}, B-System commits TAD streams to physical flash media using 64-bit extent allocation trees with dual-anchor superblocks (\texttt{VOL\_MAGIC\_V2 = 0x62FE}). All blocks are protected by \texttt{xxHash64} checksums and transaction journals. In the event of catastrophic mid-air battery severance, the filesystem replays journals in $<2$ ms upon recovery with zero data loss.
@@ -342,13 +345,18 @@ Discretizing Equation~\eqref{eq:continuous_dynamics} over the time-varying inter
 \end{equation}
 where:
 \begin{equation}
-\mathbf{A}_d(\Delta_k) = e^{\mathbf{A}_c (T_s + \Delta_k)}, \quad \mathbf{B}_d(\Delta_k) = \int_0^{T_s + \Delta_k} e^{\mathbf{A}_c \tau} d\tau \, \mathbf{B}_c
+\begin{aligned}
+\mathbf{A}_d(\Delta_k) &= e^{\mathbf{A}_c (T_s + \Delta_k)}, \\
+\mathbf{B}_d(\Delta_k) &= \int_0^{T_s + \Delta_k} e^{\mathbf{A}_c \tau} d\tau \, \mathbf{B}_c
+\end{aligned}
 \end{equation}
 
 Under a linear feedback controller designed for nominal period $T_s$ with gain matrix $\mathbf{K} \in \mathbb{R}^{4 \times 6}$ ($\mathbf{u}_k = -\mathbf{K} \mathbf{x}_k$), the closed-loop system matrix is:
 \begin{equation}
 \boldsymbol{\Phi}(\Delta_k) = \mathbf{A}_d(\Delta_k) - \mathbf{B}_d(\Delta_k) \mathbf{K}
 \end{equation}
+
+\newpage
 
 \begin{theorem}[Discrete Lyapunov Stability under Operating System Jitter]
 \label{thm:stability}
@@ -369,13 +377,17 @@ The Lyapunov difference equation becomes:
 \begin{equation}
 \begin{aligned}
 \Delta V_k &= \mathbf{x}_k^T \left( \boldsymbol{\Phi}^T(\Delta_k) \mathbf{P} \boldsymbol{\Phi}(\Delta_k) - \mathbf{P} \right) \mathbf{x}_k \\
-&= \mathbf{x}_k^T \left( \boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_0 - \mathbf{P} + \Delta_k \left( \boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_1 + \boldsymbol{\Phi}_1^T \mathbf{P} \boldsymbol{\Phi}_0 \right) + O(\Delta_k^2) \right) \mathbf{x}_k
+&= \mathbf{x}_k^T \bigl( \boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_0 - \mathbf{P} \\
+&\quad + \Delta_k \left( \boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_1 + \boldsymbol{\Phi}_1^T \mathbf{P} \boldsymbol{\Phi}_0 \right) + O(\Delta_k^2) \bigr) \mathbf{x}_k
 \end{aligned}
 \end{equation}
 
 By nominal stability, let $\boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_0 - \mathbf{P} = -\mathbf{Q}_0 \prec 0$, where $\lambda_{\min}(\mathbf{Q}_0) > 0$. The perturbation term is bounded by:
 \begin{equation}
-\|\Delta_k (\boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_1 + \boldsymbol{\Phi}_1^T \mathbf{P} \boldsymbol{\Phi}_0)\| \le 2\Delta \|\mathbf{P}\| \cdot \|\boldsymbol{\Phi}_0\| \cdot \|\boldsymbol{\Phi}_1\|
+\begin{aligned}
+&\|\Delta_k (\boldsymbol{\Phi}_0^T \mathbf{P} \boldsymbol{\Phi}_1 + \boldsymbol{\Phi}_1^T \mathbf{P} \boldsymbol{\Phi}_0)\| \\
+&\quad \le 2\Delta \|\mathbf{P}\| \cdot \|\boldsymbol{\Phi}_0\| \cdot \|\boldsymbol{\Phi}_1\|
+\end{aligned}
 \end{equation}
 
 Therefore, $\Delta V_k < 0$ for all non-zero states $\mathbf{x}_k$ if and only if the maximum OS scheduling jitter $\Delta$ satisfies the strict inequality bound:
@@ -397,13 +409,16 @@ In high-performance multi-rotor autopilots operating at $T_s = 250\,\mu\text{s}$
 \subsection{TDMA Slot Schedulability in Skynet Link32 Swarms}
 In a Skynet Link32 network of $N = 256$ dynamic time slots with slot duration $\tau_{\text{slot}} = 1000\,\mu\text{s}$, a node assigned slot $s \in [0, N-1]$ must transmit its frame strictly within the boundary:
 \begin{equation}
-t_{\text{start}}(s) = t_0 + s \cdot \tau_{\text{slot}} \le t_{\text{tx}} \le t_0 + (s + 1)\tau_{\text{slot}} - \tau_{\text{guard}}
+\begin{aligned}
+t_{\text{start}}(s) &= t_0 + s \cdot \tau_{\text{slot}} \\
+&\le t_{\text{tx}} \le t_0 + (s + 1)\tau_{\text{slot}} - \tau_{\text{guard}}
+\end{aligned}
 \end{equation}
 where $\tau_{\text{guard}} = 50\,\mu\text{s}$ is the inter-slot RF guard band.
 
 Let the total OS transmission latency be:
 \begin{equation}
-T_{\text{tx}} = T_{\text{timer}} + T_{\text{dequeue}} + T_{\text{AES\_GCM}} + T_{\text{NIC\_DMA}}
+T_{\text{tx}} = T_{\text{timer}} + T_{\text{deq}} + T_{\text{AES}} + T_{\text{DMA}}
 \end{equation}
 
 On B-System, $T_{\text{timer}} \le 1.2\,\mu\text{s}$, lock-free dequeue $T_{\text{dequeue}} \le 0.3\,\mu\text{s}$, hardware AES-256-GCM encryption of a 128-byte PLI packet takes $T_{\text{AES}} \approx 2.4\,\mu\text{s}$, and NIC DMA setup takes $1.5\,\mu\text{s}$, yielding $T_{\text{tx}} \approx 5.4\,\mu\text{s} \ll \tau_{\text{guard}}$. Slot overlap probability is mathematically zero. 

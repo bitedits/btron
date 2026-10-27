@@ -468,7 +468,7 @@ function shimGuitar(timeOffset=0, notes=null, volMul=1.0) {
     a plectrum but faster than a bowed instrument.
 \end{itemize}
 
-\begin{figure}[h]
+\begin{figure*}[t]
 \centering
 \begin{tikzpicture}[node distance=0.6cm,auto,
     block/.style={rectangle,draw,fill=green!8,text width=3.2cm,
@@ -489,7 +489,7 @@ function shimGuitar(timeOffset=0, notes=null, volMul=1.0) {
          analogue). Portamento \texttt{n.slide} bends the OSC frequency
          inside the same graph.}
 \label{fig:guitar_flow}
-\end{figure}
+\end{figure*}
 
 %-------------------------------------------------------------------------
 \section{Deep Dive: Fender Rhodes E-Piano (\texttt{shimFloat})}
@@ -953,7 +953,7 @@ pattern: independent, stateless generators are layered at the score-scheduler
 level rather than combined into a monolithic function, preserving the
 statelessness and zero-allocation guarantees of the Compatibility Contract.
 
-\begin{figure}[h]
+\begin{figure*}[t]
 \centering
 \begin{tikzpicture}[node distance=0.48cm,auto,
     exc/.style={rectangle,draw,fill=orange!12,text width=2.6cm,
@@ -989,7 +989,7 @@ statelessness and zero-allocation guarantees of the Compatibility Contract.
          the score, then converge independently at \texttt{destination}.
          Partial durations shorten with harmonic index:  $T,\,0.75T,\,0.50T$.}
 \label{fig:piano_flow}
-\end{figure}
+\end{figure*}
 
 %-------------------------------------------------------------------------
 \section{Deep Dive: Jazz Flute / Melodica (\texttt{shimSaxFlute})}

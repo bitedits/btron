@@ -70,13 +70,13 @@ The historical divergence between document interchange formats and interactive s
 
 In contemporary software engineering, a deep architectural dichotomy exists between static document markup (e.g., PDF, static HTML) and imperative application runtimes (e.g., JavaScript DOM manipulation frameworks, desktop widget toolkits). This division forces distributed systems to maintain complex object-relational mappings, fragile serialization layers, and heavyweight client-side runtime engines.
 
-When Ken Sakamura formulated the \textbf{TRON} architecture in 1984, he proposed a fundamentally distinct model for personal and workstation computing: the **TRON Application Databus (TAD)**. Rather than treating applications as opaque binary executables that read and write external files, BTRON treats every entity in the system as a structured, hyper-linked TAD document residing in a persistent Real Body / Virtual Body (\ja{実身}/\ja{仮身}) graph.
+When Ken Sakamura formulated the \textbf{TRON} architecture in 1984, he proposed a fundamentally distinct model for personal and workstation computing: the \textbf{TRON Application Databus (TAD)}. Rather than treating applications as opaque binary executables that read and write external files, BTRON treats every entity in the system as a structured, hyper-linked TAD document residing in a persistent Real Body / Virtual Body (\ja{実身}/\ja{仮身}) graph.
 
 Under BTRON3 SPEC 3.20, TAD establishes a universal container format capable of embedding multilingual text, 2D vector geometry, raster bitmapped images, sound, and executable Virtual Bodys into a coherent, stream-oriented record sequence.
 
 However, classic BTRON specifications did not formalize a high-level, declarative framework for transactional business forms, structured data entry, and reactive schema validation (analogous to modern X-Forms or declarative component models).
 
-This paper presents the design and formalization of **SYNRC NITRO/FORM**, a lightweight, document-centric application framework engineered for BTRON3 SPEC 3.20. NITRO/FORM achieves three primary technical goals:
+This paper presents the design and formalization of \textbf{SYNRC NITRO/FORM}, a lightweight, document-centric application framework engineered for BTRON3 SPEC 3.20. NITRO/FORM achieves three primary technical goals:
 \begin{enumerate}[leftmargin=*]
     \item \textbf{Strict Legal Extensibility:} Zero modifications to core $\mu$ITRON system calls, kernel structures, or standard TAD segment IDs, utilizing application-range \emph{fusen} tags.
     \item \textbf{Declarative Triple Structure:} Formalizing business forms into an algebra of Header, Body, and Footer regions bound to underlying data models.
@@ -285,7 +285,7 @@ To facilitate cross-platform documentation and enterprise interoperability, NITR
 \end{tabular}
 \end{table}
 
-This mapping allows the companion **TAD Browser** to perform on-the-fly bidirectional conversion, allowing BTRON forms to be published as accessible web forms and web forms to be ingested as local TAD Real Bodys.
+This mapping allows the companion \textbf{TAD Browser} to perform on-the-fly bidirectional conversion, allowing BTRON forms to be published as accessible web forms and web forms to be ingested as local TAD Real Bodys.
 
 %-------------------------------------------------------------------------
 \section{Reactive Runtime Lifecycle and Data Binding}

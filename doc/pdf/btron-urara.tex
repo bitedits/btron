@@ -187,7 +187,7 @@ To overcome this, Kishida formulated the \textbf{POSIX OSS Gateway Strategy}~\ci
 Urara OS answers unsupported or obsolete POSIX calls with standard \texttt{ENOSYS}. As Kishida noted, \texttt{ENOSYS} is a formally sanctioned POSIX.1 response, exactly matching the implementation strategy of Linux and glibc.
 
 \subsection{B-System: The High-Throughput SAS-RTOS and Actor Unikernel}
-In contrast, 5HT's B-System approaches BTRON3 3.20 as an uncompromising real-time computational engine. Rather than layering Unix compatibility into the core, B-System embraces a **Single-Address-Space RTOS (SAS-RTOS)** model for embedded SBCs (Raspberry Pi 400), microcontrollers, and retro consoles (PS2, PC-98). Memory protection is either identity-mapped or flattened, eliminating the non-deterministic TLB invalidation flushes, page table walks, and pipeline bubbles that plague Unix kernels. 
+In contrast, 5HT's B-System approaches BTRON3 3.20 as an uncompromising real-time computational engine. Rather than layering Unix compatibility into the core, B-System embraces a \textbf{Single-Address-Space RTOS (SAS-RTOS)} model for embedded SBCs (Raspberry Pi 400), microcontrollers, and retro consoles (PS2, PC-98). Memory protection is either identity-mapped or flattened, eliminating the non-deterministic TLB invalidation flushes, page table walks, and pipeline bubbles that plague Unix kernels. 
 
 For multicore concurrency, B-System models task coordination on the Erlang/BEAM actor architecture~\cite{armstrong2003erlang}. Symmetric cores operate as autonomous workers processing lock-free Multi-Producer Single-Consumer (MPSC) actor queues, achieving total elimination of system-wide spinlocks.
 
@@ -266,7 +266,7 @@ A remarkable technical achievement of Hideyuki Kishida is his transparent, phase
 \end{itemize}
 
 \subsubsection{The 49 Process Globals vs. 299 System Globals}
-In an exemplary audit of \path{bfree_x86_64/kernel/sysmain/syscall.c}, Kishida cataloged all 351 kernel data symbols. He established that **only 49 symbols represent per-process state** that dynamically mutates during task switching:
+In an exemplary audit of \path{bfree_x86_64/kernel/sysmain/syscall.c}, Kishida cataloged all 351 kernel data symbols. He established that \textbf{only 49 symbols represent per-process state} that dynamically mutates during task switching:
 \begin{lstlisting}[language=C]
 g_bfree_fork_saved_*, g_bfree_sysret_exec_*, g_gp_cur,
 g_gthr, g_gthr_cur, g_guest_brk, g_guest_cwd,
@@ -305,7 +305,7 @@ Each core executes an independent scheduling loop over a lock-free MPSC message 
 The graphics subsystems of Urara OS and B-System embody fundamentally different architectural priorities: modern desktop workstation composition versus low-level memory bus saturation.
 
 \subsection{Urara OS: Compositor-First Wayland Architecture}
-In August 2026, Hideyuki Kishida initiated a major architectural migration: transitioning Urara OS from a legacy direct-to-framebuffer rendering model (\texttt{-platform bfree}) to a modern **Compositor-First Architecture** documented in \path{COMPOSITOR_MIGRATION.ja.md} and \path{HONDESK_PHASES.ja.md}.
+In August 2026, Hideyuki Kishida initiated a major architectural migration: transitioning Urara OS from a legacy direct-to-framebuffer rendering model (\texttt{-platform bfree}) to a modern \textbf{Compositor-First Architecture} documented in \path{COMPOSITOR_MIGRATION.ja.md} and \path{HONDESK_PHASES.ja.md}.
 
 \subsubsection{The Wayland Protocol Pipeline}
 Under this architecture:
@@ -390,7 +390,7 @@ In \path{bfree_x86_64/kernel/sysmain/vmm.c}, Urara OS establishes a complete, mo
 \end{itemize}
 
 \subsection{The POSIX OSS Gateway: Milestone Status and Real-World Compatibility}
-The centerpiece of Urara OS's userland runtime is the **POSIX OSS Gateway**. Rather than trapping developers within proprietary APIs, Urara OS provides binary-level compatibility with standard x86\_64 ELF executables linked against \texttt{musl} or embedded libc.
+The centerpiece of Urara OS's userland runtime is the \textbf{POSIX OSS Gateway}. Rather than trapping developers within proprietary APIs, Urara OS provides binary-level compatibility with standard x86\_64 ELF executables linked against \texttt{musl} or embedded libc.
 
 Table~\ref{tab:posix_audit} audits the operational status of Kishida's four POSIX gateway milestones as of October 2026.
 
@@ -508,7 +508,7 @@ The complementary architectural triumphs of Urara OS and B-System offer an extra
 \section{Conclusion}
 \label{sec:conclusion}
 
-This paper has delivered a rigorous, peer-level comparative audit between **Hideyuki Kishida's Urara OS (B-Free 64)** and **5HT's B-System (BTRON 3.20)**, evaluating their operational maturity, algorithmic design, and architectural trade-offs across isomorphic subsystems.
+This paper has delivered a rigorous, peer-level comparative audit between \textbf{Hideyuki Kishida's Urara OS (B-Free 64)} and \textbf{5HT's B-System (BTRON 3.20)}, evaluating their operational maturity, algorithmic design, and architectural trade-offs across isomorphic subsystems.
 
 In Symmetric Multiprocessing, \textbf{Urara OS demonstrates superior bare-metal hardware maturity today}, executing live multicore workloads on x86\_64 PCs via a 7-stage SMP progression, Local APIC / x2APIC bring-up, and the systematic decoupling of 49 process globals from the Big Kernel Lock. Conversely, \textbf{B-System presents a superior theoretical concurrency model} based on lock-free actor queues, achieving total elimination of lock contention.
 

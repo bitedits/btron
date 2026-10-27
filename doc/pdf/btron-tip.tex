@@ -305,7 +305,7 @@ As summarized in Table~\ref{tab:test_results}, the test suite achieves a 100.0\%
 \section{Real Body User Dictionary Architecture}
 \label{sec:real_objects}
 
-In conventional Unix environments, user dictionaries are maintained as unmanaged flat files in hidden dotfiles (\texttt{\textasciitilde/.config/mozc/user.dic}). In B-System, user dictionaries are modeled as first-class **Real Bodys (\ja{実身} -- \emph{Jisshin})**:
+In conventional Unix environments, user dictionaries are maintained as unmanaged flat files in hidden dotfiles (\texttt{\textasciitilde/.config/mozc/user.dic}). In B-System, user dictionaries are modeled as first-class \textbf{Real Bodys (\ja{実身} -- \emph{Jisshin})}:
 \begin{itemize}[leftmargin=*]
     \item \textbf{Hyper-Data Integration:} The user dictionary is stored as an immutable-header record in the system cabinet. Any application document can link to specialized dictionaries (e.g., medical, legal, avionics terminology) via Virtual Bodys (\ja{仮身} -- \emph{Kashin}).
     \item \textbf{Concurrency Safety:} Dictionary mutations occur via $\mu$ITRON concurrency-safe record primitives, ensuring atomic updates during concurrent multi-window editing.
@@ -318,7 +318,7 @@ In conventional Unix environments, user dictionaries are maintained as unmanaged
 
 In this paper, we presented the complete cleanroom architecture of the \textbf{Text Input Primitives (TIP)} and \textbf{B-System/mozc} engine for the BTRON3 SPEC 3.20 and B-System platforms. By formalizing Ken Sakamura's multi-plane TRON Multilingual Character Code System, our design eliminates the orthographic compromises of Unicode Han Unification while preserving full interoperability with modern host systems through a verified lossless UTF-8 bridge.
 
-Through \textbf{B-System/mozc}, we demonstrated that high-accuracy statistical Kana-Kanji conversion does not require heavy C++ runtime frameworks, multi-gigabyte memory footprints, or non-deterministic garbage collection. By distilling morphological dynamic programming, bigram Part-of-Speech cost minimization, and prefix trie lookup into a pure C99 engine adhering to NASA JPL safety-critical rules, B-System establishes a **state-of-the-art, minimalistic, and uncompromised multilingual Asian text input library** for modern real-time operating systems, embedded appliances, and hypervisor unikernels.
+Through \textbf{B-System/mozc}, we demonstrated that high-accuracy statistical Kana-Kanji conversion does not require heavy C++ runtime frameworks, multi-gigabyte memory footprints, or non-deterministic garbage collection. By distilling morphological dynamic programming, bigram Part-of-Speech cost minimization, and prefix trie lookup into a pure C99 engine adhering to NASA JPL safety-critical rules, B-System establishes a \textbf{state-of-the-art, minimalistic, and uncompromised multilingual Asian text input library} for modern real-time operating systems, embedded appliances, and hypervisor unikernels.
 
 %-------------------------------------------------------------------------
 \begin{thebibliography}{99}

@@ -211,7 +211,9 @@
           <thead><tr><th>Constant</th><th>Value</th><th>Derivation</th></tr></thead>
           <tbody>
             <tr><td><code>MSX_XTAL</code></td><td>10.738635 MHz</td><td>Master crystal of NTSC machines.</td></tr>
-            <tr><td><code>Z80_HZ</code></td><td>3,579,545 Hz</td><td><code>MSX_XTAL ÷ 3</code>. Z80 and VDP share this clock.</td></tr>
+            <tr><td><code>Z80_HZ</code></td><td>3,579,545 Hz</td><td><code>MSX_XTAL ÷ 3</code>. Standard Z80 and VDP base clock.</td></tr>
+            <tr><td><code>HD64180_HZ</code></td><td>6,144,000 Hz</td><td>6.144 MHz CPU clock for Hitachi HC-90 and HC-95.</td></tr>
+            <tr><td><code>R800_HZ</code></td><td>7,159,090 Hz</td><td><code>Z80_HZ × 2</code>. Bus clock for MSX turbo R (internal 28.6 MHz).</td></tr>
             <tr><td><code>PSG_HZ</code></td><td>1,789,772 Hz</td><td><code>MSX_XTAL ÷ 6 = Z80_HZ ÷ 2</code>. PSG tone, noise and envelope tick.</td></tr>
             <tr><td><code>T_PER_LINE</code></td><td>228 T</td><td>512 display dots plus 16 blanking dots; <code>512 ÷ 8 × 3.4857…</code></td></tr>
             <tr><td><code>T_PER_FRAME</code></td><td>59,664 T</td><td><code>228 × 262</code> (NTSC: 212 display lines plus 50 blanking lines).</td></tr>
@@ -278,14 +280,16 @@
           behaviours are stated in the Read and Write columns.</caption>
           <thead><tr><th>Port</th><th>Device</th><th>Read</th><th>Write</th></tr></thead>
           <tbody>
+            <tr><td><code>0x00–0x3F</code></td><td>HD64180 on-chip I/O (Hitachi HC-90/95)</td><td>Internal registers: PRT Timer 0/1 data/reload (<code>0x0C–0x0F, 0x14–0x17</code>), TCR (<code>0x10</code>), MMU (<code>0x38–0x3A</code>), ICR (<code>0x3F</code>). Relocated by ICR bits 7–6.</td><td>Internal registers written directly; outside internal base routes to external bus.</td></tr>
             <tr><td><code>0x10</code></td><td>PPI A (8255)</td><td>Joystick A on bits 0–5; bits 6–7 as pin levels.</td><td>Returns <code>0xFF</code>; port A is an input.</td></tr>
             <tr><td><code>0x11</code></td><td>PPI B</td><td>Undefined.</td><td>Speaker and RRS latch; the core MAY no-op.</td></tr>
             <tr><td><code>0x12</code></td><td>PPI C</td><td>Cassette digital input; <code>0</code> in the first core.</td><td>Cassette motor and tape out; <code>0</code> in the first core.</td></tr>
             <tr><td><code>0x13</code></td><td>PPI control</td><td>None.</td><td>Mode word; C-BIOS writes <code>0x82</code> (ports A and C inputs, port B output).</td></tr>
-            <tr><td><code>0x88</code></td><td>VDP status</td><td>FIFO state and flags; reading clears FG2, FG1, FG0 and the pending NMI.</td><td>None.</td></tr>
-            <tr><td><code>0x89</code></td><td>VDP data</td><td><code>VRAM[read-address]</code>, then auto-increment.</td><td><code>VRAM[write-address]</code>, then auto-increment.</td></tr>
-            <tr><td><code>0x8A</code></td><td>VDP control</td><td>Register index, auto-incrementing; <code>0xC0</code> is read-only.</td><td>Two-byte sequence: <code>reg | 0x80</code>, then the value; the index increments.</td></tr>
-            <tr><td><code>0x8B</code></td><td>VDP data, second pair</td><td>As <code>0x89</code>, with an independent read address bit 14.</td><td>As <code>0x89</code>, with an independent write address bit 14.</td></tr>
+            <tr><td><code>0x88–0x8B</code></td><td>VDP mirror / alias ports (V9938 / V9958 / V9968)</td><td>Identical alias to <code>0x98–0x9B</code>: status, VRAM read data, register index, indirect register.</td><td>Identical alias to <code>0x98–0x9B</code>: VRAM write, register write sequence, palette.</td></tr>
+            <tr><td><code>0x98</code></td><td>VDP data (VRAM)</td><td><code>VRAM[read-address]</code>, then auto-increment.</td><td><code>VRAM[write-address]</code>, then auto-increment.</td></tr>
+            <tr><td><code>0x99</code></td><td>VDP control / status</td><td>Status register read (reading S0 clears vblank/collision).</td><td>Two-byte sequence: register index and value, or address setup.</td></tr>
+            <tr><td><code>0x9A</code></td><td>VDP palette write</td><td>None.</td><td>RGB color palette write (pair of bytes per palette index).</td></tr>
+            <tr><td><code>0x9B</code></td><td>VDP indirect register</td><td>None.</td><td>Writes value to register specified in register 16.</td></tr>
             <tr><td><code>0xA0</code></td><td>PSG port A and B</td><td>The last register number written.</td><td>PSG register latch, masked to 5 bits.</td></tr>
             <tr><td><code>0xA1</code></td><td>PSG port C</td><td>Unused on MSX2+.</td><td>PSG data write to the latched register.</td></tr>
             <tr><td><code>0xA2</code></td><td>PPI A, alternate decode</td><td>Keyboard row data for the row latched at <code>0xFE</code>.</td><td>None.</td></tr>
@@ -307,11 +311,44 @@
       <!-- ═══════ Part 2 ═══════ -->
       <section id="cpu">
         <h2>Part 2 — Silicon Contracts</h2>
-        <h3>2.1 Z80 Core &amp; Interrupts</h3>
+        <h3>2.1 CPU Architecture: Z80, ASCII R800 &amp; Hitachi HD64180</h3>
         <p>
-          The CPU MUST be a cycle-accurate-at-instruction-boundary Z80 core (superzazu/z80 shape —
-          instruction cycles, not per-T-state interleaving; <a href="#chips">7.7</a>). Required
-          semantics, each of which is an acceptance-testable claim:
+          The CPU execution layer in B-MSX is modular and cycle-bounded, selecting between the standard Zilog Z80A, the ASCII R800, and the Hitachi HD64180 based on the active machine preset:
+        </p>
+        <ul>
+          <li><b>Zilog Z80A (3.58 MHz)</b>: Primary MSX1, MSX2, and MSX2+ processor (instruction-boundary cycle model; passes ZEXALL suite AV-0). Handles IM 0/1/2 (IM2 VDP vector <code>(I &lt;&lt; 8) | 0xFF</code>), edge-triggered NMI, and DI/EI deferred interrupt execution.</li>
+          <li><b>ASCII R800 (7.16 MHz bus / 28.6 MHz CPU)</b>: MSX turbo R processor. Implements 16-bit hardware multiply opcodes <code>MULUB A, r</code> (14 T) and <code>MULUW HL, rr</code> (36 T), consuming 2 CPU cycles per bus cycle.</li>
+          <li><b>Hitachi HD64180 (6.144 MHz)</b>: Microprocessor for the Hitachi HC-90 and HC-95 MSX2 workstations. Fully superset-compatible with Z80, executing all standard opcodes via direct passthrough to <code>z80_step</code> without quality degradation, while intercepting extended <code>0xED</code> opcodes and on-chip peripherals.</li>
+        </ul>
+
+        <h4>HD64180 Extended Instruction Set</h4>
+        <table class="api-table">
+          <caption>Hitachi HD64180 extended opcodes implemented in <code>src/emulators/msx/hd64180.c</code>.</caption>
+          <thead><tr><th>Opcode</th><th>Instruction</th><th>Cycles</th><th>Operation &amp; Flags</th></tr></thead>
+          <tbody>
+            <tr><td><code>ED 4C</code></td><td><code>MLT BC</code></td><td>17 T</td><td><code>BC ← B × C</code>. Unsigned 8-bit × 8-bit multiplication. Flags unaffected.</td></tr>
+            <tr><td><code>ED 5C</code></td><td><code>MLT DE</code></td><td>17 T</td><td><code>DE ← D × E</code>. Unsigned 8-bit × 8-bit multiplication. Flags unaffected.</td></tr>
+            <tr><td><code>ED 6C</code></td><td><code>MLT HL</code></td><td>17 T</td><td><code>HL ← H × L</code>. Unsigned 8-bit × 8-bit multiplication. Flags unaffected.</td></tr>
+            <tr><td><code>ED 7C</code></td><td><code>MLT SP</code></td><td>17 T</td><td><code>SP ← SPH × SPL</code>. Unsigned 8-bit × 8-bit multiplication. Flags unaffected.</td></tr>
+            <tr><td><code>ED 00+8r m</code></td><td><code>IN0 r, (m)</code></td><td>12 T</td><td>Read internal I/O port <code>m</code> into register <code>r</code> (B, C, D, E, H, L, A). <code>ED 30 m</code> tests input only. Flags: S, Z, H=0, P/V, N=0. Carry unchanged.</td></tr>
+            <tr><td><code>ED 01+8r m</code></td><td><code>OUT0 (m), r</code></td><td>13 T</td><td>Write register <code>r</code> to internal I/O port <code>m</code>. Flags unaffected.</td></tr>
+            <tr><td><code>ED 04+8r</code></td><td><code>TST r</code></td><td>7 T</td><td>Non-destructive logical AND between <code>A</code> and register <code>r</code>. Flags: S, Z, H=1, P/V=parity, N=0, C=0.</td></tr>
+            <tr><td><code>ED 34</code></td><td><code>TST (HL)</code></td><td>13 T</td><td>Non-destructive logical AND between <code>A</code> and memory byte <code>(HL)</code>. Flags: same as <code>TST r</code>.</td></tr>
+            <tr><td><code>ED 64 m</code></td><td><code>TST imm</code></td><td>9 T</td><td>Non-destructive logical AND between <code>A</code> and immediate byte <code>m</code>. Flags: same as <code>TST r</code>.</td></tr>
+            <tr><td><code>ED 74 m</code></td><td><code>TSTIO imm</code></td><td>12 T</td><td>Non-destructive logical AND between on-chip port <code>C</code> and immediate byte <code>m</code>. Flags: same as <code>TST r</code>.</td></tr>
+            <tr><td><code>ED 76</code></td><td><code>SLP</code></td><td>8 T</td><td>Puts CPU into sleep mode until an interrupt occurs (<code>cpu-&gt;halted = 1</code>).</td></tr>
+            <tr><td><code>ED 83 / 93</code></td><td><code>OOTIM / OOTIMR</code></td><td>15 / 14 T</td><td>Memory to on-chip I/O block output: <code>OUT0 (C), (HL)</code>, <code>HL++</code>, <code>B--</code>. OOTIMR repeats until <code>B == 0</code>.</td></tr>
+            <tr><td><code>ED 8B / 9B</code></td><td><code>OTDM / OTDMR</code></td><td>15 / 14 T</td><td>Memory to on-chip I/O block output: <code>OUT0 (C), (HL)</code>, <code>HL--</code>, <code>B--</code>. OTDMR repeats until <code>B == 0</code>.</td></tr>
+          </tbody>
+        </table>
+
+        <h4>HD64180 Programmable Reload Timer (PRT)</h4>
+        <p>
+          The on-chip PRT peripheral features two independent 16-bit timer channels (Timer 0 and 1) down-counted at <code>phi / 20</code> (every 20 CPU cycles via <code>hd64180_advance</code>). When a timer counter (<code>TMDR0/1</code>) counts to zero, it automatically reloads from its reload register (<code>RLDR0/1</code>) and asserts the timer interrupt flag (<code>TIF0/1</code>) in the timer control register (<code>TCR</code> at internal offset <code>0x10</code>). When timer interrupt enable (<code>TIE0/1</code>) is set and interrupts are enabled on the CPU, a timer IRQ is raised.
+        </p>
+
+        <p>
+          Required Z80 timing and bus contracts (<span class="basis basis-hw">Hardware</span>):
         </p>
         <ul>
           <li>DI/EI delay: an interrupt MUST NOT be accepted by the instruction that executes
@@ -329,8 +366,7 @@
             zero-latency memory.</li>
         </ul>
         <p>
-          Cycle costs for the instructions the boot trace uses, from the Z80 documentation
-          (<span class="basis basis-hw">Hardware</span>): <code>NOP</code> 4 T ·
+          Cycle costs for standard instructions (<span class="basis basis-hw">Hardware</span>): <code>NOP</code> 4 T ·
           <code>LD A,(nn)</code> 13 T · <code>LD HL,(nn)</code> 16 T · <code>JP (HL)</code> 5 T ·
           <code>CALL nn</code> 17 T · <code>CALSLT</code> prefix sequence
           <code>DI/POP×6/EI/JP</code> 53 T plus the callee · <code>RET</code> 10 T · <code>IM 2</code> 8 T ·
@@ -891,7 +927,7 @@
             <tr><td><code>0</code></td><td>4</td><td><code>magic</code></td><td><code>'BMSX'</code> exactly (<code>42 4D 53 58</code>).</td></tr>
             <tr><td><code>4</code></td><td>2</td><td><code>version</code></td><td>1. Any other value ⇒ <code>MSX_ERR_MAGIC</code>.</td></tr>
             <tr><td><code>6</code></td><td>2</td><td><code>kind</code></td><td>1 = rom, 2 = com, 3 = bload, 4 = cas.</td></tr>
-            <tr><td><code>8</code></td><td>2</td><td><code>machine</code></td><td>1 = MSX, 2 = MSX2, 3 = MSX2+.</td></tr>
+            <tr><td><code>8</code></td><td>2</td><td><code>machine</code></td><td>1 = MSX, 2 = MSX2, 3 = MSX2+, 18 = turboR, 19 = turboR FDD, 20 = HC-90, 21 = HC-95, 22 = HC-95 FDD.</td></tr>
             <tr><td><code>10</code></td><td>2</td><td><code>flags</code></td><td>bit 0 = pause at first frame, bit 1 = force keyboard hook. Reserved bits are 0.</td></tr>
             <tr><td><code>12</code></td><td>4</td><td><code>entry</code></td><td><code>0x4000</code> for <code>kind=1</code>, <code>0x0100</code> for <code>kind=2</code>, otherwise 0.</td></tr>
             <tr><td><code>16</code></td><td>4</td><td><code>size</code></td><td>Payload bytes, 1 … 1,048,576.</td></tr>

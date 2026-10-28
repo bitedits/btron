@@ -36,17 +36,17 @@
   <div class="setting-hero">
     <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F3AE.svg" alt="🎮" width="64" height="64"></div>
     <h1>ゲームシステム (MSX)</h1>
-    <div class="setting-hero-badge">MSX / MSX2 / turboR C-BIOS 準拠 · Geo3D パイプライン · 早送り (Fast-Forward) · C99 実装</div>
-    <div class="subtitle">MSX/MSX2/turboR カートリッジ実行環境およびリアルタイム 3D 幾何学演算エンジン<br><span style="font-size:0.9em; opacity:0.85;">"Comprehensive MSX/MSX2/turboR game emulation system and Geo3D pipeline integrated directly into B-System window environment."</span></div>
+    <div class="setting-hero-badge">MSX / MSX2 / turboR / Hitachi HC-90/95 C-BIOS 準拠 · HD64180 / R800 · Geo3D · C99 実装</div>
+    <div class="subtitle">MSX/MSX2/MSX2+/turboR/Hitachi HC-90/95 統合エミュレーション環境および Geo3D 演算エンジン<br><span style="font-size:0.9em; opacity:0.85;">"Comprehensive MSX/MSX2/turboR and Hitachi HC-90/95 workstation emulation with HD64180, R800, and Geo3D pipeline."</span></div>
   </div>
 
   <div class="setting-content">
     <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>ゲームシステム（MSX）</strong> — B-MSX は、B-System ワークベンチ空間上で動作する C99 純実装の MSX / MSX2 / MSX2+ / MSX turbo R 統合エミュレーション環境です。オープンソース C-BIOS を内蔵し、TMS9918A / V9938 VDP 互換描画、PSG (AY-3-8910) 音源、MegaROM カートリッジマッパー、高速早送り（Fast-Forward）、および 3次元幾何学リアルタイム演算エンジン Geo3D をネイティブサポートします。<br>
+      <strong>ゲームシステム（MSX）</strong> — B-MSX は、B-System ワークベンチ空間上で動作する C99 純実装の MSX / MSX2 / MSX2+ / MSX turbo R / Hitachi HC-90・HC-95 統合エミュレーション環境です。オープンソース C-BIOS を内蔵し、TMS9918A / V9938 / V9958 / V9968 VDP 互換描画（ポート 98H / 88H 両対応）、Z80A / ASCII R800 / Hitachi HD64180 CPU、PSG (AY-3-8910) 音源、MegaROM カートリッジマッパー、高速早送り（Fast-Forward）、および 3次元幾何学リアルタイム演算エンジン Geo3D をネイティブサポートします。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
-        "Official technical specification for the B-MSX game emulation environment, cartridge subsystem, fast-forward engine, and Geo3D accelerator within B-System."
+        "Official technical specification for the B-MSX game emulation environment, cartridge subsystem, Hitachi HD64180 CPU workstation support, and Geo3D accelerator within B-System."
       </span>
     </div>
 
@@ -188,7 +188,7 @@
           <tr>
             <td><b>エミュレータ (Emulator)</b></td>
             <td>一時停止 (Pause, Ctrl+P)<br>再開 (Resume, Ctrl+P)<br><b>早送り (Fast-Forward, Tab)</b><br>機械 (running machine)</td>
-            <td><code>msx_app_fast_forward()</code> による高速フレームスキップ。最終行は状態表示で、<code>msx_init</code> が選んだ機械を出す。空の窓は turboR / R800。XRacing、YAZZIER、c0man は MSX1 / TMS9918A。Bad Apple は MSX2+ / V9958。Dynamite Go! Go! は MSX2 JP / V9938。</td>
+            <td><code>msx_app_fast_forward()</code> による高速フレームスキップ。最終行は状態表示で、<code>msx_init</code> が選んだ機械を表示：空の窓は turboR / R800。XRacing、YAZZIER、c0man は MSX1 / TMS9918A。Bad Apple は MSX2+ / V9958。Dynamite Go! Go! は MSX2 JP / V9938。Hitachi HC-90 / HC-95 カートリッジや設定時は <code>Hitachi HC-90 / HD64180</code>、<code>Hitachi HC-95 / HD64180</code>、<code>Hitachi HC-95 FDD / HD64180</code> を表示。</td>
           </tr>
           <tr>
             <td><b>表示 (View)</b></td>
@@ -226,23 +226,23 @@
         <tbody>
           <tr>
             <td><b>CPU コア</b></td>
-            <td>Zilog Z80A (3.58 MHz)<br>ASCII R800 (28.6 MHz 相当)</td>
-            <td>全非公開命令（Undocumented opcodes）、フラグ計算、割込みモード 1/2（IM1/IM2）、リフレッシュレジスタ（R）の完全エミュレーション。</td>
+            <td>Zilog Z80A (3.58 MHz)<br>ASCII R800 (28.6 MHz 相当)<br>Hitachi HD64180 (6.144 MHz)</td>
+            <td>全非公開命令（Undocumented opcodes）、フラグ計算、割込みモード 1/2（IM1/IM2）、リフレッシュレジスタ（R）の完全エミュレーション。R800 の 16ビット乗算（MULUB/MULUW）、HD64180 の 8ビット符号なし乗算（MLT BC/DE/HL/SP）、内部I/Oレジスタ（IN0/OUT0）、非破壊論理積（TST/TSTIO）、スリープ（SLP）、およびプログラマブル・リロードタイマ（PRT ch0/1）をネイティブサポート。標準Z80命令は直接パススルーによりゼロオーバーヘッド実行。</td>
           </tr>
           <tr>
             <td><b>VDP ビデオ</b></td>
-            <td>TI TMS9918A<br>Yamaha V9938</td>
-            <td>SCREEN 0〜8、カラーテーブル、パターンジェネレータ、32枚スプライトプレーン、ライン割込み、コマンドエンジン（HMMV/LMMV/HMMC等）。</td>
+            <td>TI TMS9918A<br>Yamaha V9938 / V9958 / V9968</td>
+            <td>SCREEN 0〜8、カラーテーブル、パターンジェネレータ、32枚スプライトプレーン、ライン割込み、コマンドエンジン（HMMV/LMMV/HMMC等）。I/Oポートは標準 0x98〜0x9B および MSX2 ワークステーション互換エイリアス 0x88〜0x8B の双方に対応。</td>
           </tr>
           <tr>
             <td><b>音源システム</b></td>
             <td>AY-3-8910 / YM2149 (PSG)<br>Konami SCC<br>Yamaha YM2413 (MSX-MUSIC)<br>Y8950 (MSX-AUDIO FM)<br>turboR PCM</td>
-            <td>再生中の設定は Rigour。B-Sound の譜面用設定は Subtle。両者は 44.1 kHz ステレオ S16 だけを共有し、シンセはチップへ書き込まない。</td>
+            <td>再生中の設定は Rigour。B-Sound の譜面用設定は Subtle。両者は 44.1 kHz ステレオ S16 だけを共有し、シンセはチップへ書き込まない。Hitachi HC-90/95 は PSG (ポート A0H〜A3H) を使用。</td>
           </tr>
           <tr>
-            <td><b>BIOS</b></td>
-            <td>オープンソース C-BIOS<br>(MSX / MSX2 / turboR)</td>
-            <td>商用 ROM 不要のクリーンルーム BIOS 実装。カートリッジのヘッダ解析、初期化ベクタディスパッチ、DOS コール互換レイヤ。</td>
+            <td><b>BIOS &amp; 漢字ROM</b></td>
+            <td>オープンソース C-BIOS<br>(MSX / MSX2 / turboR / HC-90 / HC-95)<br>Kanji ROM Level 1 / 2</td>
+            <td>商用 ROM 不要のクリーンルーム BIOS 実装。カートリッジのヘッダ解析、初期化ベクタディスパッチ、DOS コール互換レイヤ。HC-90/95 では日本語 MSX2 C-BIOS (<code>cbios_main_msx2_jp.rom</code>) と漢字 ROM、HC-95 FDD ではフロッピーディスクドライブ ROM (720KB) を自動装填。</td>
           </tr>
           <tr>
             <td><b>メモリマッパー</b></td>

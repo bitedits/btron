@@ -2,9 +2,9 @@ MSX-SOUND.txt — B-MSX Sound Chip Layer (tronMSX)
 =======================================================================================
 
 B-System / BTRON 3.20
-Target: MSX, MSX2, MSX2+ and turboR audio inside tronMSX
+Target: MSX, MSX2, MSX2+, turboR, and Hitachi HC-90/95 audio inside tronMSX
 Related: b-media/msx.html section 2.6, b-media/sound.html section 3.4,
-         b-media/audio.html, SOUND.txt, src/emulators/msx/
+         b-media/audio.html, SOUND.txt, doc/txt/MSX.txt, src/emulators/msx/
 
 The lilcu64 synthesizer and this layer share one PCM contract and nothing else.
 Both produce interleaved little-endian S16 at 44.1 kHz, stereo. B-MSX does not
@@ -41,6 +41,8 @@ the chip sources and not msx_app.c, so it does not open SDL.
 PSG, SCC, OPLL and Y8950 advance only while a block is rendered. turboR PCM
 is clocked from t9769c_advance, because BIOS playback polls port 0xA4 during
 the CPU frame. pcm_mix only resamples samples that frame already captured.
+On Hitachi HC-90 and HC-95 machines, audio execution uses the standard PSG
+at ports 0xA0–0xA3 paced by the 6.144 MHz HD64180 core and bus cycles.
 
 =======================================================================================
 2. CHIPS

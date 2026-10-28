@@ -404,6 +404,22 @@ void pdf_reader_render_page(void *app_ptr, int page_num) {
     /* 3. Load PDF and Locate Target Page Stream */
     FILE *f = fopen(app->doc_path, "rb");
     if (!f) {
+        const char *alts[] = {
+            "doc/pdf/n64.pdf",
+            "doc/pdf/sample.pdf",
+            "assets/pdf/n64.pdf",
+            "SYS/n64.pdf",
+            "n64.pdf"
+        };
+        for (size_t i = 0; i < sizeof(alts) / sizeof(alts[0]); i++) {
+            f = fopen(alts[i], "rb");
+            if (f) {
+                strncpy(app->doc_path, alts[i], sizeof(app->doc_path) - 1);
+                break;
+            }
+        }
+    }
+    if (!f) {
         set_clip(dev, &orig_clip);
         return;
     }

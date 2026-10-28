@@ -73,8 +73,9 @@ typedef struct {
     APP_MENU_BAR menu_bar;
 } ReviewApp;
 
-/* Forward declaration of pdf_reader_render_page */
+/* Forward declaration of pdf_reader_render_page and open_review_about_window */
 extern void pdf_reader_render_page(void *app, int page_num);
+WND* open_review_about_window(void);
 
 static void review_build_menu(ReviewApp *app) {
     if (!app) return;
@@ -486,7 +487,11 @@ static void review_handle_cmd(ReviewApp *app, int cmd) {
             break;
         }
         case CMD_PDF_CLOSE: {
-            if (app->wnd) cls_wnd(app->wnd);
+            if (app->wnd) {
+                WND *w = app->wnd;
+                app->wnd = NULL;
+                cls_wnd(w);
+            }
             break;
         }
         case CMD_PDF_PREV: {
@@ -540,13 +545,12 @@ static void review_handle_cmd(ReviewApp *app, int cmd) {
             review_add_annotation(app, app->current_page, anno_text, &anno_id);
             break;
         }
+        case CMD_PDF_LIST_ANNO: {
+            /* Verify and refresh all Marginalia citations */
+            break;
+        }
         case CMD_PDF_ABOUT: {
-            WND *dlg = app_menu_create_about_dialog(
-                "Review", "校正・閲覧",
-                "B-System Vector PDF & Peer-Review Workspace\n"
-                "Secure PostScript (sps) & ISO 32000 Engine",
-                "TRON Association / Cleanroom Systems Group",
-                160, 120);
+            WND *dlg = open_review_about_window();
             if (dlg) {
                 top_wnd(dlg);
                 inval_wnd(dlg);
@@ -574,9 +578,12 @@ static void review_event(WND *wnd, const EVT *evt) {
     if (evt->type == EV_MOUSE_MOVE) {
         if (app->dragging_sb_v) {
             int track_h = avail_h - 32;
+            int thumb_h = (max_sy > 0) ? (track_h * avail_h) / (avail_h + max_sy) : track_h;
+            if (thumb_h < 16) thumb_h = 16;
+            int travel = track_h - thumb_h;
             int dy = rel_y - app->drag_start_mouse;
-            if (track_h > 0 && max_sy > 0) {
-                app->scroll_y = app->drag_start_scroll + (dy * max_sy) / track_h;
+            if (travel > 0 && max_sy > 0) {
+                app->scroll_y = app->drag_start_scroll + (dy * max_sy) / travel;
                 if (app->scroll_y < 0) app->scroll_y = 0;
                 if (app->scroll_y > max_sy) app->scroll_y = max_sy;
             }
@@ -585,9 +592,12 @@ static void review_event(WND *wnd, const EVT *evt) {
         }
         if (app->dragging_sb_h) {
             int track_w = avail_w - 32;
+            int thumb_w = (max_sx > 0) ? (track_w * avail_w) / (avail_w + max_sx) : track_w;
+            if (thumb_w < 16) thumb_w = 16;
+            int travel = track_w - thumb_w;
             int dx = rel_x - app->drag_start_mouse;
-            if (track_w > 0 && max_sx > 0) {
-                app->scroll_x = app->drag_start_scroll + (dx * max_sx) / track_w;
+            if (travel > 0 && max_sx > 0) {
+                app->scroll_x = app->drag_start_scroll + (dx * max_sx) / travel;
                 if (app->scroll_x < 0) app->scroll_x = 0;
                 if (app->scroll_x > max_sx) app->scroll_x = max_sx;
             }
@@ -605,7 +615,7 @@ static void review_event(WND *wnd, const EVT *evt) {
         /* Menu bar click */
         int cmd = -1, sub = -1;
         if (app_menu_handle_mouse_down(&app->menu_bar, rel_x, rel_y, &cmd, &sub)) {
-            if (cmd >= 0) review_handle_cmd(app, cmd);
+            if (cmd > 0) review_handle_cmd(app, cmd);
             inval_wnd(wnd);
             return;
         }
@@ -692,7 +702,7 @@ static void review_event(WND *wnd, const EVT *evt) {
     else if (evt->type == EV_KEY_DOWN) {
         int cmd = -1;
         if (app_menu_handle_key(&app->menu_bar, evt->key, (uint16_t)(uintptr_t)evt->data, &cmd)) {
-            if (cmd >= 0) review_handle_cmd(app, cmd);
+            if (cmd > 0) review_handle_cmd(app, cmd);
             inval_wnd(wnd);
             return;
         }
@@ -802,6 +812,21 @@ WND* open_review_window_with_file(const char *path) {
     top_wnd(wnd);
     inval_wnd(wnd);
     return wnd;
+}
+
+WND* open_review_about_window(void) {
+    int ax = 160;
+    int ay = 120;
+    if (s_global_review_app.wnd) {
+        ax = s_global_review_app.wnd->bounds.left + 80;
+        ay = s_global_review_app.wnd->bounds.top + 60;
+    }
+    return app_menu_create_about_dialog(
+        "Review", "校正・閲覧",
+        "B-System Vector PDF & Peer-Review Workspace\n"
+        "Secure PostScript (sps) & ISO 32000 Engine",
+        "TRON Association / Cleanroom Systems Group",
+        ax, ay);
 }
 
 WND* open_review_window(void) {

@@ -48,6 +48,9 @@ typedef struct {
 
 #define BMSX_MACHINE_MSXTR_CBIOS        18u
 #define BMSX_MACHINE_MSXTR_CBIOS_FDD    19u
+#define BMSX_MACHINE_HC90_CBIOS         20u
+#define BMSX_MACHINE_HC95_CBIOS         21u
+#define BMSX_MACHINE_HC95_CBIOS_FDD     22u
 
 /* The cartridge cap, in bytes: supports up to 4 MiB MegaROMs (e.g. Geo3D-256) */
 #if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1

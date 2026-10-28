@@ -3195,6 +3195,34 @@ $(TEST_APP_MENU_BIN): $(TEST_APP_MENU_OBJS)
 	$(CC) $(TEST_APP_MENU_OBJS) -o $@ $(LDFLAGS)
 
 # ═══════════════════════════════════════════════════════════════════
+# Review PDF & Marginalia Application Test Suite
+# ═══════════════════════════════════════════════════════════════════
+TEST_REVIEW_SRCS = verify/tests/test_review_ui.c \
+                   src/apps/review.c \
+                   src/apps/pdf_reader.c \
+                   src/font/schrift.c \
+                   src/window/wnd.c \
+                   src/window/app_menu.c \
+                   src/window/event.c \
+                   src/graphics/dp_core.c \
+                   src/font/troncode.c \
+                   src/font/jis_fonts.c \
+                   src/font/tibetan_fonts.c \
+                   src/font/font_mgr.c \
+                   src/chokanji/pmc.c
+TEST_REVIEW_OBJS = $(TEST_REVIEW_SRCS:.c=.test.o)
+TEST_REVIEW_BIN  = ./.build/test_review
+
+test-review: $(TEST_REVIEW_BIN)
+	@echo "=========================================================="
+	@echo " Running Review PDF & Marginalia Application Tests..."
+	@echo "=========================================================="
+	@./$(TEST_REVIEW_BIN)
+
+$(TEST_REVIEW_BIN): $(TEST_REVIEW_OBJS)
+	$(CC) $(TEST_REVIEW_OBJS) -o $@ $(LDFLAGS) $(SDL_LIBS) -lm
+
+# ═══════════════════════════════════════════════════════════════════
 # Mouse Drivers Test Suite (UEFI PS/2 & PC-98 Bus Mouse)
 # ═══════════════════════════════════════════════════════════════════
 TEST_MOUSE_SRCS = verify/tests/test_mouse_drivers.c \
@@ -3317,7 +3345,7 @@ $(TEST_MSX_AUDIO_BIN): $(TEST_MSX_AUDIO_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_AUDIO_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-hd64180 test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-review test-drivesetup test-fs test-hd64180 test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="
@@ -3633,6 +3661,9 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/apps/clarity_layout.c \
                        src/apps/clarity_render.c \
                        src/apps/clarity_export.c \
+                       src/apps/pdf_reader.c \
+                       src/apps/review.c \
+                       src/font/schrift.c \
                        src/font/font_mgr.c \
                        src/gl/gl_dispatch.c \
                        src/gl/gl_backend_choice.c \

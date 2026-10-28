@@ -73,7 +73,8 @@ extern void msx_app_fast_forward(int frames);
 extern WND* open_kagee_window(void);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
-WND* open_review_window(void) { return NULL; }
+extern WND* open_review_window(void);
+extern WND* open_review_about_window(void);
 
 /* Forward declarations for GTerm internals */
 typedef struct GTermState GTermState;
@@ -783,6 +784,22 @@ int main(int argc, char **argv) {
             redraw_all_windows();
             dump_window_rect(dev, w_abt_paint, "/tmp/btron_raw_screens/Paint_About.raw");
         }
+
+        /* Review PDF Application Window (Isolated, live vector PDF + Marginalia) */
+        reset_isolation_state(dev);
+        WND *w_review = open_review_window();
+        if (w_review) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_review, "/tmp/btron_raw_screens/Review_Application.raw");
+        }
+
+        /* Review About Box (Isolated) */
+        reset_isolation_state(dev);
+        WND *w_abt_rev = open_review_about_window();
+        if (w_abt_rev) {
+            redraw_all_windows();
+            dump_window_rect(dev, w_abt_rev, "/tmp/btron_raw_screens/Review_About.raw");
+        }
     }
 
     /* 3. In-App Opened Menu Screenshots (_Menu_Opened suffix) */
@@ -867,6 +884,16 @@ int main(int argc, char **argv) {
             simulate_menu_click(w_paint_m, 0); /* File Menu (ファイル) */
             redraw_all_windows();
             dump_window_rect(dev, w_paint_m, "/tmp/btron_raw_screens/Paint_Menu_Opened.raw");
+        }
+
+        /* Review File Menu Opened with Live Document Content */
+        reset_isolation_state(dev);
+        WND *w_rev_m = open_review_window();
+        if (w_rev_m) {
+            redraw_all_windows();
+            simulate_menu_click(w_rev_m, 0); /* File Menu (ファイル) */
+            redraw_all_windows();
+            dump_window_rect(dev, w_rev_m, "/tmp/btron_raw_screens/Review_Menu_Opened.raw");
         }
 
         capture_msx_windows(dev);

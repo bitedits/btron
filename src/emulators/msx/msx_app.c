@@ -175,6 +175,11 @@ static BOOL msx_is_dsk_name(const char *name)
 
 static uint16_t msx_machine_for(const char *name, size_t size)
 {
+    if (name && (strstr(name, "HC-95") || strstr(name, "HC95") || strstr(name, "hc95")))
+        return msx_is_dsk_name(name) ? BMSX_MACHINE_HC95_CBIOS_FDD : BMSX_MACHINE_HC95_CBIOS;
+    if (name && (strstr(name, "HC-90") || strstr(name, "HC90") || strstr(name, "hc90")))
+        return BMSX_MACHINE_HC90_CBIOS;
+
     if (msx_is_dsk_name(name)) {
         if (strstr(name, "Bad Apple")) return BMSX_MACHINE_MSX2P_CBIOS_FDD;
         return BMSX_MACHINE_MSX2_CBIOS_FDD;
@@ -455,6 +460,9 @@ static const char *msx_machine_label(uint16_t id)
     case BMSX_MACHINE_MSX2P_CBIOS_FDD_JP:return "機械: MSX2+ FDD JP / V9958";
     case BMSX_MACHINE_MSXTR_CBIOS_FDD:   return "機械: turboR FDD / R800";
     case BMSX_MACHINE_MSXTR_CBIOS:       return "機械: turboR / R800";
+    case BMSX_MACHINE_HC90_CBIOS:        return "機械: Hitachi HC-90 / HD64180";
+    case BMSX_MACHINE_HC95_CBIOS:        return "機械: Hitachi HC-95 / HD64180";
+    case BMSX_MACHINE_HC95_CBIOS_FDD:    return "機械: Hitachi HC-95 FDD / HD64180";
     default:                             return "機械: turboR / R800";
     }
 }

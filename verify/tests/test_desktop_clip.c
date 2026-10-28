@@ -56,6 +56,7 @@ WND* open_orchestra_window(void) { return NULL; }
 WND* open_drivesetup_window(void) { return NULL; }
 WND* launch_beos_chat(void) { return NULL; }
 WND* open_clarity_window(void) { return NULL; }
+WND* open_review_window(void) { return NULL; }
 WND* open_xmb_window(void) { return NULL; }
 WND* open_glgears_window(void) { return NULL; }
 WND* open_lilcu64_demo_window(void) { return NULL; }

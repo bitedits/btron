@@ -19,6 +19,7 @@
 #include "t9769b.h"
 #include "t9769c.h"
 #include "geo3d.h"
+#include "hd64180.h"
 
 #define SLOT_BIOS    0u
 #define SLOT_CART_A  1u
@@ -84,6 +85,12 @@ static int is_turbor(void)
 {
     return (s_machine == BMSX_MACHINE_MSXTR_CBIOS ||
             s_machine == BMSX_MACHINE_MSXTR_CBIOS_FDD);
+}
+
+static int is_hd64180(void)
+{
+    return (s_machine >= BMSX_MACHINE_HC90_CBIOS &&
+            s_machine <= BMSX_MACHINE_HC95_CBIOS_FDD);
 }
 
 static int is_msx2_or_higher(void)
@@ -440,6 +447,9 @@ void slots_reset(void)
     t9769b_reset(&g_t9769b);
     t9769c_reset(&g_t9769c);
     geo3d_reset(&g_geo3d);
+    if (is_hd64180()) {
+        hd64180_reset();
+    }
     remap();
 }
 
@@ -740,6 +750,7 @@ uint8_t msx_bus_in(uint8_t port)
 {
     uint8_t reg;
 
+    if (is_hd64180() && hd64180_is_internal_io(port)) return hd64180_io_read(port);
     if (port >= 0x88u && port <= 0x8Bu) return vdp_read(port);
     if (port >= 0x98u && port <= 0x9Bu) return vdp_read(port);
     if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {
@@ -765,6 +776,7 @@ void msx_bus_out(uint8_t port, uint8_t value)
 {
     uint8_t reg;
 
+    if (is_hd64180() && hd64180_is_internal_io(port)) { hd64180_io_write(port, value); return; }
     if (port >= 0x88u && port <= 0x8Bu) { vdp_write(port, value); return; }
     if (port >= 0x98u && port <= 0x9Bu) { vdp_write(port, value); return; }
     if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {

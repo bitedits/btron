@@ -16,6 +16,7 @@
 
 #include "z80.h"
 #include "r800.h"
+#include "hd64180.h"
 #include "t9769c.h"
 
 #define MSX_VERSION "tronMSX 0.2 (TurboR R800 / MSX2 / MSX2+)"
@@ -115,12 +116,16 @@ static uint16_t resolve_machine(const msx_cfg_t *cfg)
         if (strstr(k, "MSX2+ - C-BIOS - JP")     || strstr(k, "MSX2+_JP"))      return BMSX_MACHINE_MSX2P_CBIOS_JP;
         if (strstr(k, "MSX2+ - C-BIOS")          || strstr(k, "msx2+"))         return BMSX_MACHINE_MSX2P_CBIOS;
 
+        if (strstr(k, "HC-95 FDD") || strstr(k, "HC95_FDD") || strstr(k, "hc95_fdd")) return BMSX_MACHINE_HC95_CBIOS_FDD;
+        if (strstr(k, "HC-95") || strstr(k, "HC95") || strstr(k, "hc95")) return BMSX_MACHINE_HC95_CBIOS;
+        if (strstr(k, "HC-90") || strstr(k, "HC90") || strstr(k, "hc90")) return BMSX_MACHINE_HC90_CBIOS;
+
         if (strstr(k, "turboR - C-BIOS FDD")     || strstr(k, "MSXTR_FDD"))     return BMSX_MACHINE_MSXTR_CBIOS_FDD;
         if (strstr(k, "turboR") || strstr(k, "turbor") || strstr(k, "msxtr"))  return BMSX_MACHINE_MSXTR_CBIOS;
         if (strstr(k, "msx1") || strstr(k, "MSX1"))                            return BMSX_MACHINE_MSX;
     }
     if (cfg && cfg->machine) {
-        if (cfg->machine >= BMSX_MACHINE_MSX && cfg->machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD) {
+        if (cfg->machine >= BMSX_MACHINE_MSX && cfg->machine <= BMSX_MACHINE_HC95_CBIOS_FDD) {
             return cfg->machine;
         }
     }
@@ -216,16 +221,19 @@ void msx_port_take(uint32_t r[256], uint32_t w[256])
  * cycle; the frame budget and the VDP both count bus cycles. */
 static uint32_t step_one(void)
 {
-    int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) && t9769c_is_r800(&g_t9769c);
+    int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS && s_machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD) && t9769c_is_r800(&g_t9769c);
+    int is_hd64180 = (s_machine >= BMSX_MACHINE_HC90_CBIOS && s_machine <= BMSX_MACHINE_HC95_CBIOS_FDD);
     unsigned long before = s_cpu.cyc;
     uint32_t delta, bus_t;
     if (is_r800) r800_step(&s_cpu);
+    else if (is_hd64180) hd64180_step(&s_cpu);
     else z80_step(&s_cpu);
     delta = (uint32_t)(s_cpu.cyc - before);
     if (!delta) delta = 1;
     bus_t = is_r800 ? ((delta + 1) >> 1) : delta;
     if (!bus_t) bus_t = 1;
-    if (s_machine >= BMSX_MACHINE_MSXTR_CBIOS) t9769c_advance(&g_t9769c, bus_t);
+    if (s_machine >= BMSX_MACHINE_MSXTR_CBIOS && s_machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD) t9769c_advance(&g_t9769c, bus_t);
+    if (is_hd64180) hd64180_advance(&s_cpu, bus_t);
     vdp_advance(bus_t);
     if (vdp_vblank_taken()) z80_gen_int(&s_cpu, 0xFFu);
     return bus_t;

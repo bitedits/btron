@@ -52,6 +52,10 @@ typedef char msx_body_size_must_be_64[ (sizeof(b_msx_body) == 64) ? 1 : -1 ];
 #define BMSX_MACHINE_MSXTR_CBIOS        18u
 #define BMSX_MACHINE_MSXTR_CBIOS_FDD    19u
 
+#define BMSX_MACHINE_HC90_CBIOS         20u
+#define BMSX_MACHINE_HC95_CBIOS         21u
+#define BMSX_MACHINE_HC95_CBIOS_FDD     22u
+
 #define BMSX_FLAG_PAUSE     0x0001u
 #define BMSX_FLAG_KB_HOOK   0x0002u
 

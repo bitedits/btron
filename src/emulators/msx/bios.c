@@ -131,6 +131,11 @@ static const char *main_rom_name(uint16_t machine)
     case BMSX_MACHINE_MSXTR_CBIOS_FDD:
         return "cbios_main_msxtr_jp.rom";
 
+    case BMSX_MACHINE_HC90_CBIOS:
+    case BMSX_MACHINE_HC95_CBIOS:
+    case BMSX_MACHINE_HC95_CBIOS_FDD:
+        return "cbios_main_msx2_jp.rom";
+
     default:
         return "cbios_main_msx1.rom";
     }
@@ -139,7 +144,8 @@ static const char *main_rom_name(uint16_t machine)
 static const char *logo_rom_name(uint16_t machine)
 {
     if (machine == BMSX_MACHINE_MSX) return "cbios_logo_msx1.rom";
-    if (machine >= BMSX_MACHINE_MSX2_CBIOS && machine <= BMSX_MACHINE_MSX2_CBIOS_FDD_JP) {
+    if ((machine >= BMSX_MACHINE_MSX2_CBIOS && machine <= BMSX_MACHINE_MSX2_CBIOS_FDD_JP) ||
+        (machine >= BMSX_MACHINE_HC90_CBIOS && machine <= BMSX_MACHINE_HC95_CBIOS_FDD)) {
         return "cbios_logo_msx2.rom";
     }
     return "cbios_logo_msx2+.rom";
@@ -155,12 +161,13 @@ static int machine_has_fdd(uint16_t machine)
             machine == BMSX_MACHINE_MSX2P_CBIOS_FDD_BR ||
             machine == BMSX_MACHINE_MSX2P_CBIOS_FDD_EU ||
             machine == BMSX_MACHINE_MSX2P_CBIOS_FDD_JP ||
-            machine == BMSX_MACHINE_MSXTR_CBIOS_FDD);
+            machine == BMSX_MACHINE_MSXTR_CBIOS_FDD ||
+            machine == BMSX_MACHINE_HC95_CBIOS_FDD);
 }
 
 static int machine_has_music(uint16_t machine)
 {
-    return (machine >= BMSX_MACHINE_MSX2P_CBIOS);
+    return (machine >= BMSX_MACHINE_MSX2P_CBIOS && machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD);
 }
 
 static int machine_has_kanji(uint16_t machine)
@@ -170,7 +177,10 @@ static int machine_has_kanji(uint16_t machine)
             machine == BMSX_MACHINE_MSX2P_CBIOS_JP ||
             machine == BMSX_MACHINE_MSX2P_CBIOS_FDD_JP ||
             machine == BMSX_MACHINE_MSXTR_CBIOS ||
-            machine == BMSX_MACHINE_MSXTR_CBIOS_FDD);
+            machine == BMSX_MACHINE_MSXTR_CBIOS_FDD ||
+            machine == BMSX_MACHINE_HC90_CBIOS ||
+            machine == BMSX_MACHINE_HC95_CBIOS ||
+            machine == BMSX_MACHINE_HC95_CBIOS_FDD);
 }
 
 int bios_load(uint16_t machine, const char *dir)

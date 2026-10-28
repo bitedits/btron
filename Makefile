@@ -169,6 +169,7 @@ IME_SRCS    = src/tip/mozc_kkc.c       \
 # ── tronMSX core: the machine src/emulators/msx/msx_app.c drives ───────────────────
 MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/r800.c       \
+           src/emulators/msx/hd64180.c    \
            src/emulators/msx/v9938.c      \
            src/emulators/msx/s1985.c      \
            src/emulators/msx/t9769b.c     \
@@ -3231,6 +3232,24 @@ $(TEST_DRIVESETUP_BIN): $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/clu/clu.host.o $(
 	$(CC) $(TEST_DRIVESETUP_OBJS) $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_HOST_OBJS) -o $@ $(LDFLAGS) -lm
 
 # ═══════════════════════════════════════════════════════════════════
+# HD64180 — Hitachi HD64180 CPU exerciser (Hitachi HC-90/95)
+# ═══════════════════════════════════════════════════════════════════
+TEST_HD64180_SRCS = verify/tests/test_hd64180.c \
+                    src/emulators/msx/hd64180.c \
+                    src/emulators/msx/z80.c
+TEST_HD64180_OBJS = $(TEST_HD64180_SRCS:.c=.test.o)
+TEST_HD64180_BIN  = ./.build/test_hd64180
+
+test-hd64180: $(TEST_HD64180_BIN)
+	@echo "=========================================================="
+	@echo " Running HD64180 CPU Verification..."
+	@echo "=========================================================="
+	@./$(TEST_HD64180_BIN)
+
+$(TEST_HD64180_BIN): $(TEST_HD64180_OBJS)
+	$(CC) $(TEST_HD64180_OBJS) -o $@ $(LDFLAGS)
+
+# ═══════════════════════════════════════════════════════════════════
 # ZEXALL — Z80 instruction exerciser against the vendored MSX core
 # ═══════════════════════════════════════════════════════════════════
 TEST_ZEXALL_SRCS = src/emulators/msx/zexall.c \
@@ -3298,7 +3317,7 @@ $(TEST_MSX_AUDIO_BIN): $(TEST_MSX_AUDIO_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_AUDIO_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-drivesetup test-fs test-hd64180 test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

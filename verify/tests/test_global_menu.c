@@ -41,6 +41,7 @@ WND* open_display_settings_window(void)     { return NULL; }
 WND* open_drivesetup_window(void)           { return NULL; }
 WND* launch_beos_chat(void)                 { return NULL; }
 WND* open_clarity_window(void)              { return NULL; }
+WND* open_review_window(void)               { return NULL; }
 WND* open_chat_main_window(void *client)    { (void)client; return NULL; }
 WND* open_chokanji_cabinet_window(void)     { return NULL; }
 WND* open_chokanji_doc_window(void)         { return NULL; }

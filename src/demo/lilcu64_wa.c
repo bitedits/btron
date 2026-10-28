@@ -49,6 +49,7 @@ struct WaNode {
     WaEv    fev[WA_MAX_FEV];
     WaEv    qev[WA_MAX_QEV];
     float   ffreq, q;
+    float   vibrato_rate, vibrato_depth;
     float   b0, b1, b2, a1, a2, z1, z2;
 };
 
@@ -146,6 +147,12 @@ void wa_filter_freq(WaNode *n, int ev, float value, double t) {
     if (n) ev_insert(n->qev, &n->nqev, WA_MAX_QEV, ev, value, (float)(t - n->t_start));
 }
 
+void wa_vibrato(WaNode *n, float rate_hz, float depth_cents) {
+    if (!n) return;
+    n->vibrato_rate = rate_hz;
+    n->vibrato_depth = depth_cents;
+}
+
 /* AudioParam value at time t (WebAudio timeline semantics). */
 static float ev_eval(const WaEv *ev, int n, float t, float defv) {
     if (n == 0) return defv;
@@ -172,6 +179,21 @@ static void biquad_coeffs(WaNode *n, float freq) {
     float w0 = 2.0f * (float)M_PI * freq / (float)s_sr;
     float cw = cosf(w0), sw = sinf(w0);
     float alpha, b0, b1, b2, a0, a1, a2;
+    if (n->ftype == WA_FILT_PAULA_LED) {
+        float f = (freq > 0.0f && freq < nyq * 0.99f) ? freq : 4400.0f;
+        float w0 = 2.0f * (float)M_PI * f / (float)s_sr;
+        float cw = cosf(w0), sw = sinf(w0);
+        float alpha = sw / (2.0f * 0.70710678f);
+        float b0 = (1.0f - cw) * 0.5f;
+        float b1 = 1.0f - cw;
+        float b2 = b0;
+        float a0 = 1.0f + alpha;
+        float a1 = -2.0f * cw;
+        float a2 = 1.0f - alpha;
+        n->b0 = b0 / a0; n->b1 = b1 / a0; n->b2 = b2 / a0;
+        n->a1 = a1 / a0; n->a2 = a2 / a0;
+        return;
+    }
     if (n->ftype == WA_FILT_BANDPASS) {
         float q = n->q > 0.0001f ? n->q : 0.0001f;
         alpha = sw / (2.0f * q);
@@ -191,11 +213,26 @@ static void biquad_coeffs(WaNode *n, float freq) {
 
 static inline float osc_sample(int type, float p) {
     switch (type) {
-        case WA_SINE:     return sinf(2.0f * (float)M_PI * p);
-        case WA_TRIANGLE: return (p < 0.25f) ? 4.0f * p : (p < 0.75f) ? 2.0f - 4.0f * p : 4.0f * p - 4.0f;
-        case WA_SAWTOOTH: return (p < 0.5f) ? 2.0f * p : 2.0f * p - 2.0f;
-        case WA_SQUARE:   return (p < 0.5f) ? 1.0f : -1.0f;
-        default:          return 0.0f;
+        case WA_SINE:        return sinf(2.0f * (float)M_PI * p);
+        case WA_TRIANGLE:    return (p < 0.25f) ? 4.0f * p : (p < 0.75f) ? 2.0f - 4.0f * p : 4.0f * p - 4.0f;
+        case WA_SAWTOOTH:    return (p < 0.5f) ? 2.0f * p : 2.0f * p - 2.0f;
+        case WA_SQUARE:      return (p < 0.5f) ? 1.0f : -1.0f;
+        case WA_AMIGA_SAW: {
+            int idx = (int)(p * 32.0f);
+            if (idx < 0) idx = 0;
+            if (idx > 31) idx = 31;
+            int8_t s = (int8_t)(127 - (idx * 255) / 31);
+            return (float)s / 127.0f;
+        }
+        case WA_AMIGA_PULSE: {
+            int idx = (int)(p * 32.0f);
+            if (idx < 0) idx = 0;
+            if (idx > 31) idx = 31;
+            int8_t s = (idx < 10) ? 120 : -120;
+            return (float)s / 127.0f;
+        }
+        case WA_AMIGA_NOISE: return 0.0f;
+        default:             return 0.0f;
     }
 }
 
@@ -434,12 +471,23 @@ static void render_block(float *out, size_t n) {
 
         for (int i = i0; i < i1; i++) {
             float x;
-            if (nd->type == WA_NOISE) {
+            if (nd->type == WA_NOISE || nd->type == WA_AMIGA_NOISE) {
                 int64_t idx = b0 + i - nd->s_start;
-                x = (idx < WA_NOISE_LEN) ? s_noise[idx] : 0.0f;
+                if (idx < 0) idx = 0;
+                x = s_noise[idx % WA_NOISE_LEN];
+                if (nd->type == WA_AMIGA_NOISE) {
+                    int8_t q8 = (int8_t)(x * 127.0f);
+                    x = (float)q8 / 127.0f;
+                }
             } else {
                 x = osc_sample(nd->type, nd->phase);
-                nd->phase += f * inv_sr;
+                float cur_f = f;
+                if (nd->vibrato_depth > 0.0f) {
+                    float t_node = (float)(b0 + i - nd->s_start) * inv_sr;
+                    float lfo = sinf(2.0f * (float)M_PI * nd->vibrato_rate * t_node);
+                    cur_f *= (1.0f + lfo * (nd->vibrato_depth * 0.0005776f));
+                }
+                nd->phase += cur_f * inv_sr;
                 nd->phase -= floorf(nd->phase);
             }
             if (nd->ftype != WA_FILT_NONE) {

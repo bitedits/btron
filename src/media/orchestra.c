@@ -8,14 +8,15 @@
 static APP_MENU_BAR s_menu;
 static int s_menu_ok;
 
-enum { OPEN_N = 5 };
+enum { OPEN_N = 6 };
 
 static const char k_open_lbl[OPEN_N][64] = {
     "セッション (Session)",
     "鐘のキャロル (Bells)",
     "今田勝 (Caterpillar)",
     "朝日のあたる家 (Rising)",
-    "TRON Init"
+    "TRON Init",
+    "ルクハッシュ (LukHash)"
 };
 
 static void orch_menu_scenes(void);

@@ -46,7 +46,15 @@ enum {
     LC_SHIM_CYBER = 20,
     LC_SHIM_VIOLIN = 21,
     LC_SHIM_CELLO = 22,
-    LC_SHIM_TIMPANI = 23
+    LC_SHIM_TIMPANI = 23,
+    LC_SHIM_AMIGA_KICK = 26,
+    LC_SHIM_AMIGA_SNARE = 27,
+    LC_SHIM_AMIGA_HAT = 28,
+    LC_SHIM_AMIGA_BASS = 29,
+    LC_SHIM_AMIGA_LEAD = 30,
+    LC_SHIM_AMIGA_CHORD = 31,
+    LC_SHIM_AMIGA_ARP = 32,
+    LC_SHIM_AMIGA_BELL = 33
 };
 
 void     lc_set_score_base(double t0);

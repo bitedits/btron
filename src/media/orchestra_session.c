@@ -6,6 +6,7 @@
 #include <apps/orch_chk.h>
 #include "../demo/lilcu64_wa.h"
 #include "../demo/lilcu64_insert.h"
+#include "../demo/lilcu64_score.h"
 #include <stdio.h>
 #include <string.h>
 #include <btron/libc_shim.h>
@@ -444,6 +445,76 @@ static void take_event(OrchEvent *e, const uint8_t *p)
     e->dur_tick = rd32(p, 8);
     e->reserved = 0;
 }
+static int name_has(const char *name, const char *sub)
+{
+    int i, j;
+    if (!name || !sub) return 0;
+    for (i = 0; name[i] != 0; i++) {
+        for (j = 0; ; j++) {
+            char cs = sub[j];
+            char cn = name[i + j];
+            if (cs == 0) return 1;
+            if (cn == 0) break;
+            if (cs >= 'A' && cs <= 'Z') cs = (char)(cs + 32);
+            if (cn >= 'A' && cn <= 'Z') cn = (char)(cn + 32);
+            if (cs != cn) break;
+        }
+    }
+    return 0;
+}
+
+int orch_find_lead_track(const OrchView *v)
+{
+    int i;
+    int ntrk;
+    size_t k;
+    int best_trk = 0;
+    uint32_t best_count = 0;
+    uint32_t counts[64];
+    uint32_t evn, e;
+    static const char *kw[] = {
+        "lead", "chiptune", "solo", "melody", "synth",
+        "guitar", "piano", "triad", "harp", "sax", "violin"
+    };
+    if (!v) return 0;
+    ntrk = (int)v->track_count;
+    if (ntrk <= 1) return 0;
+    if (ntrk > 64) ntrk = 64;
+
+    /* 1. Keyword search on track names */
+    for (k = 0; k < sizeof(kw)/sizeof(kw[0]); k++) {
+        for (i = 0; i < ntrk; i++) {
+            if (name_has((const char *)v->trk[i].name, kw[k])) {
+                return i;
+            }
+        }
+    }
+
+    /* 2. Track with the most melodic non-drum events */
+    memset(counts, 0, sizeof(counts));
+    evn = v->event_count;
+    if (evn > ORCH_MAX_EVENTS) evn = ORCH_MAX_EVENTS;
+    for (e = 0; e < evn; e++) {
+        uint8_t trk = v->ev[e].track;
+        if (trk < (uint8_t)ntrk) {
+            uint8_t shim = v->trk[trk].shim;
+            int is_drum = (shim == LC_SHIM_KICK || shim == LC_SHIM_SNARE ||
+                           shim == LC_SHIM_HAT || shim == LC_SHIM_IND_KICK ||
+                           shim == LC_SHIM_IND_SNARE || shim == LC_SHIM_AMIGA_KICK ||
+                           shim == LC_SHIM_AMIGA_SNARE || shim == LC_SHIM_AMIGA_HAT ||
+                           shim == LC_SHIM_AMIGA_BELL);
+            if (!is_drum) counts[trk]++;
+        }
+    }
+    for (i = 0; i < ntrk; i++) {
+        if (counts[i] > best_count) {
+            best_count = counts[i];
+            best_trk = i;
+        }
+    }
+    return best_trk;
+}
+
 static void apply_buf(const uint8_t *b)
 {
     OrchView *v = gst_view();
@@ -486,6 +557,9 @@ static void apply_buf(const uint8_t *b)
     for (i = 0; i < 16; i++) take_scene(&v->scn[i], b + OFF_SCN + i * SCN_N);
     for (k = 0; k < evn && k < ORCH_MAX_EVENTS; k++) {
         take_event(&v->ev[k], b + OFF_EV + k * EV_N);
+    }
+    if (ntrk > 0) {
+        v->selected = (int8_t)orch_find_lead_track(v);
     }
 }
 static void commit_buf(const uint8_t *b)
@@ -681,16 +755,17 @@ static void resolve_orch_path(void)
 }
 static const char *open_lit(int idx)
 {
-    static const char *const lit[5] = {
+    static const char *const lit[6] = {
         "/SYS/orchestra.orch",
         "/SYS/bells.orch",
         "/SYS/caterpillar.orch",
         "/SYS/rising.orch",
-        "/SYS/tron.orch"
+        "/SYS/tron.orch",
+        "/SYS/lukhash.orch"
     };
     orch_check(lit[0][0] == '/', __LINE__);
-    orch_check(lit[4][0] == '/', __LINE__);
-    if (idx < 0 || idx > 4) return 0;
+    orch_check(lit[5][0] == '/', __LINE__);
+    if (idx < 0 || idx > 5) return 0;
     return lit[idx];
 }
 static int pick_host(char *dst, const char *lit)

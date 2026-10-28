@@ -3,8 +3,11 @@
 
 static WND *s_wnd;
 static int s_bank;
+static int s_drag;
+static int s_anchor;
+static int s_anchor_bank;
 
-enum { C_AUX = -2, C_MASTER = -1 };
+enum { C_AUX = -2, C_MASTER = -1, SB = 16, DRAG_OFF = 0, DRAG_H = 1 };
 
 static const char *ins_name(int id)
 {
@@ -123,10 +126,90 @@ static void paint_master(GDEV *dev, const OrchView *v, int x, int y, int w, int 
     paint_fader(dev, x + 8, y + 64, w - 18, h - 72, (int)v->master_vol);
 }
 
+static int thumb_h(const OrchView *v, int gw, int n, int *tx, int *tw)
+{
+    int tracks, max_bank, th;
+    orch_check(v != 0, __LINE__);
+    orch_check(tx != 0 && tw != 0, __LINE__);
+    if (!v || !tx || !tw || gw < 16) return 0;
+    tracks = (int)v->track_count;
+    if (tracks < n) tracks = n;
+    if (tracks < 1) tracks = 1;
+    th = (gw * n) / tracks;
+    if (th < 12) th = 12;
+    if (th > gw) th = gw;
+    *tw = th;
+    *tx = 22;
+    max_bank = tracks - n;
+    if (max_bank <= 0) return 0;
+    *tx = 22 + ((gw - th) * s_bank) / max_bank;
+    if (*tx < 22) *tx = 22;
+    if (*tx > 22 + gw - th) *tx = 22 + gw - th;
+    return 1;
+}
+
+static void paint_hsb(GDEV *dev, const OrchView *v, int h, int gw, int n)
+{
+    int tx = 0, tw = 0;
+    orch_check(dev != 0, __LINE__);
+    orch_check(v != 0, __LINE__);
+    if (!dev || !v || gw < 16) return;
+    if ((int)v->track_count <= n) return;
+    orch_fill(dev, 22, h - SB, gw, SB, ORCH_COL_INSET_BG);
+    (void)thumb_h(v, gw, n, &tx, &tw);
+    if (tw >= 8) orch_btn(dev, tx, h - SB + 1, tw, SB - 2, "", 0);
+}
+
+static void hsb_click(const OrchView *v, int x, int gw, int n)
+{
+    int tx = 0, tw = 0, live;
+    int tracks, max_bank;
+    orch_check(v != 0, __LINE__);
+    orch_check(n > 0, __LINE__);
+    if (!v) return;
+    tracks = (int)v->track_count;
+    if (tracks < n) tracks = n;
+    max_bank = tracks - n;
+    live = thumb_h(v, gw, n, &tx, &tw);
+    if (!live) return;
+    if (x >= tx && x < tx + tw) {
+        s_drag = DRAG_H;
+        s_anchor = x;
+        s_anchor_bank = s_bank;
+        return;
+    }
+    if (x < tx) {
+        s_bank -= n;
+        if (s_bank < 0) s_bank = 0;
+    } else {
+        s_bank += n;
+        if (s_bank > max_bank) s_bank = max_bank;
+    }
+}
+
+static void mix_drag(const OrchView *v, int x, int gw, int n)
+{
+    int tx = 0, tw = 0, tracks, max_bank, travel, b;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_drag == DRAG_H, __LINE__);
+    if (!v || gw < 16) return;
+    tracks = (int)v->track_count;
+    if (tracks < n) tracks = n;
+    max_bank = tracks - n;
+    if (max_bank <= 0) return;
+    (void)thumb_h(v, gw, n, &tx, &tw);
+    travel = gw - tw;
+    if (travel < 1) travel = 1;
+    b = s_anchor_bank + ((x - s_anchor) * max_bank) / travel;
+    if (b < 0) b = 0;
+    if (b > max_bank) b = max_bank;
+    s_bank = b;
+}
+
 static void mix_paint(WND *wnd, GDEV *dev)
 {
     OrchView *v = gst_view();
-    int w, h, mode, sw, n, i, x;
+    int w, h, mode, sw, n, i, x, gw, th;
     orch_check(dev != 0, __LINE__);
     orch_check(v != 0, __LINE__);
     if (!dev || !v) return;
@@ -137,13 +220,20 @@ static void mix_paint(WND *wnd, GDEV *dev)
     mode = orch_lay_mode(w, h);
     orch_fill(dev, 0, 0, w, h, ORCH_COL_CANVAS);
     n = col_n(w, mode, &sw);
+    gw = n * sw;
+    th = ((int)v->track_count > n) ? h - 8 - SB : h - 8;
+    int sel = (int)v->selected;
+    if (sel >= 0 && sel < (int)v->track_count && n > 0) {
+        if (sel < s_bank) s_bank = sel;
+        else if (sel >= s_bank + n) s_bank = sel - n + 1;
+    }
     if (s_bank < 0) s_bank = 0;
     if (s_bank > 63) s_bank = 63;
-    orch_btn(dev, 2, 4, 18, h - 8, "<", 0);
+    orch_btn(dev, 2, 4, 18, th, "<", 0);
     x = 22;
     for (i = 0; i < n && i < 12; i++) {
         int tr = s_bank + i;
-        if (tr < (int)v->track_count) paint_track(dev, v, x, 4, sw, h - 8, tr, mode);
+        if (tr < (int)v->track_count) paint_track(dev, v, x, 4, sw, th, tr, mode);
         x += sw;
     }
     if (x + 136 < w) {
@@ -152,6 +242,7 @@ static void mix_paint(WND *wnd, GDEV *dev)
     } else if (w > 80) {
         paint_master(dev, v, w - 70, 4, 68, h - 8);
     }
+    paint_hsb(dev, v, h, gw, n);
     (void)wnd;
 }
 
@@ -221,18 +312,23 @@ static void master_click(const OrchView *v, int y, int h)
 static void mix_click(int x, int y, int w, int h)
 {
     OrchView *v = gst_view();
-    int mode, sw, n, i, cx;
+    int mode, sw, n, i, cx, gw;
     orch_check(v != 0, __LINE__);
     orch_check(w > 0 && h > 0, __LINE__);
     if (!v) return;
     mode = orch_lay_mode(w, h);
+    n = col_n(w, mode, &sw);
+    gw = n * sw;
+    if ((int)v->track_count > n && y >= h - SB && x >= 22 && x < 22 + gw) {
+        hsb_click(v, x, gw, n);
+        return;
+    }
     if (x < 22) {
         if (y < h / 2) {
             if (s_bank > 0) s_bank--;
         } else if (s_bank < 63) s_bank++;
         return;
     }
-    n = col_n(w, mode, &sw);
     cx = 22;
     for (i = 0; i < n && i < 12; i++) {
         if (x >= cx && x < cx + sw) {
@@ -247,11 +343,30 @@ static void mix_click(int x, int y, int w, int h)
 
 static void mix_event(WND *wnd, const EVT *evt)
 {
-    int x, y, w, h;
+    int x, y, w, h, mode, sw, n, gw;
+    OrchView *v;
     orch_check(wnd != 0, __LINE__);
     orch_check(evt != 0, __LINE__);
-    if (!wnd || !evt || evt->type != EV_BUT_DOWN) return;
+    if (!wnd || !evt) return;
+    v = gst_view();
+    if (!v) return;
     orch_client(wnd, evt, &x, &y, &w, &h);
+    mode = orch_lay_mode(w, h);
+    n = col_n(w, mode, &sw);
+    gw = n * sw;
+    if (evt->type == EV_BUT_UP) {
+        s_drag = DRAG_OFF;
+        (void)inval_wnd(wnd);
+        return;
+    }
+    if (evt->type == EV_MOUSE_MOVE) {
+        if (s_drag == DRAG_OFF) return;
+        mix_drag(v, x, gw, n);
+        (void)inval_wnd(wnd);
+        return;
+    }
+    if (evt->type != EV_BUT_DOWN) return;
+    s_drag = DRAG_OFF;
     mix_click(x, y, w, h);
     (void)inval_wnd(wnd);
 }
@@ -262,6 +377,7 @@ static void on_destroy(WND *wnd)
     orch_check(s_wnd == 0 || s_wnd == wnd, __LINE__);
     (void)wnd;
     s_wnd = 0;
+    s_drag = DRAG_OFF;
 }
 
 void orch_mix_inval(void)

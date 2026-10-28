@@ -9,6 +9,7 @@
  */
 #include <apps/orchestra.h>
 #include "lilcu64_score.h"
+#include "../media/lukhash_score.h"
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -166,11 +167,11 @@ static int key_of(int shim, float hz)
 {
     double k;
     int ik;
-    if (shim == LC_SHIM_IND_KICK) return 36;
-    if (shim == LC_SHIM_SNARE || shim == LC_SHIM_IND_SNARE || shim == LC_CAP_HAMMER)
+    if (shim == LC_SHIM_IND_KICK || shim == LC_SHIM_AMIGA_KICK) return 36;
+    if (shim == LC_SHIM_SNARE || shim == LC_SHIM_IND_SNARE || shim == LC_SHIM_AMIGA_SNARE || shim == LC_CAP_HAMMER)
         return 38;
-    if (shim == LC_SHIM_HAT || shim == LC_CAP_SWOOSH) return 42;
-    if (hz < 1.f) return (shim == LC_SHIM_KICK) ? 36 : 60;
+    if (shim == LC_SHIM_HAT || shim == LC_SHIM_AMIGA_HAT || shim == LC_CAP_SWOOSH) return 42;
+    if (hz < 1.f) return (shim == LC_SHIM_KICK || shim == LC_SHIM_AMIGA_KICK) ? 36 : 60;
     k = 69.0 + 12.0 * log((double)hz / 440.0) / log(2.0);
     ik = (k >= 0.0) ? (int)(k + 0.5) : (int)(k - 0.5);
     if (ik < 0) ik = 0;
@@ -187,12 +188,12 @@ static int vel_of(int shim, int art, float vol)
     vel = (int)(u * 127.0 + 0.5);
     if (vel < 1) vel = 1;
     if (vel > 127) vel = 127;
-    if (shim == LC_SHIM_SNARE || shim == LC_SHIM_IND_SNARE) {
+    if (shim == LC_SHIM_SNARE || shim == LC_SHIM_IND_SNARE || shim == LC_SHIM_AMIGA_SNARE) {
         if (art == LC_CAP_MARK) {
             if (vel < 110) vel = 110;
         } else if (vel > 99) vel = 99;
     }
-    if (shim == LC_SHIM_HAT || shim == LC_CAP_SWOOSH) {
+    if (shim == LC_SHIM_HAT || shim == LC_SHIM_AMIGA_HAT || shim == LC_CAP_SWOOSH) {
         if (art == LC_CAP_MARK) {
             if (vel < 100) vel = 100;
         } else if (vel > 99) vel = 99;
@@ -237,6 +238,14 @@ static int map_shim(int shim, int art, int *gm, int *muted, const char **name)
     case LC_SHIM_VIOLIN: *gm = 40; *name = "Violin"; return 1;
     case LC_SHIM_CELLO: *gm = 42; *name = "Cello"; return 1;
     case LC_SHIM_TIMPANI: *gm = 47; *name = "Timpani"; return 1;
+    case LC_SHIM_AMIGA_KICK: *gm = 119; *name = "Amiga Paula kick"; return 1;
+    case LC_SHIM_AMIGA_SNARE: *gm = 117; *name = "Amiga Paula snare"; return 1;
+    case LC_SHIM_AMIGA_HAT: *gm = 118; *name = "Amiga Paula hi-hat"; return 1;
+    case LC_SHIM_AMIGA_BASS: *gm = 33; *name = "Amiga saw bass"; return 1;
+    case LC_SHIM_AMIGA_LEAD: *gm = 56; *name = "Amiga chiptune lead"; return 1;
+    case LC_SHIM_AMIGA_CHORD: *gm = 90; *name = "Amiga chord stab"; return 1;
+    case LC_SHIM_AMIGA_ARP: *gm = 80; *name = "Amiga protracker arp"; return 1;
+    case LC_SHIM_AMIGA_BELL: *gm = 112; *name = "Amiga chime"; return 1;
     case LC_CAP_HAMMER: *gm = 117; *muted = 1; *name = "Piano hammer"; return 1;
     case LC_CAP_SWOOSH: *gm = 118; *muted = 1; *name = "Pedal swoosh"; return 1;
     default: return 0;
@@ -273,7 +282,11 @@ static int capture(int track, int bpm, int den)
     s_worst = 0.0;
     s_clock_bad = 0;
     lc_cap_begin();
-    lc_score_schedule(track, 0.0);
+    if (track == 5) {
+        lukhash_score_schedule(0.0);
+    } else {
+        lc_score_schedule(track, 0.0);
+    }
     lc_cap_end();
     if (lc_cap_overflow()) {
         fprintf(stderr, "capture overflow on track %d\n", track);
@@ -825,6 +838,7 @@ int main(void)
     if (!piece(2, 120, 4, 4, "Green Caterpillar", "caterpillar")) return 1;
     if (!piece(3, 125, 3, 4, "House of the Rising Sun", "rising")) return 1;
     if (!piece(4, 93, 4, 4, "TRON Init", "tron")) return 1;
+    if (!piece(5, 112, 4, 4, "LukHash (Amiga Outtake)", "lukhash")) return 1;
     if (!copy_file("SYS/bells.orch", "SYS/orchestra.orch")) return 1;
     if (!copy_file("SYS/bells.mid", "SYS/orchestra.mid")) return 1;
     printf("desk SYS/orchestra.orch + SYS/orchestra.mid = bells\n");

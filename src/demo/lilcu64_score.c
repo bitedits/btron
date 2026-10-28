@@ -31,7 +31,7 @@ static WaNode *osc_take(int type, double a, double b)
 {
     WaNode *node = wa_osc(type, a, b);
     orch_check(type >= WA_SINE, __LINE__);
-    orch_check(type <= WA_NOISE, __LINE__);
+    orch_check(type <= WA_AMIGA_NOISE, __LINE__);
     if (!node && s_shim_refuse < 4294967295u) s_shim_refuse++;
     return node;
 }
@@ -528,7 +528,7 @@ static void shimSwarmatron(double t, float centerFreq, float duration, float vol
     }
     double S = s_T + t;
     static const float mults[8] = { -1.0f, -0.65f, -0.35f, -0.12f, 0.12f, 0.35f, 0.65f, 1.0f };
-    float perOscAmp = (0.18f * volMul) / 8.0f;
+    float perOscAmp = 0.16f * volMul;
     for (int i = 0; i < 8; i++) {
         WaNode *o = osc_take(WA_SAWTOOTH, S, S + duration);
         if (!o) continue;
@@ -1821,12 +1821,15 @@ static void schedule_track4(void) {
 
 /* ── Public API ───────────────────────────────────────────────────── */
 
+void lukhash_score_schedule(double t0);
+
 double lc_score_length(int track) {
     switch (track) {
         case 1: return 25.8;   /* scheduleTrackTimeout(loop, 25800) */
         case 2: return 28.0;   /* scheduleTrackTimeout(loop, 28000) */
         case 3: return 26.8;   /* scheduleTrackTimeout(loop, 26800) */
         case 4: return 25.8;   /* scheduleTrackTimeout(loop, 25800) */
+        case 5: return 51.42857; /* LukHash Amiga: 24 bars @ 112 BPM = 96 beats */
         default: return 0.0;
     }
 }
@@ -1837,6 +1840,7 @@ void lc_score_schedule(int track, double t0) {
     else if (track == 2) schedule_track2();
     else if (track == 3) schedule_track3();
     else if (track == 4) schedule_track4();
+    else if (track == 5) lukhash_score_schedule(t0);
 }
 
 /* Shims 21–23 sit after every earlier static shim. The dispatcher follows. */
@@ -2074,6 +2078,216 @@ static void note_13_23(int shim, double t, float hz, float vol, float dur)
     else if (s_shim_refuse < 4294967295u) s_shim_refuse++;
 }
 
+/* Paula hardware period snapping: PAL clock 3.546895 MHz / 32-sample buffer */
+static inline float amiga_period_freq(float hz) {
+    if (hz < 20.0f) return hz;
+    float period_f = 3546895.0f / (hz * 32.0f);
+    int period = (int)(period_f + 0.5f);
+    if (period < 113) period = 113;
+    if (period > 32767) period = 32767;
+    return 3546895.0f / ((float)period * 32.0f);
+}
+
+/* [AMIGA SHIM 26] Commodore Amiga Paula 8-bit Punch Kick */
+static void shimAmigaKick(double t, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_KICK, LC_CAP_MARK, t, 0.0f, volMul, 0.18f);
+        return;
+    }
+    double S = s_T + t;
+    /* Punch sub-body: pitched sine sweep 160 Hz -> 42 Hz */
+    WaNode *body = osc_take(WA_SINE, S, S + 0.18);
+    if (body) {
+        wa_freq(body, WA_SET, 160.0f, S);
+        wa_freq(body, WA_EXP, 42.0f, S + 0.14);
+        wa_filter(body, WA_FILT_PAULA_LED, 4400.0f, 0.7071f);
+        wa_gain(body, WA_SET, 1.20f * volMul, S);
+        wa_gain(body, WA_EXP, 0.001f, S + 0.18);
+    }
+    /* 8-bit transient click in first 15ms */
+    WaNode *click = osc_take(WA_AMIGA_NOISE, S, S + 0.015);
+    if (click) {
+        wa_filter(click, WA_FILT_BANDPASS, 3500.0f, 2.0f);
+        wa_gain(click, WA_SET, 0.85f * volMul, S);
+        wa_gain(click, WA_EXP, 0.001f, S + 0.015);
+    }
+}
+
+/* [AMIGA SHIM 27] Commodore Amiga Paula 8-bit Gated Snare */
+static void shimAmigaSnare(double t, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_SNARE, LC_CAP_TONE, t, 0.0f, volMul, 0.15f);
+        return;
+    }
+    double S = s_T + t;
+    /* Gated 8-bit noise body */
+    WaNode *nz = osc_take(WA_AMIGA_NOISE, S, S + 0.15);
+    if (nz) {
+        wa_filter(nz, WA_FILT_BANDPASS, 3200.0f, 1.6f);
+        wa_gain(nz, WA_SET, 1.05f * volMul, S);
+        wa_gain(nz, WA_EXP, 0.001f, S + 0.15);
+    }
+    /* Pitched body drop: 220 Hz -> 110 Hz */
+    WaNode *ton = osc_take(WA_TRIANGLE, S, S + 0.09);
+    if (ton) {
+        wa_freq(ton, WA_SET, 220.0f, S);
+        wa_freq(ton, WA_EXP, 110.0f, S + 0.08);
+        wa_gain(ton, WA_SET, 0.80f * volMul, S);
+        wa_gain(ton, WA_EXP, 0.001f, S + 0.09);
+    }
+}
+
+/* [AMIGA SHIM 28] Commodore Amiga Paula 8-bit Metallic Hi-Hat */
+static void shimAmigaHat(double t, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_HAT, LC_CAP_TONE, t, 0.0f, volMul, 0.055f);
+        return;
+    }
+    double S = s_T + t;
+    WaNode *h = osc_take(WA_AMIGA_NOISE, S, S + 0.055);
+    if (h) {
+        wa_filter(h, WA_FILT_HIGHPASS, 6500.0f, 1.2f);
+        wa_gain(h, WA_SET, 0.75f * volMul, S);
+        wa_gain(h, WA_EXP, 0.001f, S + 0.055);
+    }
+}
+
+/* [AMIGA SHIM 29] Commodore Amiga ProTracker 8-bit Saw Bass */
+static void shimAmigaBass(double t, float freq, float duration, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_BASS, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
+    freq = amiga_period_freq(freq);
+    double S = s_T + t;
+    float d = duration > 0.02f ? duration : 0.12f;
+    WaNode *o = osc_take(WA_AMIGA_SAW, S, S + (double)d);
+    if (o) {
+        wa_freq(o, WA_SET, freq, S);
+        wa_filter(o, WA_FILT_PAULA_LED, 4200.0f, 1.0f);
+        wa_filter_freq(o, WA_SET, 4200.0f, S);
+        wa_filter_freq(o, WA_EXP, 650.0f, S + (double)d);
+        wa_gain(o, WA_SET, 0.001f, S);
+        wa_gain(o, WA_LIN, 1.05f * volMul, S + 0.004);
+        wa_gain(o, WA_EXP, 0.001f, S + (double)d);
+    }
+    WaNode *sub = osc_take(WA_TRIANGLE, S, S + (double)d);
+    if (sub) {
+        wa_freq(sub, WA_SET, freq * 0.5f, S);
+        wa_gain(sub, WA_SET, 0.55f * volMul, S);
+        wa_gain(sub, WA_EXP, 0.001f, S + (double)d);
+    }
+}
+
+/* [AMIGA SHIM 30] Commodore Amiga ProTracker Cyber Lead with Vibrato */
+static void shimAmigaLead(double t, float freq, float duration, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_LEAD, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
+    freq = amiga_period_freq(freq);
+    double S = s_T + t;
+    float d = duration > 0.02f ? duration : 0.15f;
+    WaNode *o1 = osc_take(WA_AMIGA_PULSE, S, S + (double)d);
+    if (o1) {
+        wa_freq(o1, WA_SET, freq, S);
+        wa_vibrato(o1, 5.2f, 18.0f);
+        wa_filter(o1, WA_FILT_PAULA_LED, 4800.0f, 0.8f);
+        wa_gain(o1, WA_SET, 0.001f, S);
+        wa_gain(o1, WA_LIN, 0.95f * volMul, S + 0.006);
+        wa_gain(o1, WA_EXP, 0.001f, S + (double)d);
+    }
+    WaNode *o2 = osc_take(WA_AMIGA_SAW, S, S + (double)d);
+    if (o2) {
+        wa_freq(o2, WA_SET, freq * 1.004f, S);
+        wa_vibrato(o2, 5.2f, 16.0f);
+        wa_filter(o2, WA_FILT_PAULA_LED, 4400.0f, 0.7f);
+        wa_gain(o2, WA_SET, 0.001f, S);
+        wa_gain(o2, WA_LIN, 0.75f * volMul, S + 0.006);
+        wa_gain(o2, WA_EXP, 0.001f, S + (double)d);
+    }
+}
+
+/* [AMIGA SHIM 31] Commodore Amiga Sampled Minor Chord Stab */
+static void shimAmigaChord(double t, float base_freq, float duration, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_CHORD, LC_CAP_TONE, t, base_freq, volMul, duration);
+        return;
+    }
+    base_freq = amiga_period_freq(base_freq);
+    double S = s_T + t;
+    float d = duration > 0.02f ? duration : 0.20f;
+    static const float chord_ratios[4] = { 1.0f, 1.189207f, 1.498307f, 2.0f };
+    static const float chord_amps[4] = { 0.45f, 0.40f, 0.35f, 0.30f };
+    for (int k = 0; k < 4; k++) {
+        WaNode *c = osc_take(WA_AMIGA_SAW, S, S + (double)d);
+        if (!c) continue;
+        wa_freq(c, WA_SET, base_freq * chord_ratios[k], S);
+        wa_filter(c, WA_FILT_PAULA_LED, 4400.0f, 0.7071f);
+        wa_gain(c, WA_SET, 0.001f, S);
+        wa_gain(c, WA_LIN, chord_amps[k] * volMul, S + 0.006);
+        wa_gain(c, WA_EXP, 0.001f, S + (double)d);
+    }
+}
+
+/* [AMIGA SHIM 32] Commodore Amiga ProTracker 0xy Fast Arpeggio */
+static void shimAmigaArp(double t, float freq, float duration, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_ARP, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
+    freq = amiga_period_freq(freq);
+    double S = s_T + t;
+    float d = duration > 0.02f ? duration : 0.12f;
+    WaNode *a = osc_take(WA_AMIGA_PULSE, S, S + (double)d);
+    if (a) {
+        wa_freq(a, WA_SET, freq, S);
+        if (d > 0.02f) wa_freq(a, WA_SET, freq * 1.1892f, S + 0.02);
+        if (d > 0.04f) wa_freq(a, WA_SET, freq * 1.4983f, S + 0.04);
+        if (d > 0.06f) wa_freq(a, WA_SET, freq * 2.0000f, S + 0.06);
+        if (d > 0.08f) wa_freq(a, WA_SET, freq, S + 0.08);
+        if (d > 0.10f) wa_freq(a, WA_SET, freq * 1.1892f, S + 0.10);
+        wa_filter(a, WA_FILT_PAULA_LED, 4800.0f, 0.7071f);
+        wa_gain(a, WA_SET, 0.001f, S);
+        wa_gain(a, WA_LIN, 0.75f * volMul, S + 0.004);
+        wa_gain(a, WA_EXP, 0.001f, S + (double)d);
+    }
+}
+
+/* [AMIGA SHIM 33] Commodore Amiga 8-bit Chiptune Bell / Chime */
+static void shimAmigaBell(double t, float freq, float duration, float volMul) {
+    if (s_cap_on) {
+        cap_add(LC_SHIM_AMIGA_BELL, LC_CAP_TONE, t, freq, volMul, duration);
+        return;
+    }
+    freq = amiga_period_freq(freq);
+    double S = s_T + t;
+    float d = duration > 0.05f ? duration : 0.80f;
+    WaNode *b = osc_take(WA_SINE, S, S + (double)d);
+    if (b) {
+        wa_freq(b, WA_SET, freq, S);
+        wa_filter(b, WA_FILT_PAULA_LED, 6000.0f, 0.7071f);
+        wa_gain(b, WA_SET, 0.001f, S);
+        wa_gain(b, WA_LIN, 0.85f * volMul, S + 0.003);
+        wa_gain(b, WA_EXP, 0.001f, S + (double)d);
+    }
+}
+
+static void note_amiga(int shim, double t, float hz, float vol, float dur)
+{
+    orch_check(shim >= 26, __LINE__);
+    orch_check(shim <= 33, __LINE__);
+    if (shim == LC_SHIM_AMIGA_KICK) shimAmigaKick(t, vol);
+    else if (shim == LC_SHIM_AMIGA_SNARE) shimAmigaSnare(t, vol);
+    else if (shim == LC_SHIM_AMIGA_HAT) shimAmigaHat(t, vol);
+    else if (shim == LC_SHIM_AMIGA_BASS) shimAmigaBass(t, hz, dur, vol);
+    else if (shim == LC_SHIM_AMIGA_LEAD) shimAmigaLead(t, hz, dur, vol);
+    else if (shim == LC_SHIM_AMIGA_CHORD) shimAmigaChord(t, hz, dur, vol);
+    else if (shim == LC_SHIM_AMIGA_ARP) shimAmigaArp(t, hz, dur, vol);
+    else if (shim == LC_SHIM_AMIGA_BELL) shimAmigaBell(t, hz, dur, vol);
+    else if (s_shim_refuse < 4294967295u) s_shim_refuse++;
+}
+
 void lc_set_score_base(double t0)
 {
     orch_check(t0 < 1.0e9, __LINE__);
@@ -2087,6 +2301,7 @@ void lc_shim_note(int shim_no, double t, float hz, float vol, float duration)
     orch_check(duration < 100000.0f, __LINE__);
     if (shim_no >= 1 && shim_no <= 12) note_1_12(shim_no, t, hz, vol, duration);
     else if (shim_no >= 13 && shim_no <= 23) note_13_23(shim_no, t, hz, vol, duration);
+    else if (shim_no >= 26 && shim_no <= 33) note_amiga(shim_no, t, hz, vol, duration);
     else if (s_shim_refuse < 4294967295u) s_shim_refuse++;
 }
 

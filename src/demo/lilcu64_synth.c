@@ -40,6 +40,8 @@ __attribute__((weak)) uint32_t virtio_sound_get_queued_bytes(void) { return 0; }
 #define VOICE_WAVE_PULSE    3
 #define VOICE_WAVE_NOISE    4
 #define VOICE_WAVE_FM_BELL  5
+#define VOICE_WAVE_AMIGA_SAW 6
+#define VOICE_WAVE_AMIGA_PULSE 7
 
 typedef struct {
     bool   active;
@@ -250,6 +252,138 @@ void lilcu64_shim_chirp(void) {
     lilcu64_shim_pulse_squash(1.0f, 1.0f);
 }
 
+/* ── Amiga Sound Shims (Commodore Amiga Paula 8-bit DSP) ─────────── */
+void lilcu64_shim_amiga_kick(float vol_mul) {
+    if (s_muted) return;
+    SynthVoice *v = alloc_voice();
+    v->wave_type = VOICE_WAVE_SINE;
+    v->freq = 160.0f;
+    v->target_freq = 42.0f;
+    v->freq_ramp_rate = 0.005f;
+    v->phase_inc = (float)(2.0 * M_PI * v->freq / (double)s_sample_rate);
+    v->amp = 0.85f * vol_mul;
+    v->decay_rate = 1.0f / (0.18f * (float)s_sample_rate);
+    v->filter_coeff = 0.85f;
+
+    /* Punch transient click */
+    SynthVoice *c = alloc_voice();
+    c->wave_type = VOICE_WAVE_NOISE;
+    c->amp = 0.40f * vol_mul;
+    c->decay_rate = 1.0f / (0.015f * (float)s_sample_rate);
+    c->filter_coeff = 0.50f;
+}
+
+void lilcu64_shim_amiga_snare(float vol_mul) {
+    if (s_muted) return;
+    SynthVoice *v1 = alloc_voice();
+    v1->wave_type = VOICE_WAVE_NOISE;
+    v1->amp = 0.65f * vol_mul;
+    v1->decay_rate = 1.0f / (0.15f * (float)s_sample_rate);
+    v1->filter_coeff = 0.60f;
+
+    SynthVoice *v2 = alloc_voice();
+    v2->wave_type = VOICE_WAVE_TRIANGLE;
+    v2->freq = 220.0f;
+    v2->target_freq = 110.0f;
+    v2->freq_ramp_rate = 0.004f;
+    v2->phase_inc = (float)(2.0 * M_PI * v2->freq / (double)s_sample_rate);
+    v2->amp = 0.50f * vol_mul;
+    v2->decay_rate = 1.0f / (0.09f * (float)s_sample_rate);
+    v2->filter_coeff = 0.70f;
+}
+
+void lilcu64_shim_amiga_hat(float vol_mul) {
+    if (s_muted) return;
+    SynthVoice *v = alloc_voice();
+    v->wave_type = VOICE_WAVE_NOISE;
+    v->amp = 0.45f * vol_mul;
+    v->decay_rate = 1.0f / (0.045f * (float)s_sample_rate);
+    v->filter_coeff = 0.90f;
+}
+
+void lilcu64_shim_amiga_bass(float freq, float vol_mul, float duration) {
+    if (s_muted) return;
+    float dur = duration > 0.02f ? duration : 0.12f;
+    SynthVoice *v = alloc_voice();
+    v->wave_type = VOICE_WAVE_AMIGA_SAW;
+    v->freq = freq;
+    v->phase_inc = (float)(2.0 * M_PI * freq / (double)s_sample_rate);
+    v->amp = 0.65f * vol_mul;
+    v->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+    v->filter_coeff = 0.45f;
+
+    SynthVoice *sub = alloc_voice();
+    sub->wave_type = VOICE_WAVE_TRIANGLE;
+    sub->freq = freq * 0.5f;
+    sub->phase_inc = (float)(2.0 * M_PI * sub->freq / (double)s_sample_rate);
+    sub->amp = 0.35f * vol_mul;
+    sub->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+}
+
+void lilcu64_shim_amiga_lead(float freq, float vol_mul, float duration) {
+    if (s_muted) return;
+    float dur = duration > 0.02f ? duration : 0.15f;
+    SynthVoice *v1 = alloc_voice();
+    v1->wave_type = VOICE_WAVE_AMIGA_PULSE;
+    v1->freq = freq;
+    v1->phase_inc = (float)(2.0 * M_PI * freq / (double)s_sample_rate);
+    v1->amp = 0.45f * vol_mul;
+    v1->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+    v1->filter_coeff = 0.55f;
+    v1->pan = -0.2f;
+
+    SynthVoice *v2 = alloc_voice();
+    v2->wave_type = VOICE_WAVE_AMIGA_SAW;
+    v2->freq = freq * 1.004f;
+    v2->phase_inc = (float)(2.0 * M_PI * v2->freq / (double)s_sample_rate);
+    v2->amp = 0.38f * vol_mul;
+    v2->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+    v2->filter_coeff = 0.50f;
+    v2->pan = 0.2f;
+}
+
+void lilcu64_shim_amiga_chord(float base_freq, float vol_mul, float duration) {
+    if (s_muted) return;
+    float dur = duration > 0.02f ? duration : 0.20f;
+    static const float chord_ratios[3] = { 1.0f, 1.189207f, 1.498307f };
+    for (int i = 0; i < 3; i++) {
+        SynthVoice *v = alloc_voice();
+        v->wave_type = VOICE_WAVE_AMIGA_SAW;
+        v->freq = base_freq * chord_ratios[i];
+        v->phase_inc = (float)(2.0 * M_PI * v->freq / (double)s_sample_rate);
+        v->amp = 0.30f * vol_mul;
+        v->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+        v->filter_coeff = 0.45f;
+        v->pan = (i - 1.0f) * 0.25f;
+    }
+}
+
+void lilcu64_shim_amiga_arp(float base_freq, float vol_mul, float duration) {
+    if (s_muted) return;
+    float dur = duration > 0.02f ? duration : 0.12f;
+    SynthVoice *v = alloc_voice();
+    v->wave_type = VOICE_WAVE_AMIGA_PULSE;
+    v->freq = base_freq;
+    v->phase_inc = (float)(2.0 * M_PI * base_freq / (double)s_sample_rate);
+    v->amp = 0.42f * vol_mul;
+    v->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+    v->filter_coeff = 0.52f;
+}
+
+void lilcu64_shim_amiga_bell(float freq, float vol_mul, float duration) {
+    if (s_muted) return;
+    float dur = duration > 0.05f ? duration : 0.80f;
+    SynthVoice *v = alloc_voice();
+    v->wave_type = VOICE_WAVE_FM_BELL;
+    v->freq = freq;
+    v->phase_inc = (float)(2.0 * M_PI * freq / (double)s_sample_rate);
+    v->fm_ratio = 2.0f;
+    v->fm_index = 0.8f;
+    v->amp = 0.48f * vol_mul;
+    v->decay_rate = 1.0f / (dur * (float)s_sample_rate);
+    v->filter_coeff = 0.65f;
+}
+
 /* Drum shims */
 __attribute__((unused)) static void drum_kick(float vol) {
     if (s_muted) return;
@@ -257,9 +391,9 @@ __attribute__((unused)) static void drum_kick(float vol) {
     v->wave_type = VOICE_WAVE_SINE;
     v->freq = 120.0f;
     v->target_freq = 45.0f;
-    v->freq_ramp_rate = -0.004f;
+    v->freq_ramp_rate = 0.004f;
     v->phase_inc = (float)(2.0 * M_PI * v->freq / (double)s_sample_rate);
-    v->amp = 0.32f * vol;
+    v->amp = 0.80f * vol;
     v->decay_rate = 1.0f / (0.16f * (float)s_sample_rate);
 }
 
@@ -371,6 +505,28 @@ static void render_block(int16_t *out_pcm, size_t frames) {
                     raw = sinf(v->phase + mod);
                     v->fm_phase += v->phase_inc * v->fm_ratio;
                     if (v->fm_phase >= (float)(2.0 * M_PI)) v->fm_phase -= (float)(2.0 * M_PI);
+                    break;
+                }
+                case VOICE_WAVE_AMIGA_SAW: {
+                    float norm = v->phase / (float)(2.0 * M_PI);
+                    if (norm < 0.0f) norm = 0.0f;
+                    if (norm >= 1.0f) norm = 0.999f;
+                    int idx = (int)(norm * 32.0f);
+                    if (idx < 0) idx = 0;
+                    if (idx > 31) idx = 31;
+                    int8_t s = (int8_t)(127 - (idx * 255) / 31);
+                    raw = (float)s / 127.0f;
+                    break;
+                }
+                case VOICE_WAVE_AMIGA_PULSE: {
+                    float norm = v->phase / (float)(2.0 * M_PI);
+                    if (norm < 0.0f) norm = 0.0f;
+                    if (norm >= 1.0f) norm = 0.999f;
+                    int idx = (int)(norm * 32.0f);
+                    if (idx < 0) idx = 0;
+                    if (idx > 31) idx = 31;
+                    int8_t s = (idx < 10) ? 120 : -120;
+                    raw = (float)s / 127.0f;
                     break;
                 }
                 default:
@@ -543,7 +699,7 @@ void lilcu64_synth_close(void) {
 }
 
 void lilcu64_synth_play_track(int track_num) {
-    if (track_num < 1 || track_num > 4) {
+    if (track_num < 1 || track_num > 5) {
         lilcu64_synth_stop_track();
         return;
     }

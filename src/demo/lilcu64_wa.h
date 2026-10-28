@@ -26,17 +26,21 @@ extern "C" {
 #endif
 
 /* Oscillator types */
-#define WA_SINE     0
-#define WA_TRIANGLE 1
-#define WA_SAWTOOTH 2
-#define WA_SQUARE   3
-#define WA_NOISE    4   /* AudioBufferSource playing the shared 2 s noise buffer */
+#define WA_SINE        0
+#define WA_TRIANGLE    1
+#define WA_SAWTOOTH    2
+#define WA_SQUARE      3
+#define WA_NOISE       4   /* AudioBufferSource playing the shared 2 s noise buffer */
+#define WA_AMIGA_SAW   5   /* 8-bit Paula sawtooth with Zero-Order Hold */
+#define WA_AMIGA_PULSE 6   /* 8-bit Paula pulse wave with Zero-Order Hold */
+#define WA_AMIGA_NOISE 7   /* 8-bit Paula pseudo-random noise */
 
 /* BiquadFilterNode types */
-#define WA_FILT_NONE     0
-#define WA_FILT_LOWPASS  1
-#define WA_FILT_HIGHPASS 2
-#define WA_FILT_BANDPASS 3
+#define WA_FILT_NONE      0
+#define WA_FILT_LOWPASS   1
+#define WA_FILT_HIGHPASS  2
+#define WA_FILT_BANDPASS  3
+#define WA_FILT_PAULA_LED 4   /* Amiga 4.4 kHz 2-pole Butterworth LED lowpass filter */
 
 /* AudioParam automation event types */
 #define WA_SET 0   /* setValueAtTime */
@@ -56,6 +60,7 @@ void    wa_freq(WaNode *n, int ev, float value, double t);        /* osc.frequen
 void    wa_gain(WaNode *n, int ev, float value, double t);        /* gain.gain.* */
 void    wa_filter(WaNode *n, int type, float freq, float q);      /* createBiquadFilter() */
 void    wa_filter_freq(WaNode *n, int ev, float value, double t); /* filter.frequency.* */
+void    wa_vibrato(WaNode *n, float rate_hz, float depth_cents);  /* ProTracker LFO vibrato */
 
 /* Reverb & spatial feedback delay controls (deep industrial cavern model) */
 void    wa_set_reverb(int enabled, float room_size, float damping, float feedback, float wet_mix);

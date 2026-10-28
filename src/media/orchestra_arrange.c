@@ -4,7 +4,7 @@
 static WND *s_wnd;
 static uint32_t s_t0;
 static int s_pick = -1;
-static int s_zoom = 2;
+static int s_zoom = 3;
 static int s_row;
 static int s_seen_n = -1;
 static int s_seen_sel = -2;
@@ -42,25 +42,25 @@ typedef struct ArrGeom {
 
 static const char *zoom_label(void)
 {
-    static const char *lb[5] = { "16", "8", "4", "2", "1" };
-    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
-    orch_check(lb[2][0] == '4', __LINE__);
-    if (s_zoom < 0 || s_zoom > 4) return "4";
+    static const char *lb[6] = { "32", "16", "8", "4", "2", "1" };
+    orch_check(s_zoom >= 0 && s_zoom <= 5, __LINE__);
+    orch_check(lb[3][0] == '4', __LINE__);
+    if (s_zoom < 0 || s_zoom > 5) return "4";
     return lb[s_zoom];
 }
 
 static void zoom_by(int dir)
 {
     orch_check(dir == -1 || dir == 1, __LINE__);
-    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    orch_check(s_zoom >= 0 && s_zoom <= 5, __LINE__);
     if (dir < 0 && s_zoom > 0) s_zoom--;
-    if (dir > 0 && s_zoom < 4) s_zoom++;
+    if (dir > 0 && s_zoom < 5) s_zoom++;
 }
 
 static int zoom_bars(int gw)
 {
-    int bars = 16 >> s_zoom;
-    orch_check(s_zoom >= 0 && s_zoom <= 4, __LINE__);
+    int bars = 32 >> s_zoom;
+    orch_check(s_zoom >= 0 && s_zoom <= 5, __LINE__);
     orch_check(gw > -10 && gw < 8000, __LINE__);
     if (bars < 1) bars = 1;
     if (gw < 240 && bars > 2) bars = 2;
@@ -172,6 +172,28 @@ static uint32_t span_end(const OrchView *v, uint32_t bar)
     if (now > end) end = now;
     if (end < 0xfff00000u - bar) end += bar;
     return end;
+}
+
+static void cmd_auto_scale(const OrchView *v)
+{
+    uint32_t bar, end, duration_ticks, bars_needed;
+    orch_check(v != 0, __LINE__);
+    if (!v) return;
+    bar = orch_q(v, ORCH_SNAP_BAR);
+    if (bar == 0u) bar = 3840u;
+    end = span_end(v, bar);
+    duration_ticks = (end > 0u) ? end : bar;
+    bars_needed = (duration_ticks + bar - 1u) / bar;
+    if (bars_needed <= 1u) s_zoom = 5;
+    else if (bars_needed <= 2u) s_zoom = 4;
+    else if (bars_needed <= 4u) s_zoom = 3;
+    else if (bars_needed <= 8u) s_zoom = 2;
+    else if (bars_needed <= 16u) s_zoom = 1;
+    else s_zoom = 0;
+    s_t0 = 0;
+    s_row = 0;
+    s_hold = 0;
+    s_pick = -1;
 }
 
 static void geom_of(const OrchView *v, int w, int h, ArrGeom *g)
@@ -292,6 +314,7 @@ static void take_home(const OrchView *v)
     s_seen_sel = -2;
     s_seen_lo = -1;
     s_seen_hi = -1;
+    cmd_auto_scale(v);
 }
 
 static void time_follow(const OrchView *v, const ArrGeom *g)
@@ -393,7 +416,8 @@ static void paint_tools(GDEV *dev, const OrchView *v, int w, int mode)
         orch_btn(dev, 8, 4, 28, 24, "S", v->tool == ORCH_TOOL_SELECT);
         orch_btn(dev, 40, 4, 28, 24, "P", v->tool == ORCH_TOOL_PENCIL);
         orch_btn(dev, 72, 4, 28, 24, "E", v->tool == ORCH_TOOL_ERASE);
-        if (w >= 180) orch_btn(dev, 108, 4, 56, 24, sn, 0);
+        orch_btn(dev, 104, 4, 28, 24, "Fit", 0);
+        if (w >= 210) orch_btn(dev, 136, 4, 56, 24, sn, 0);
         return;
     }
     orch_btn(dev, 8, 4, 56, 24, "Sel", v->tool == ORCH_TOOL_SELECT);
@@ -401,6 +425,7 @@ static void paint_tools(GDEV *dev, const OrchView *v, int w, int mode)
     orch_btn(dev, 128, 4, 56, 24, "Era", v->tool == ORCH_TOOL_ERASE);
     orch_btn(dev, 192, 4, 64, 24, sn, 0);
     orch_btn(dev, 264, 4, 64, 24, "Undo", 0);
+    orch_btn(dev, 336, 4, 56, 24, "Fit", 0);
 }
 
 static int x_of(int gx, int gw, uint32_t t0, uint32_t vis, uint32_t tick)
@@ -536,12 +561,15 @@ static void paint_ruler(GDEV *dev, int gx, int gw, uint32_t bar, uint32_t vis)
 {
     int i;
     int stop;
+    int step = 1;
     orch_check(dev != 0, __LINE__);
     orch_check(bar > 0u && vis >= bar, __LINE__);
     orch_fill(dev, gx, 32, gw, 18, ORCH_COL_PANEL_BG);
     stop = gx + gw;
     if (gw >= 160) stop = gx + gw - 96;
-    for (i = 0; i < 16; i++) {
+    if (vis >= 32u * bar) step = 4;
+    else if (vis >= 16u * bar && gw < 480) step = 2;
+    for (i = 0; i < 64; i += step) {
         uint32_t t = s_t0 + (uint32_t)i * bar;
         int tx;
         char nb[8];
@@ -690,7 +718,8 @@ static int tool_click(const OrchView *v, int x, int y, int mode)
         if (orch_inside(x, y, 8, 4, 28, 24)) orch_desk_tool(ORCH_TOOL_SELECT);
         else if (orch_inside(x, y, 40, 4, 28, 24)) orch_desk_tool(ORCH_TOOL_PENCIL);
         else if (orch_inside(x, y, 72, 4, 28, 24)) orch_desk_tool(ORCH_TOOL_ERASE);
-        else if (orch_inside(x, y, 108, 4, 56, 24)) orch_desk_snap_cycle();
+        else if (orch_inside(x, y, 104, 4, 28, 24)) cmd_auto_scale(v);
+        else if (orch_inside(x, y, 136, 4, 56, 24)) orch_desk_snap_cycle();
         else return 0;
         return 1;
     }
@@ -699,6 +728,7 @@ static int tool_click(const OrchView *v, int x, int y, int mode)
     else if (orch_inside(x, y, 128, 4, 56, 24)) orch_desk_tool(ORCH_TOOL_ERASE);
     else if (orch_inside(x, y, 192, 4, 64, 24)) orch_desk_snap_cycle();
     else if (orch_inside(x, y, 264, 4, 64, 24)) (void)orch_undo_apply();
+    else if (orch_inside(x, y, 336, 4, 56, 24)) cmd_auto_scale(v);
     else return 0;
     return 1;
 }
@@ -1033,5 +1063,6 @@ WND *orch_open_arrange(void)
     w->destroy = on_destroy;
     w->menu_open = orch_menu_no;
     s_wnd = w;
+    cmd_auto_scale(v);
     return w;
 }

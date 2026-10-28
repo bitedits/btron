@@ -299,6 +299,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/media/orchestra_session.c \
               src/media/orchestra_smf.c \
               src/media/gst_rt.c       \
+              src/media/lukhash_score.c \
               src/apps/chat.c          \
               src/apps/chat_xml.c      \
               src/emulators/msx/msx_app.c       \
@@ -588,6 +589,7 @@ COMMON_NO_SDL_SRCS = \
     src/media/orchestra_session.c \
     src/media/orchestra_smf.c \
     src/media/gst_rt.c     \
+    src/media/lukhash_score.c \
     src/apps/chat.c        \
     src/apps/chat_xml.c    \
     src/settings/control_panel.c \
@@ -737,7 +739,7 @@ mkbtronfs: src/tools/mkbtronfs.c $(FS_OBJS)
 album_encode: src/tools/album_encode.c src/demo/lilcu64_score.c \
 		src/demo/lilcu64_wa.c src/demo/lilcu64_insert.c \
 		src/media/orchestra_session.c src/media/orchestra_smf.c \
-		src/media/gst_rt.c
+		src/media/gst_rt.c src/media/lukhash_score.c
 	$(CC) $(CFLAGS) -Werror -Isrc/demo $^ -lm -o album_encode
 	@echo "[ALBUM] album_encode built."
 
@@ -3560,6 +3562,7 @@ CAPTURE_SCREENS_SRCS = src/tools/capture_screens.c \
                        src/media/orchestra_session.c \
                        src/media/orchestra_smf.c \
                        src/media/gst_rt.c \
+                       src/media/lukhash_score.c \
                        src/apps/chat.c \
                        src/apps/chat_xml.c \
                        src/tip/tip_ife.c \

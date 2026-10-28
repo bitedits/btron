@@ -61,6 +61,16 @@ void lilcu64_shim_boing(void);
 void lilcu64_shim_footstep(void);
 void lilcu64_shim_chirp(void);
 
+/* ── Amiga Sound Shims (Commodore Amiga Paula 8-bit DSP) ─────────── */
+void lilcu64_shim_amiga_kick(float vol_mul);
+void lilcu64_shim_amiga_snare(float vol_mul);
+void lilcu64_shim_amiga_hat(float vol_mul);
+void lilcu64_shim_amiga_bass(float freq, float vol_mul, float duration);
+void lilcu64_shim_amiga_lead(float freq, float vol_mul, float duration);
+void lilcu64_shim_amiga_chord(float base_freq, float vol_mul, float duration);
+void lilcu64_shim_amiga_arp(float base_freq, float vol_mul, float duration);
+void lilcu64_shim_amiga_bell(float freq, float vol_mul, float duration);
+
 /* ── Audio Rendering & VirtIO Audio Pump ──────────────────────────── */
 
 /* Renders stereo 16-bit interleaved PCM samples */

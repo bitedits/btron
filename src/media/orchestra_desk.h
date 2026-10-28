@@ -26,6 +26,7 @@ uint32_t orch_q(const OrchView *v, int snap);
 uint32_t orch_now_tick(const OrchView *v);
 uint32_t orch_snap_tick(const OrchView *v, uint32_t tick);
 int orch_hit_event(int track, uint32_t tick, int key, int use_key);
+int orch_find_lead_track(const OrchView *v);
 void orch_desk_sel(int idx);
 void orch_desk_tool(int tool);
 void orch_desk_snap_cycle(void);

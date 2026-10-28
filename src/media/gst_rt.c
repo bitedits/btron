@@ -361,7 +361,7 @@ void gst_resolve_track(OrchTrack *t)
         orch_count_sat(&g.refuse_program);
         return;
     }
-    t->shim = r->shim;
+    if (t->shim == 0) t->shim = r->shim;
     t->clef = r->clef;
     t->prog_tr = r->tr;
     t->kind = r->kind;
@@ -371,6 +371,17 @@ void gst_resolve_track(OrchTrack *t)
     else if (g.family == ORCH_FAM_CLASSIC && r->gm != 0) poly = 1;
     if (poly > r->poly) poly = r->poly;
     t->poly_max = poly;
+    if (t->name[0] == 'A' && t->name[1] == 'm' && t->name[2] == 'i' &&
+        t->name[3] == 'g' && t->name[4] == 'a' && t->name[5] == ' ') {
+        if (r->shim == LC_SHIM_IND_KICK || r->shim == LC_SHIM_KICK) t->shim = LC_SHIM_AMIGA_KICK;
+        else if (r->shim == LC_SHIM_IND_SNARE || r->shim == LC_SHIM_SNARE) t->shim = LC_SHIM_AMIGA_SNARE;
+        else if (r->shim == LC_SHIM_HAT) t->shim = LC_SHIM_AMIGA_HAT;
+        else if (r->shim == LC_SHIM_IND_BASS || r->shim == LC_SHIM_WADDLE) t->shim = LC_SHIM_AMIGA_BASS;
+        else if (r->shim == LC_SHIM_CYBER || r->shim == LC_SHIM_SAX) t->shim = LC_SHIM_AMIGA_LEAD;
+        else if (r->shim == LC_SHIM_SWARM) t->shim = LC_SHIM_AMIGA_CHORD;
+        else if (r->shim == LC_SHIM_SQUASH || r->shim == LC_SHIM_DANCE) t->shim = LC_SHIM_AMIGA_ARP;
+        else if (r->shim == LC_SHIM_DING) t->shim = LC_SHIM_AMIGA_BELL;
+    }
 }
 static void lat_one(LatTrk *o, const OrchTrack *t)
 {
@@ -586,8 +597,9 @@ static int sound_on(OrchSlot *slots, int track, int key, int vel, double t,
     wa_set_node_bus((uint8_t)(track + 1));
     wa_set_note_key((uint8_t)key);
     lc_set_score_base(0.0);
+    int sh = (o.shim > 0) ? (int)o.shim : (int)r->shim;
     if (bell) lilcu64_shim_pulse_bell(vol, hz / 440.0f);
-    else lc_shim_note((int)r->shim, t, play_hz, vol, dur);
+    else lc_shim_note(sh, t, play_hz, vol, dur);
     if (!shim_landed(ref0, act0, bell)) {
         slots[idx].used = 0;
         return -1;
@@ -804,6 +816,7 @@ static int same_path(const char *p, const char *lit)
     int i;
     orch_check(lit != 0, __LINE__); orch_check(lit[0] == '/', __LINE__);
     if (!p) return 0;
+    if (p[0] != '/' && lit[0] == '/') lit++;
     for (i = 0; i < 96; i++) {
         if (p[i] != lit[i]) return 0;
         if (lit[i] == 0) return 1;

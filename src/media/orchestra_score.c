@@ -12,6 +12,11 @@ static int s_dy_h;
 static int s_dy_mode = -1;
 static uint32_t s_home;
 static uint8_t s_seen_state;
+static int s_drag;
+static int s_anchor;
+static int s_anchor_bar;
+
+enum { SB = 16, DRAG_OFF = 0, DRAG_H = 1 };
 
 enum { ND = 160 };
 
@@ -599,6 +604,7 @@ static void take_home(const OrchView *v)
     s_pick = -1;
     s_fit_tr = -2;
     s_dy_tr = -3;
+    s_drag = DRAG_OFF;
 }
 
 static void time_follow(const OrchView *v, int bars, uint32_t bar)
@@ -700,30 +706,144 @@ static void paint_chrome(GDEV *dev, const OrchView *v, int w, int mode)
     if (!dev || !v) return;
     if (mode == ORCH_LAY_MIN) {
         if (w < 80) return;
-        orch_btn(dev, 8, 4, 24, 22, "[", 0);
-        orch_btn(dev, 36, 4, 24, 22, "]", 0);
+        orch_btn(dev, 8, 4, 24, 22, "<", 0);
+        orch_btn(dev, 34, 4, 24, 22, ">", 0);
         return;
     }
-    orch_btn(dev, 8, 4, 24, 22, "<", 0);
-    orch_btn(dev, 36, 4, 24, 22, ">", 0);
-    name_x = 72;
-    if (w >= 700) {
-        orch_btn(dev, 68, 4, 52, 22, "Sel", v->tool == ORCH_TOOL_SELECT);
-        orch_btn(dev, 124, 4, 52, 22, "Pen", v->tool == ORCH_TOOL_PENCIL);
-        orch_btn(dev, 180, 4, 52, 22, "Era", v->tool == ORCH_TOOL_ERASE);
-        orch_btn(dev, 236, 4, 56, 22, snap_name((int)v->snap), 0);
-        orch_btn(dev, 296, 4, 56, 22, "Undo", 0);
-        name_x = 360;
-    }
-    if (w < 400) return;
-    x0 = w - 64;
+    orch_btn(dev, 8, 4, 38, 22, "Sel", v->tool == ORCH_TOOL_SELECT);
+    orch_btn(dev, 48, 4, 38, 22, "Pen", v->tool == ORCH_TOOL_PENCIL);
+    orch_btn(dev, 88, 4, 38, 22, "Era", v->tool == ORCH_TOOL_ERASE);
+    orch_btn(dev, 128, 4, 44, 22, snap_name((int)v->snap), 0);
+    orch_btn(dev, 174, 4, 44, 22, "Undo", 0);
+    orch_btn(dev, 220, 4, 36, 22, "Fit", 0);
+    name_x = 268;
+    if (w < 380) return;
+    x0 = w - 54;
     px = x0 - name_x - 8;
-    if (px >= 48) {
+    if (px >= 32) {
         part_text(name, 32, v, px);
         if (name[0]) orch_text(dev, name_x, 8, name, ORCH_COL_WHITE);
     }
-    orch_btn(dev, x0, 4, 24, 22, "[", 0);
-    orch_btn(dev, x0 + 32, 4, 24, 22, "]", 0);
+    orch_btn(dev, x0, 4, 24, 22, "<", 0);
+    orch_btn(dev, x0 + 26, 4, 24, 22, ">", 0);
+}
+
+static uint32_t span_end(const OrchView *v, uint32_t bar)
+{
+    uint32_t n, i, end, now;
+    orch_check(v != 0, __LINE__);
+    orch_check(bar > 0u, __LINE__);
+    if (!v || bar == 0u) return 3840u;
+    end = bar;
+    n = v->event_count;
+    if (n > 4096u) n = 4096u;
+    for (i = 0; i < n; i++) {
+        const OrchEvent *e = &v->ev[i];
+        uint32_t a = e->start_tick;
+        uint32_t d = e->dur_tick;
+        uint32_t b;
+        if (d == 0u) d = 1u;
+        b = (a > 0xfff00000u - d) ? 0xfff00000u : a + d;
+        if (b > end) end = b;
+    }
+    now = orch_now_tick(v);
+    if (now > end) end = now;
+    if (end < 0xfff00000u - bar) end += bar;
+    return end;
+}
+
+static int thumb_h(const OrchView *v, int w, int bars, uint32_t bar, int *x, int *tw)
+{
+    int gx = 48;
+    int gw = w - gx - 8;
+    uint32_t end;
+    int total_bars, max_bar, th;
+    orch_check(v != 0, __LINE__);
+    orch_check(x != 0 && tw != 0, __LINE__);
+    if (!v || !x || !tw || gw < 16) return 0;
+    end = span_end(v, bar);
+    total_bars = (int)((end + bar - 1u) / bar);
+    if (total_bars < bars) total_bars = bars;
+    if (total_bars < 1) total_bars = 1;
+    th = (gw * bars) / total_bars;
+    if (th < 12) th = 12;
+    if (th > gw) th = gw;
+    *tw = th;
+    *x = gx;
+    max_bar = total_bars - bars;
+    if (max_bar <= 0) return 0;
+    *x = gx + ((gw - th) * s_bar) / max_bar;
+    if (*x < gx) *x = gx;
+    if (*x > gx + gw - th) *x = gx + gw - th;
+    return 1;
+}
+
+static void paint_hsb(GDEV *dev, const OrchView *v, int w, int h, int bars, uint32_t bar)
+{
+    int gx = 48;
+    int gw = w - gx - 8;
+    int hy = h - SB;
+    int tx = 0, tw = 0;
+    orch_check(dev != 0, __LINE__);
+    orch_check(v != 0, __LINE__);
+    orch_check(w > 0 && h > 0, __LINE__);
+    if (!dev || !v || gw < 16) return;
+    orch_fill(dev, gx, hy, gw, SB, ORCH_COL_INSET_BG);
+    (void)thumb_h(v, w, bars, bar, &tx, &tw);
+    if (tw >= 8) orch_btn(dev, tx, hy + 1, tw, SB - 2, "", 0);
+}
+
+static void hsb_click(const OrchView *v, int x, int w, int bars, uint32_t bar)
+{
+    int tx = 0, tw = 0, live;
+    int total_bars, max_bar;
+    uint32_t end;
+    orch_check(v != 0, __LINE__);
+    orch_check(bars > 0, __LINE__);
+    if (!v) return;
+    end = span_end(v, bar);
+    total_bars = (int)((end + bar - 1u) / bar);
+    if (total_bars < bars) total_bars = bars;
+    max_bar = total_bars - bars;
+    live = thumb_h(v, w, bars, bar, &tx, &tw);
+    if (!live) return;
+    if (x >= tx && x < tx + tw) {
+        s_drag = DRAG_H;
+        s_anchor = x;
+        s_anchor_bar = s_bar;
+        s_hold = 1;
+        return;
+    }
+    if (x < tx) {
+        s_bar -= bars;
+        if (s_bar < 0) s_bar = 0;
+    } else {
+        s_bar += bars;
+        if (s_bar > max_bar) s_bar = max_bar;
+    }
+    s_hold = 1;
+}
+
+static void score_drag(const OrchView *v, int x, int w, int bars, uint32_t bar)
+{
+    int tx = 0, tw = 0, total_bars, max_bar, gx = 48, gw = w - gx - 8, travel, b;
+    uint32_t end;
+    orch_check(v != 0, __LINE__);
+    orch_check(s_drag == DRAG_H, __LINE__);
+    if (!v || gw < 16) return;
+    end = span_end(v, bar);
+    total_bars = (int)((end + bar - 1u) / bar);
+    if (total_bars < bars) total_bars = bars;
+    max_bar = total_bars - bars;
+    if (max_bar <= 0) return;
+    (void)thumb_h(v, w, bars, bar, &tx, &tw);
+    travel = gw - tw;
+    if (travel < 1) travel = 1;
+    b = s_anchor_bar + ((x - s_anchor) * max_bar) / travel;
+    if (b < 0) b = 0;
+    if (b > max_bar) b = max_bar;
+    s_bar = b;
+    s_hold = 1;
 }
 
 static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
@@ -761,6 +881,7 @@ static void draw_system(GDEV *dev, const OrchView *v, int w, int h, int mode)
     draw_rests(dev, v, track, gx, bar_w, bars, mid, bar);
     paint_now(dev, v, gx, mid, dy, bar_w, bars, bar);
     paint_chrome(dev, v, w, mode);
+    paint_hsb(dev, v, w, h, bars, bar);
 }
 
 static void score_paint(WND *wnd, GDEV *dev)
@@ -786,28 +907,21 @@ static int head_click(const OrchView *v, int x, int y, int w, int mode)
     orch_check(mode >= ORCH_LAY_WIDE && mode <= ORCH_LAY_MIN, __LINE__);
     if (!v || y >= 28) return 0;
     if (mode == ORCH_LAY_MIN) {
-        if (w >= 80 && x < 36) step_track(v, -1);
-        else if (w >= 80 && x < 64) step_track(v, 1);
+        if (w >= 80 && x < 34) step_track(v, -1);
+        else if (w >= 80 && x < 60) step_track(v, 1);
         return 1;
     }
-    if (x < 64) {
-        s_hold = 1;
-        if (x < 36) {
-            if (s_bar > 0) s_bar--;
-        } else if (s_bar < 400) {
-            s_bar++;
-        }
-        return 1;
+    if (x < 48) orch_desk_tool(ORCH_TOOL_SELECT);
+    else if (x < 88) orch_desk_tool(ORCH_TOOL_PENCIL);
+    else if (x < 128) orch_desk_tool(ORCH_TOOL_ERASE);
+    else if (x < 174) orch_desk_snap_cycle();
+    else if (x < 220) (void)orch_undo_apply();
+    else if (x < 258) {
+        s_fit_tr = -2;
+        seek_part(v, orch_q(v, ORCH_SNAP_BAR));
     }
-    if (w >= 700 && x < 352) {
-        if (x < 124) orch_desk_tool(ORCH_TOOL_SELECT);
-        else if (x < 180) orch_desk_tool(ORCH_TOOL_PENCIL);
-        else if (x < 236) orch_desk_tool(ORCH_TOOL_ERASE);
-        else if (x < 296) orch_desk_snap_cycle();
-        else (void)orch_undo_apply();
-        return 1;
-    }
-    if (w >= 400 && x >= w - 64) step_track(v, x < w - 32 ? -1 : 1);
+    else if (w >= 380 && x >= w - 54 && x < w - 28) step_track(v, -1);
+    else if (w >= 380 && x >= w - 28) step_track(v, 1);
     return 1;
 }
 
@@ -831,6 +945,13 @@ static void score_edit(const OrchView *v, int x, int y, int w, int h, int mode)
     orch_check(v != 0, __LINE__);
     orch_check(w > 0 && h > 0, __LINE__);
     if (head_click(v, x, y, w, mode)) return;
+    bar = orch_q(v, ORCH_SNAP_BAR);
+    if (bar == 0u) bar = 3840u;
+    bar_w = span_w(w, mode, &bars);
+    if (orch_inside(x, y, 48, h - SB, w - 56, SB)) {
+        hsb_click(v, x, w, bars, bar);
+        return;
+    }
     track = (int)v->selected;
     if (track < 0 || track >= (int)v->track_count) return;
     bass = v->trk[track].clef ? 1 : 0;
@@ -841,10 +962,7 @@ static void score_edit(const OrchView *v, int x, int y, int w, int h, int mode)
     if (step < -30) step = -30;
     if (step > 30) step = 30;
     gx = 48;
-    bar_w = span_w(w, mode, &bars);
     if (bar_w < 8) return;
-    bar = orch_q(v, ORCH_SNAP_BAR);
-    if (bar == 0u) bar = 3840u;
     b = (x - gx) / bar_w;
     if (b < 0) b = 0;
     if (b >= bars) b = bars - 1;
@@ -873,14 +991,32 @@ static void score_edit(const OrchView *v, int x, int y, int w, int h, int mode)
 
 static void score_event(WND *wnd, const EVT *evt)
 {
-    int x, y, w, h;
+    int x, y, w, h, bars, bar_w;
     OrchView *v;
+    uint32_t bar;
     orch_check(wnd != 0, __LINE__);
     orch_check(evt != 0, __LINE__);
-    if (!wnd || !evt || evt->type != EV_BUT_DOWN) return;
+    if (!wnd || !evt) return;
     v = gst_view();
     if (!v) return;
     orch_client(wnd, evt, &x, &y, &w, &h);
+    bar_w = span_w(w, orch_lay_mode(w, h), &bars);
+    (void)bar_w;
+    bar = orch_q(v, ORCH_SNAP_BAR);
+    if (bar == 0u) bar = 3840u;
+    if (evt->type == EV_BUT_UP) {
+        s_drag = DRAG_OFF;
+        (void)inval_wnd(wnd);
+        return;
+    }
+    if (evt->type == EV_MOUSE_MOVE) {
+        if (s_drag == DRAG_OFF) return;
+        score_drag(v, x, w, bars, bar);
+        (void)inval_wnd(wnd);
+        return;
+    }
+    if (evt->type != EV_BUT_DOWN) return;
+    s_drag = DRAG_OFF;
     score_edit(v, x, y, w, h, orch_lay_mode(w, h));
     (void)inval_wnd(wnd);
 }
@@ -891,6 +1027,7 @@ static void on_destroy(WND *wnd)
     orch_check(s_wnd == 0 || s_wnd == wnd, __LINE__);
     (void)wnd;
     s_wnd = 0;
+    s_drag = DRAG_OFF;
 }
 
 void orch_score_inval(void)

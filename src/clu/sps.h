@@ -15,8 +15,8 @@
 extern "C" {
 #endif
 
-#define SPS_MAX_PAGES     128
-#define SPS_PAGE_STREAM_MAX (256 * 1024)
+#define SPS_MAX_PAGES     32
+#define SPS_PAGE_STREAM_MAX (32 * 1024)
 
 typedef struct {
     int  page_num;

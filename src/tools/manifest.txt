@@ -57,13 +57,13 @@ FILE "Clarity-Sample.TAD"        TAD   -
 # not fit by naming the blocks it needed.
 #
 # What is here is what tronMSX can run today: its first cartridge window maps one 32 KiB page at
-# 0x4000 and answers MSX_ERR_SIZE above that, so the two MSX1 Lode Runners ship and BULLRUSH,
+# 0x4000 and answers MSX_ERR_SIZE above that, so the MSX1 flat cartridges ship and BULLRUSH,
 # NIGHT_RAVEN and NEON_REVENANT wait on the banked megaROM mapper, not on room in the image.  The
 # C-BIOS pair is not optional -- the machine has no ROM of its own, and without a BIOS the window
 # opens on an empty slot and says so.
 DIR "msx" -
-FILE "Lode Runner (1984)(Sony)[a].rom"  BIN  "assets/msx/Lode Runner (1984)(Sony)[a].rom"  msx
-FILE "Lode Runner II (Japan).rom"       BIN  "assets/msx/Lode Runner II (Japan).rom"       msx
+FILE "c0man.rom"    BIN  "assets/msx/c0man.rom"    msx
+FILE "YAZZIER.ROM"  BIN  "assets/msx/YAZZIER.ROM"  msx
 
 DIR "cbios" -
 FILE "cbios_main_msx1.rom"  BIN  third_party/openMSX/Contrib/cbios/cbios_main_msx1.rom  cbios

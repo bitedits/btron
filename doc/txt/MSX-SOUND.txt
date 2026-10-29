@@ -140,9 +140,7 @@ Dynamite Go! Go!
 is assets/msx/Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM, the
 32 KiB cartridge the same site loads as games/DynamiteGoGo.zip on an MSX2
 Japanese machine. It boots as MSX2 C-BIOS JP; the size rule would otherwise
-pick MSX1. Lode Runner stays the small PSG cartridge. The /SYS image is
-unchanged and still carries only the two 32 KiB Lode Runners; the
-freestanding cartridge cap is 1 MiB.
+pick MSX1. The freestanding cartridge cap is 1 MiB.
 
 $ make msx-audio also checks a Konami SCC cart window (a write of 0x7F at
 0x9800 reads back), an SCC+ wave byte at 0xB800, a latched deformation byte,

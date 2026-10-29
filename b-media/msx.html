@@ -443,7 +443,7 @@
           inside the 6 KiB pattern table</strong> — <code>index = 8*code + y%8</code> with
           <code>code = name + 256*(y/64)</code>. Reading the colour at <code>CT + code</code>, as the
           Graphics 1 law would suggest, collapses every eight pattern rows onto one CR byte and makes a
-          SCREEN 2 game that paints per-row ink/paper pairs (Lode Runner is the reference case) render
+          SCREEN 2 game that paints per-row ink/paper pairs render
           almost entirely black. Graphics 1 keeps the 768-byte table with <code>name &gt;&gt; 3</code>;
           the two laws are NOT interchangeable.
         </p>

@@ -54,14 +54,6 @@
     <div class="section">
       <h2>画面プレビュー (Screen Preview)</h2>
       <div class="screen-preview">
-        <img src="../img/screens/MSX_LodeRunner.png" alt="Lode Runner (MSX Game Cartridge Preview)">
-        <p>実機描画フレームバッファより自動抽出された Lode Runner (TMS9918A VDP / VRAM 16KB / PSG 音源・アセンブラ直叩き)</p>
-      </div>
-      <div class="screen-preview">
-        <img src="../img/screens/MSX_LodeRunner2.png" alt="Lode Runner II (MSX Game Cartridge Preview)">
-        <p>実機描画フレームバッファより自動抽出された Lode Runner II (Japan) (32KB ROM カセット・V9938 / TMS9918A 互換描画)</p>
-      </div>
-      <div class="screen-preview">
         <img src="../img/screens/MSX_Bullrush.png" alt="BULLRUSH (MSX MegaROM Preview)">
         <p>実機描画フレームバッファより自動抽出された BULLRUSH (MSX2/turboR C-BIOS 高速描画・MegaROM カートリッジ)</p>
       </div>
@@ -122,61 +114,49 @@
         </thead>
         <tbody>
           <tr>
-            <td><b>1) Lode Runner</b><br>(1984, Sony / Brøderbund)</td>
-            <td>32 KiB フラット ROM<br>(<code>0x4000-0xBFFF</code>)</td>
-            <td>TMS9918A Screen 2 (256×192)<br>PSG AY-3-8910 (3ch 矩形波)</td>
-            <td>アクションパズルの不朽の名作。Z80 アセンブラ直叩きによる正確なクロックタイミング、スプライト走査線制限（4枚/ライン）の忠実な再現。</td>
-          </tr>
-          <tr>
-            <td><b>2) Lode Runner II</b><br>(Japan)</td>
-            <td>32 KiB ROM<br>(<code>0x4000-0xBFFF</code>)</td>
-            <td>TMS9918A / V9938 互換<br>PSG 3ch ステレオ合成</td>
-            <td>続編ステージ集。緻密なキャラクターアニメーションとトラップ判定ルーチンを完全実行。カラーパレットおよびフォントアトラスの動的マッピング。</td>
-          </tr>
-          <tr>
-            <td><b>3) BULLRUSH</b></td>
+            <td><b>1) BULLRUSH</b></td>
             <td>1,024 KiB MegaROM<br>(Kanon / ASCII 16K)</td>
             <td>MSX2 Screen 4 / 5<br>PSG + 拡張音源エミュレーション</td>
             <td>大規模 MegaROM バンク切り替えに対応。高速ラスタースクロールと多重スプライト合成をサポート。C-BIOS MSX2/turboR モードで瞬時起動。</td>
           </tr>
           <tr>
-            <td><b>4) NEON RAVENANT</b><br>(Kanon, Geo3D-256 v0.2.0)</td>
+            <td><b>2) NEON RAVENANT</b><br>(Kanon, Geo3D-256 v0.2.0)</td>
             <td>4,096 KiB MegaROM<br>(ASCII 8K / 16K バンキング)</td>
             <td>V9938 Screen 7 / 8<br>Geo3D リアルタイムポリゴンエンジン</td>
             <td>256KB Geo3D 3次元ワイヤーフレーム/ポリゴンジオメトリ演算エンジン内蔵。サイバーパンク空間を高速 3D レンダリングする次世代 MSX デモ。</td>
           </tr>
           <tr>
-            <td><b>5) NIGHT RAVEN GEO3D</b></td>
+            <td><b>3) NIGHT RAVEN GEO3D</b></td>
             <td>1,024 KiB MegaROM<br>(Kanon, ASCII バンク切替)</td>
             <td>V9938 パレット最適化<br>リアルタイム 3D フライトシミュレーション</td>
             <td>高速マトリクス幾何学変換と陰面消去パイプライン。夜間フライトコックピット計器と立体地形ポリゴンのリアルタイム描画。</td>
           </tr>
           <tr>
-            <td><b>6) XRacing</b><br>(v1.0.4)</td>
+            <td><b>4) XRacing</b><br>(v1.0.4)</td>
             <td>48 KiB、先頭から連続<br>(<code>AB</code> は <code>0x4000</code>)</td>
             <td>MSX1 / TMS9918A<br>PSG</td>
             <td>48 KiB の素のイメージを <code>0x0000</code> から載せる。チェッカーの上にロゴが出る。</td>
           </tr>
           <tr>
-            <td><b>7) Bad Apple</b><br>(MDPC, ASCII16)</td>
+            <td><b>5) Bad Apple</b><br>(MDPC, ASCII16)</td>
             <td>2048 KiB ASCII16<br>(ヘッダは <code>0x4000</code>)</td>
             <td>MSX2+ / V9958<br>PSG + YM2413</td>
             <td>ファイル名が MSX2+ C-BIOS を選ぶ。内蔵 MSX-MUSIC。画面はりんごを持つシルエット。</td>
           </tr>
           <tr>
-            <td><b>8) Dynamite Go! Go!</b><br>(Rutubo Gameworks, 2021)</td>
+            <td><b>6) Dynamite Go! Go!</b><br>(Rutubo Gameworks, 2021)</td>
             <td>32 KiB<br>(ヘッダは <code>0x4000</code>)</td>
             <td>MSX2 JP / V9938<br>PSG</td>
             <td>サイズだけなら MSX1 になる。ファイル名の Dynamite が MSX2 JP を選ぶ。タイトルは DYNAMITE GO! GO!。</td>
           </tr>
           <tr>
-            <td><b>9) YAZZIER</b></td>
+            <td><b>7) YAZZIER</b></td>
             <td>32 KiB<br>(ヘッダは <code>0x4000</code>)</td>
             <td>MSX1 / TMS9918A<br>PSG</td>
             <td>虹とレンガのタイトルカード。</td>
           </tr>
           <tr>
-            <td><b>10) c0man</b></td>
+            <td><b>8) c0man</b></td>
             <td>16 KiB<br>(ヘッダは <code>0x4000</code>)</td>
             <td>MSX1 / TMS9918A<br>PSG</td>
             <td>緑のハイスコア。PRESS SPACE TO START。</td>

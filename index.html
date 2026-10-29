@@ -1182,6 +1182,43 @@
             font-weight: 500;
         }
 
+        .footer-bottom {
+            text-align: center;
+            margin-top: 4.5rem;
+            padding-top: 3.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 0.84rem;
+            color: var(--ink-3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.6rem;
+        }
+
+        .footer-legal {
+            max-width: 920px;
+            margin: 0 auto;
+            line-height: 1.8;
+            font-size: 0.77rem;
+            color: #78838d;
+            text-align: center;
+        }
+
+        .footer-legal b {
+            color: #b8c0c8;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+        }
+
+        .footer-legal a {
+            color: #98a1a9;
+            text-decoration: underline;
+        }
+
+        .footer-legal a:hover {
+            color: var(--tron-teal);
+        }
+
         /* ── Scroll reveal ────────────────────────────────────────────────── */
         html.js .reveal {
             opacity: 0;
@@ -2559,6 +2596,22 @@ ps2_bench.sh  →  guest clock  |  wall clock</pre>
                     <li><a href="doc/pdf/btron-tip.pdf" target="_blank">2026 BTRON Japanese Input</a></li>
                     <li><a href="doc/pdf/btron-verimath.pdf" target="_blank">2026 BTRON Verification Brief</a></li>
                 </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <a href="sakazaki.svg" title="Sakazaki Clan Kamon — 二蓋笠 (Nigai-gasa)" style="display: inline-block; text-decoration: none; margin-bottom: 0.2rem;">
+                <img src="sakazaki.svg" alt="Sakazaki Order Logo" style="width: 108px; height: auto; display: block; opacity: 0.88; transition: opacity 0.25s ease, transform 0.25s ease;">
+            </a>
+            <div class="footer-legal">
+                <p style="margin: 0 0 0.85rem; font-weight: 500; letter-spacing: 0.04em; color: #b8c0c8; font-size: 0.81rem;">
+                    &copy; 2026 Cryptographics Telesystems, LLC. Ukraine. All rights reserved.
+                </p>
+                <p style="margin: 0 0 0.9rem; line-height: 1.75;">
+                    <b>TRADEMARK &amp; STATUTORY COMPLIANCE DISCLOSURE:</b> TRON, BTRON, ITRON, T-Kernel, and T-Engine are registered trademarks or trademarks of TRON Forum and Professor Ken Sakamura. Cho-Kanji (超漢字), B-right/V, and PMC are registered trademarks of Personal Media Corporation. SONY&reg;, PlayStation&reg;, PS2&reg;, Emotion Engine&reg; (EE), Graphics Synthesizer&reg; (GS), and DualShock&reg; are registered trademarks or trademarks of Sony Group Corporation / Sony Interactive Entertainment Inc. MSX&trade;, MSX2&reg;, MSX2+&reg;, and MSX turbo R&reg; are registered trademarks of MSX Licensing Corporation and ASCII Corporation. Microsoft&reg;, MS-DOS&reg;, and Windows&reg; are registered trademarks of Microsoft Corporation. Quake&reg; is a registered trademark of id Software LLC / ZeniMax Media Inc. / Microsoft Corporation. PC-9801&reg; and PC-9821&reg; are registered trademarks of NEC Corporation. Nintendo&reg; and Nintendo 64&reg; (N64) are registered trademarks of Nintendo Co., Ltd. Apple&reg;, Macintosh&reg;, and Mac OS&reg; are registered trademarks of Apple Inc. Raspberry Pi&reg; is a trademark of Raspberry Pi Ltd. Broadcom&reg; is a trademark of Broadcom Inc. ARM&reg; and Cortex&reg; are registered trademarks of Arm Limited. Intel&reg; and Pentium&reg; are registered trademarks of Intel Corporation. Adobe&reg; and PostScript&reg; are registered trademarks of Adobe Systems Incorporated. Google&reg; and Mozc&trade; are trademarks of Google LLC. Erlang / OTP is a trademark of Telefonaktiebolaget LM Ericsson. All other manufacturer designations, silicon architectures, and software titles cited within this repository are the property of their respective trademark holders and are referenced strictly under statutory fair use doctrine for non-commercial historical preservation, register-level hardware documentation, and cleanroom interoperability engineering. B-System implementation contains no proprietary vendor microcode, firmware ROMs, or copyrighted assets.
+                </p>
+                <p style="margin: 0; line-height: 1.75; color: #69747e; font-size: 0.74rem;">
+                    btron.pro &nbsp;·&nbsp; High-Assurance VirtIO Hypervisor &amp; BTRON 3.20 Architecture &nbsp;·&nbsp; Under ISC / DHARMA License &nbsp;·&nbsp; Conforming to NASA/JPL Power of Ten Rules
+                </p>
             </div>
         </div>
     </footer>

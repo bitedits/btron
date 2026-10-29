@@ -1,0 +1,194 @@
+MSX.txt — B-MSX Specification: Machine Architecture, Multi-CPU Execution, Memory Maps, VDP Ports & Hardware Subsystems
+================================================================================================================================
+
+B-System / BTRON 3.20
+MSX, MSX2, MSX2+, MSX turbo R & Hitachi HC-90/95 Hardware Emulation Layer (tronMSX)
+Target: Native BTRON Microkernel & Workstation Workbench (x86_64, AArch64, Sakamura T-Kernel, POSIX)
+Status: Complete Specification & Operational Reference
+Author: Cleanroom Working Group (Namdak Tonpa / Maxim Sokhatsky)
+Related: b-media/msx.html, b-system/apps/MSX.html, doc/txt/MSX-SOUND.txt,
+         src/emulators/msx/hd64180.h, src/emulators/msx/hd64180.c, src/emulators/msx/tronmsx.c,
+         src/emulators/msx/slots.c, src/emulators/msx/bios.c, verify/tests/test_hd64180.c
+
+
+0. Architectural Principles & Philosophy
+----------------------------------------
+
+0.1 Core Thesis
+
+The B-MSX emulator (and its embedded core `tronMSX`) provides a deterministic,
+cycle-accurate emulation environment for the MSX standard family directly
+integrated into the B-System BTRON 3.20 workbench.
+
+Key architectural invariants:
+  1. Pure C99 Implementation: Zero external C++ dependencies, zero host GUI
+     framework baggage. Adheres strictly to NASA JPL Power-of-10 safety rules.
+  2. Zero Post-Boot Dynamic Allocations: Static bounds on all buffers, rings,
+     and machine state. No heap churn during emulation frames.
+  3. Zero Quality Degradation: Multi-CPU architecture guarantees that support
+     for newer or extended models (such as the Hitachi HD64180 or ASCII R800)
+     falls through seamlessly to the standard Z80 core, leaving existing MSX,
+     MSX2, and MSX2+ timing, cycle counts, and behaviors 100% untouched.
+  4. First-Class Real-Body Integration: MSX software packages are represented
+     as first-class B-System real-bodies (BMSX records), directly launchable
+     from the BTRON Application Menu (A) or file manager.
+
+
+1. Machine Profiles & Model Taxonomy
+------------------------------------
+
+B-MSX identifies machines using 16-bit identifiers defined in `msx_body.h`:
+
+  ID   Preset Name                      Hardware Profile
+  ---  -------------------------------  -------------------------------------------------------------
+  1u   BMSX_MACHINE_MSX                 MSX1 (Z80A @ 3.58 MHz, TMS9918A VDP, 16K-64K RAM, PSG)
+  2u   BMSX_MACHINE_MSX2_CBIOS          MSX2 (Z80A @ 3.58 MHz, V9938 VDP, 64K+ RAM, Sub-ROM)
+  4u   BMSX_MACHINE_MSX2_CBIOS_BR       MSX2 Brazil Region
+  5u   BMSX_MACHINE_MSX2_CBIOS_EU       MSX2 Europe Region
+  6u   BMSX_MACHINE_MSX2_CBIOS_JP       MSX2 Japan Region (Kanji ROM Level 1)
+  7u   BMSX_MACHINE_MSX2_CBIOS_FDD      MSX2 with 720KB Floppy Disk Drive
+  8u   BMSX_MACHINE_MSX2_CBIOS_FDD_BR   MSX2 FDD Brazil Region
+  9u   BMSX_MACHINE_MSX2_CBIOS_FDD_EU   MSX2 FDD Europe Region
+  10u  BMSX_MACHINE_MSX2_CBIOS_FDD_JP   MSX2 FDD Japan Region (Kanji ROM + FDD)
+  3u   BMSX_MACHINE_MSX2P_CBIOS         MSX2+ (Z80A @ 3.58 MHz, V9958 VDP, MSX-MUSIC OPLL)
+  11u  BMSX_MACHINE_MSX2P_CBIOS_BR      MSX2+ Brazil Region
+  12u  BMSX_MACHINE_MSX2P_CBIOS_EU      MSX2+ Europe Region
+  13u  BMSX_MACHINE_MSX2P_CBIOS_JP      MSX2+ Japan Region (Kanji ROM Level 1/2)
+  14u  BMSX_MACHINE_MSX2P_CBIOS_FDD     MSX2+ with 720KB Floppy Disk Drive
+  15u  BMSX_MACHINE_MSX2P_CBIOS_FDD_BR  MSX2+ FDD Brazil Region
+  16u  BMSX_MACHINE_MSX2P_CBIOS_FDD_EU  MSX2+ FDD Europe Region
+  17u  BMSX_MACHINE_MSX2P_CBIOS_FDD_JP  MSX2+ FDD Japan Region
+  18u  BMSX_MACHINE_MSXTR_CBIOS         MSX turbo R (ASCII R800 + Z80A, V9958, 512K RAM, PCM)
+  19u  BMSX_MACHINE_MSXTR_CBIOS_FDD     MSX turbo R with 720KB Floppy Disk Drive
+  20u  BMSX_MACHINE_HC90_CBIOS          Hitachi HC-90 (HD64180 @ 6.144 MHz, V9938, Kanji Level 1)
+  21u  BMSX_MACHINE_HC95_CBIOS          Hitachi HC-95 (HD64180 @ 6.144 MHz, V9938, Kanji Level 1/2)
+  22u  BMSX_MACHINE_HC95_CBIOS_FDD      Hitachi HC-95 with Dual 720KB FDDs (HD64180 @ 6.144 MHz)
+
+1.1 Firmware Resolution & Fallback Law:
+  - C-BIOS images are resolved from explicit configuration, `/SYS/cbios`, or vendor fallback trees.
+  - HC-90 / HC-95 models map `cbios_main_msx2_jp.rom` with fallback to `cbios_main_msx2.rom`.
+  - `machine_has_kanji` is asserted for Japanese MSX2, MSX2+, turbo R, and Hitachi HC-90/HC-95.
+  - `machine_has_fdd` is asserted for HC-95 FDD, loading `cbios_disk.rom` / `nextor-tc8566af.rom`.
+
+
+2. Multi-CPU Architecture
+-------------------------
+
+The CPU subsystem operates via three coordinated cores sharing the unified `z80` register context:
+
+2.1 Zilog Z80A Core (`z80.c` / `z80.h`):
+  - Standard clock: 3.579545 MHz (`MSX_XTAL / 3`).
+  - Instruction-cycle boundary model passing ZEXALL tests AV-0.
+  - Interrupt handling: IM 0, IM 1 (RST 38H), and IM 2 (VDP vector `(I << 8) | 0xFF`).
+  - Edge-triggered NMI (1.34 ms periodic BIOS pulse).
+  - Accurate `DI`/`EI` single-instruction delay semantics.
+
+2.2 ASCII R800 Core (`r800.c` / `r800.h`):
+  - Turbo R processor executing at 7.159090 MHz bus clock (28.6 MHz CPU clock).
+  - Each bus cycle corresponds to 2 CPU cycles (`bus_t = (delta + 1) >> 1`).
+  - Intercepts `0xED` prefixed 16-bit multiply instructions:
+    * `MULUB A, r` (14 T): Unsigned 8-bit multiply stored in HL (`HL = A * r`).
+    * `MULUW HL, rr` (36 T): Unsigned 16-bit multiply stored in DE:HL (`DE:HL = HL * rr`).
+  - Non-multiply instructions fall through directly to `z80_step(cpu)`.
+
+2.3 Hitachi HD64180 Core (`hd64180.c` / `hd64180.h`):
+  - High-performance CMOS microprocessor utilized in the Hitachi HC-90 and HC-95 workstations.
+  - CPU Clock: 6.144000 MHz.
+  - Fully backward compatible with Z80 opcodes: non-extended instructions execute via `z80_step`
+    with zero overhead, ensuring 100% preservation of standard MSX behavior.
+  - Extended `0xED` opcodes implemented:
+    * `MLT rr` (17 T): 8-bit unsigned integer multiplication. Flags remain unaffected.
+      - `ED 4C`: `MLT BC` -> `BC = B * C`
+      - `ED 5C`: `MLT DE` -> `DE = D * E`
+      - `ED 6C`: `MLT HL` -> `HL = H * L`
+      - `ED 7C`: `MLT SP` -> `SP = SP_H * SP_L`
+    * `IN0 r, (m)` (12 T): Reads on-chip I/O port `m` (or external bus if `m` is outside internal base).
+      - `ED 00/08/10/18/20/28/38 m`: Destination B, C, D, E, H, L, A.
+      - `ED 30 m`: Tests on-chip input without register modification.
+      - Flags affected: S (bit 7), Z (result == 0), H=0, P/V (parity), N=0. Carry unchanged.
+    * `OUT0 (m), r` (13 T): Outputs register `r` to on-chip I/O port `m`. Flags unaffected.
+      - `ED 01/09/11/19/21/29/39 m`: Source B, C, D, E, H, L, A.
+    * `TST r` (7 T): Non-destructive logical AND between `A` and register `r`.
+      - `ED 04/0C/14/1C/24/2C/3C`: Target B, C, D, E, H, L, A.
+      - Flags affected: S, Z, H=1, P/V=parity, N=0, C=0.
+    * `TST (HL)` (13 T): `ED 34` -> Non-destructive AND between `A` and `(HL)`. Same flags.
+    * `TST imm` (9 T): `ED 64 m` -> Non-destructive AND between `A` and immediate `m`.
+    * `TSTIO imm` (12 T): `ED 74 m` -> Non-destructive AND between on-chip port `C` and immediate `m`.
+    * `SLP` (8 T): `ED 76` -> Halts CPU in sleep state until an interrupt occurs (`cpu->halted = 1`).
+    * Block I/O:
+      - `OOTIM` (`ED 83`, 15 T) / `OOTIMR` (`ED 93`, 14-15 T): `OUT0 (C), (HL); HL++; B--`.
+      - `OTDM` (`ED 8B`, 15 T) / `OTDMR` (`ED 9B`, 14-15 T): `OUT0 (C), (HL); HL--; B--`.
+  - On-Chip Programmable Reload Timers (PRT Channels 0 and 1):
+    * Clocked at `phi / 20` (every 20 CPU cycles via `hd64180_advance`).
+    * Registers: Timer 0 Counter `0x0C–0x0D`, Reload `0x0E–0x0F`; Timer 1 Counter `0x14–0x15`, Reload `0x16–0x17`.
+    * Control Register (`TCR` at `0x10`): Bit 0/1 (`TIE0/1`) enables timer interrupt; Bit 4/5 (`TIF0/1`)
+      flags timer underflow and reload.
+
+
+3. Video Display Processor (VDP) Subsystem
+------------------------------------------
+
+B-MSX emulates the Texas Instruments TMS9918A (MSX1) and Yamaha V9938 / V9958 / V9968 (MSX2/2+/Workstations):
+
+3.1 Dual I/O Port Mapping:
+  Standard MSX assigns the VDP ports to `0x98–0x9B`. On MSX2 workstations (including the Hitachi
+  HC-90/HC-95, Sony HB-G900, and Yamaha AV systems), the video expansion bus mirrors these registers
+  onto `0x88–0x8B`. B-MSX decodes both port families identically:
+
+    Primary   Mirror   Function
+    -------   ------   ------------------------------------------------------------
+    0x98      0x88     VRAM Data Read / Write (auto-incrementing address)
+    0x99      0x89     VDP Status Read (S0-S9) / Address & Register Write Setup
+    0x9A      0x8A     VDP Palette Data Write (2 successive bytes per palette entry)
+    0x9B      0x8B     Indirect Register Write (writes data to register in R#16)
+
+3.2 Display Modes & Acceleration:
+  - Screen Modes: SCREEN 0 (Text 40/80), SCREEN 1 (Text 32), SCREEN 2 (Graphics 1),
+    SCREEN 3 (Multicolor), SCREEN 4 (Graphics 2), SCREEN 5 (Bitmap 256x212 16-color),
+    SCREEN 6 (Bitmap 512x212 4-color), SCREEN 7 (Bitmap 512x212 16-color), SCREEN 8 (Bitmap 256x212 256-color).
+  - Hardware Acceleration: V9938 command engine fully modeled (HMMV, LMMV, HMMC, LMMC, HMMM, YMMM, LINE, SRCH).
+  - Geo3D Coprocessor: Maps 3D math and hardware polygon rasterization hooks to ports `0x8D, 0x9D, 0x8F, 0x9F`.
+
+
+4. Slot System & Memory Architecture
+------------------------------------
+
+MSX defines a four-slot architecture addressed in 16 KiB pages:
+  - Page 0: `0x0000–0x3FFF` (Main BIOS / C-BIOS ROM)
+  - Page 1: `0x4000–0x7FFF` (Cartridge ROM Block 0 / Sub-ROM)
+  - Page 2: `0x8000–0xBFFF` (Cartridge ROM Block 1 / Main RAM)
+  - Page 3: `0xC000–0xFFFF` (Main RAM / Subslot Registers)
+
+4.1 Slot Registers:
+  - Primary Slot Select (`PPI Port 0xA8`): Bits 0-1 (Page 0), 2-3 (Page 1), 4-5 (Page 2), 6-7 (Page 3).
+  - Secondary Slot Select (`Memory 0xFFFF`): Four subslots per primary slot.
+  - Memory Mapper: 512 KiB standard mapper via I/O ports `0xFC–0xFF`.
+  - MegaROM Mappers: Plain 32K, ASCII 8K, ASCII 16K, Konami, Konami SCC, and linear images up to 4 MiB.
+
+
+5. Sound Chip Layer
+-------------------
+
+Multi-chip concurrent synthesis mixed to 44.1 kHz 16-bit signed stereo PCM:
+  - AY-3-8910 / YM2149 PSG: 3 square-wave channels + 1 white noise generator at ports `0xA0–0xA3`.
+  - Konami SCC / SCC-I: 5 wavetable channels (32-byte cyclic wave memory per channel).
+  - Yamaha YM2413 (OPLL / MSX-MUSIC): 9 FM channels or 6 FM melody + 5 rhythm instruments at `0x7C–0x7D`.
+  - Yamaha Y8950 (MSX-AUDIO): 9 FM channels with rhythm synthesis at `0xC0–0xC1`.
+  - MSX turbo R PCM: 8-bit DAC/ADC clocked through `t9769c_advance` at port `0xA4–0xA5`.
+  - Hitachi HC-90 / HC-95 Audio: Standard unipolar PSG mixed cleanly at 60 Hz frame intervals.
+
+
+6. Verification & Automated Test Harnesses
+------------------------------------------
+
+B-MSX includes dedicated automated regression test suites:
+  1. `make test-hd64180`: Validates HD64180 instruction execution (`MLT`, `IN0`, `OUT0`, `TST`, `TSTIO`, `SLP`,
+     block I/O, PRT reload countdown, and Z80 backward compatibility pass-through).
+  2. `make test-msx-boot`: Headless boot test verifying C-BIOS frame execution and VDP ink output.
+  3. `make test-msx-audio`: Headless synthesis test validating sample generation and saturation.
+  4. `make test-msx-dsk`: Validates floppy disk sector reading and FAT12 media parsing.
+  5. `make test-zexall`: Runs the standard ZEXALL instruction exerciser against the Z80 core.
+
+================================================================================================================================
+End of MSX.txt Specification
+

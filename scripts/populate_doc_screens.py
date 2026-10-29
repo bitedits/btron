@@ -287,16 +287,6 @@ APPS_MAP = {
     ],
     "MSX.html": [
         {
-            "screen": "../img/screens/MSX_LodeRunner.png",
-            "caption": "実機描画フレームバッファより自動抽出された Lode Runner (TMS9918A VDP / VRAM 16KB / PSG 音源・アセンブラ直叩き)",
-            "alt": "Lode Runner (MSX Game Cartridge Preview)"
-        },
-        {
-            "screen": "../img/screens/MSX_LodeRunner2.png",
-            "caption": "実機描画フレームバッファより自動抽出された Lode Runner II (Japan) (32KB ROM カセット・V9938 / TMS9918A 互換描画)",
-            "alt": "Lode Runner II (MSX Game Cartridge Preview)"
-        },
-        {
             "screen": "../img/screens/MSX_Bullrush.png",
             "caption": "実機描画フレームバッファより自動抽出された BULLRUSH (MSX2/turboR C-BIOS 高速描画・MegaROM カートリッジ)",
             "alt": "BULLRUSH (MSX MegaROM Preview)"

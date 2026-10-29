@@ -154,8 +154,7 @@ static uint8_t cb_in(z80 *z, uint8_t p)
                    g_frame, p, v, (unsigned)(g_pc_latch & 0x0Fu), cpu.pc);
         }
     }
-    /* Watch every VDP status read: Lode Runner runs with IE0=0 and syncs by
-     * polling bit7 (FG/vblank) of the status register. */
+    /* Watch every VDP status read: Polling bit7 (FG/vblank) of the status register. */
     if (p == 0x89u || p == 0x99u) {
         static int st_budget = 400;
         if (st_budget > 0 && g_frame >= 138 && g_frame <= 220) {
@@ -424,7 +423,7 @@ static const char *region_name(int r)
 
 int main(int argc, char **argv)
 {
-    const char *rom_path = (argc > 1) ? argv[1] : "assets/msx/Lode Runner (1984)(Sony)[a].rom";
+    const char *rom_path = (argc > 1) ? argv[1] : "assets/msx/c0man.rom";
     long frames = (argc > 2) ? strtol(argv[2], NULL, 10) : 300;
     uint8_t *rom; uint32_t rom_len = 0;
     long f;

@@ -73,6 +73,7 @@ extern void msx_app_fast_forward(int frames);
 extern WND* open_kagee_window(void);
 extern H    tip_get_caret_x(void);
 extern H    tip_get_caret_y(void);
+WND* open_review_window(void) { return NULL; }
 
 /* Forward declarations for GTerm internals */
 typedef struct GTermState GTermState;
@@ -438,8 +439,6 @@ static void capture_msx_windows(GDEV *dev) {
         const char *out_path;
         int frames;
     } s_msx_games[] = {
-        { "Lode Runner (1984)(Sony)[a].rom", "/tmp/btron_raw_screens/MSX_LodeRunner.raw", 500 },
-        { "Lode Runner II (Japan).rom", "/tmp/btron_raw_screens/MSX_LodeRunner2.raw", 550 },
         { "BULLRUSH.ROM", "/tmp/btron_raw_screens/MSX_Bullrush.raw", 450 },
         { "NEON_REVENANT-HC-Geo3D-256-v0.2.0.rom", "/tmp/btron_raw_screens/MSX_NeonRevenant.raw", 450 },
         { "NIGHT_RAVEN_GEO3D.ROM", "/tmp/btron_raw_screens/MSX_NightRaven.raw", 450 },

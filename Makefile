@@ -758,7 +758,7 @@ album_encode: src/tools/album_encode.c src/demo/lilcu64_score.c \
 # -MMD lines above use.  It used to be an awk pass over the manifest here, which was a second
 # grammar for one file and could not read the first one: it took the last field of a line as the
 # payload (so every entry that names a parent drawer, like a cartridge in /SYS/msx, dropped out)
-# and it stopped at the first space (so `Lode Runner (1984)(Sony)[a].rom` was never a file make
+# and it stopped at the first space (so `Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM` was never a file make
 # knew about).  One reader of a manifest is the tool that builds from it.
 btron_sys.vol: mkbtronfs src/tools/manifest.txt
 	./mkbtronfs src/tools/manifest.txt -o btron_sys.vol --deps btron_sys.vol.d
@@ -3257,9 +3257,9 @@ TEST_MSX_TRACE_BIN  = ./.build/msx_trace
 
 msx-trace: $(TEST_MSX_TRACE_BIN)
 	@echo "=========================================================="
-	@echo " tronMSX boot trace: $(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)"
+	@echo " tronMSX boot trace: $(or $(ROM),assets/msx/c0man.rom)"
 	@echo "=========================================================="
-	@./$(TEST_MSX_TRACE_BIN) "$(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)" $(or $(FRAMES),300)
+	@./$(TEST_MSX_TRACE_BIN) "$(or $(ROM),assets/msx/c0man.rom)" $(or $(FRAMES),300)
 
 $(TEST_MSX_TRACE_BIN): $(TEST_MSX_TRACE_OBJS)
 	@mkdir -p ./.build
@@ -3270,7 +3270,7 @@ TEST_MSX_BOOT_OBJS  = $(TEST_MSX_BOOT_SRCS:.c=.test.o)
 TEST_MSX_BOOT_BIN   = ./.build/test_msx_boot
 
 msx-boot: $(TEST_MSX_BOOT_BIN)
-	@./$(TEST_MSX_BOOT_BIN) "$(or $(ROM),assets/msx/Lode Runner (1984)(Sony)[a].rom)" $(or $(FRAMES),300) $(or $(DUMP),/tmp/msx_boot) "$(or $(MACH),)"
+	@./$(TEST_MSX_BOOT_BIN) "$(or $(ROM),assets/msx/c0man.rom)" $(or $(FRAMES),300) $(or $(DUMP),/tmp/msx_boot) "$(or $(MACH),)"
 
 TEST_MSX_DSK_SRCS  = verify/tests/test_msx_dsk.c $(MSX_SRCS)
 TEST_MSX_DSK_OBJS  = $(TEST_MSX_DSK_SRCS:.c=.test.o)

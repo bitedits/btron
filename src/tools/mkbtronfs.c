@@ -11,7 +11,7 @@
  *   FILE  "name"   LINK  [target_fid|-]          [parent_container]
  *
  * A token is either a bare word or a "quoted string" that may hold spaces; the quoted form is
- * what lets a file named `Lode Runner (1984)(Sony)[a].rom` be described at all.
+ * what lets a file named `Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM` be described at all.
  *
  * TAD, MD, TXT, PNG and IMG records are typed RT_TADDATA because a reader is meant to decode
  * them; BIN is typed RT_DATABOX because its bytes are opaque to the filesystem -- a cartridge
@@ -71,7 +71,7 @@ static char g_vol_name[40] = DEFAULT_VOLNAME;
  * documents.  So there is one reader here and no second loop over the same lines anywhere.
  *
  * A token is a bare word up to whitespace, or a "double-quoted" run that may contain spaces --
- * which is what makes a cartridge named `Lode Runner (1984)(Sony)[a].rom` describable.  Whitespace
+ * which is what makes a cartridge named `Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM` describable.  Whitespace
  * after the token is consumed as the separator.  Returns NULL at end of line; a token longer than
  * `cap` is truncated rather than rejected, as it always was. */
 static char *next_token(char **pp, char *out, size_t cap)

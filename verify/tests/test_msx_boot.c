@@ -69,7 +69,7 @@ extern uint8_t slots_read(uint16_t addr);
 
 int main(int argc, char **argv)
 {
-    const char *rom_path = (argc > 1) ? argv[1] : "assets/msx/Lode Runner (1984)(Sony)[a].rom";
+    const char *rom_path = (argc > 1) ? argv[1] : "assets/msx/c0man.rom";
     long frames = (argc > 2) ? strtol(argv[2], NULL, 10) : 300;
     const char *prefix = (argc > 3) ? argv[3] : "/tmp/msx_boot";
     msx_cfg_t cfg;

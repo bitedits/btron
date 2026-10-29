@@ -8,9 +8,19 @@
 #include "ps_vm.h"
 #include <btron/libc_shim.h>
 #include <btron/dp.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+/* Helper to format and write to output file stream, returning bytes written */
+static int sps_fprintf(FILE *out, const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        fwrite(buf, 1, (size_t)n, out);
+    }
+    return n;
+}
 
 /* Global state during single-threaded compilation */
 static SPSDocument s_sps_doc;
@@ -170,19 +180,19 @@ static BOOL sps_write_pdf_file(const char *pdf_path, const SPSDocument *doc, cha
 
     /* 1. Header */
     long pos = 0;
-    pos += fprintf(out, "%%PDF-1.4\n%%\xE2\xE3\xCF\xD3\n");
+    pos += sps_fprintf(out, "%%PDF-1.4\n%%\xE2\xE3\xCF\xD3\n");
 
     /* 2. Object 1: Catalog */
     offsets[1] = pos;
-    pos += fprintf(out, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pos += sps_fprintf(out, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
     /* 3. Object 2: Pages Root */
     offsets[2] = pos;
-    pos += fprintf(out, "2 0 obj\n<< /Type /Pages /Kids [");
+    pos += sps_fprintf(out, "2 0 obj\n<< /Type /Pages /Kids [");
     for (int p = 0; p < active_pages; p++) {
-        pos += fprintf(out, "%d 0 R ", page_base_obj + p);
+        pos += sps_fprintf(out, "%d 0 R ", page_base_obj + p);
     }
-    pos += fprintf(out, "] /Count %d >>\nendobj\n", active_pages);
+    pos += sps_fprintf(out, "] /Count %d >>\nendobj\n", active_pages);
 
     /* 4. Font Objects (3..7) */
     static const struct {
@@ -198,65 +208,65 @@ static BOOL sps_write_pdf_file(const char *pdf_path, const SPSDocument *doc, cha
 
     for (int f = 0; f < num_fonts; f++) {
         offsets[font_base_obj + f] = pos;
-        pos += fprintf(out, "%d 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /%s >>\nendobj\n",
-                       font_base_obj + f, s_fonts[f].base_font);
+        pos += sps_fprintf(out, "%d 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /%s >>\nendobj\n",
+                           font_base_obj + f, s_fonts[f].base_font);
     }
 
     /* 5. Page Objects */
     for (int p = 0; p < active_pages; p++) {
         offsets[page_base_obj + p] = pos;
         int stream_obj = stream_base_obj + p;
-        pos += fprintf(out,
-                       "%d 0 obj\n"
-                       "<< /Type /Page\n"
-                       "   /Parent 2 0 R\n"
-                       "   /MediaBox [0 0 612 792]\n"
-                       "   /Contents %d 0 R\n"
-                       "   /Resources <<\n"
-                       "      /Font <<\n"
-                       "         /F1 3 0 R\n"
-                       "         /F2 4 0 R\n"
-                       "         /F3 5 0 R\n"
-                       "         /F4 6 0 R\n"
-                       "         /F5 7 0 R\n"
-                       "      >>\n"
-                       "   >>\n"
-                       ">>\n"
-                       "endobj\n",
-                       page_base_obj + p, stream_obj);
+        pos += sps_fprintf(out,
+                           "%d 0 obj\n"
+                           "<< /Type /Page\n"
+                           "   /Parent 2 0 R\n"
+                           "   /MediaBox [0 0 612 792]\n"
+                           "   /Contents %d 0 R\n"
+                           "   /Resources <<\n"
+                           "      /Font <<\n"
+                           "         /F1 3 0 R\n"
+                           "         /F2 4 0 R\n"
+                           "         /F3 5 0 R\n"
+                           "         /F4 6 0 R\n"
+                           "         /F5 7 0 R\n"
+                           "      >>\n"
+                           "   >>\n"
+                           ">>\n"
+                           "endobj\n",
+                           page_base_obj + p, stream_obj);
     }
 
     /* 6. Content Stream Objects */
     for (int p = 0; p < active_pages; p++) {
         offsets[stream_base_obj + p] = pos;
         const SPSPage *page = &doc->pages[p];
-        pos += fprintf(out, "%d 0 obj\n<< /Length %u >>\nstream\n",
-                       stream_base_obj + p, page->stream_len);
+        pos += sps_fprintf(out, "%d 0 obj\n<< /Length %u >>\nstream\n",
+                           stream_base_obj + p, page->stream_len);
         if (page->stream_len > 0) {
             fwrite(page->stream_buf, 1, page->stream_len, out);
             pos += (long)page->stream_len;
         }
-        pos += fprintf(out, "\nendstream\nendobj\n");
+        pos += sps_fprintf(out, "\nendstream\nendobj\n");
     }
 
     /* 7. Cross-Reference Table (xref) */
     long xref_pos = pos;
-    fprintf(out, "xref\n0 %d\n", total_objs + 1);
-    fprintf(out, "0000000000 65535 f \n");
+    sps_fprintf(out, "xref\n0 %d\n", total_objs + 1);
+    sps_fprintf(out, "0000000000 65535 f \n");
     for (int obj = 1; obj <= total_objs; obj++) {
-        fprintf(out, "%010ld 00000 n \n", offsets[obj]);
+        sps_fprintf(out, "%010ld 00000 n \n", offsets[obj]);
     }
 
     /* 8. Trailer */
-    fprintf(out,
-            "trailer\n"
-            "<< /Size %d\n"
-            "   /Root 1 0 R\n"
-            ">>\n"
-            "startxref\n"
-            "%ld\n"
-            "%%%%EOF\n",
-            total_objs + 1, xref_pos);
+    sps_fprintf(out,
+                "trailer\n"
+                "<< /Size %d\n"
+                "   /Root 1 0 R\n"
+                ">>\n"
+                "startxref\n"
+                "%ld\n"
+                "%%%%EOF\n",
+                total_objs + 1, xref_pos);
 
     fclose(out);
     return TRUE;

@@ -6,15 +6,85 @@
 
 #include "ps_vm.h"
 #include <btron/libc_shim.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
+#if BTRON_HOSTED
+#include <sys/stat.h>
+#endif
 
 /* Forward declarations */
 static void ps_eval_value(PSContext *ctx, PSValue val);
 static void ps_exec_proc(PSContext *ctx, PSValue proc);
 static BOOL ps_tokenize_and_eval(PSContext *ctx, const char *code, size_t len);
+
+/* Helper to parse integer or real number without external strtol/strtof */
+static BOOL ps_parse_number(const char *tok, PSValue *out_val) {
+    if (!tok || !tok[0]) return FALSE;
+    const char *p = tok;
+    int sign = 1;
+    if (*p == '-') { sign = -1; p++; }
+    else if (*p == '+') { p++; }
+    if (!*p) return FALSE;
+
+    BOOL is_float = FALSE;
+    for (const char *c = p; *c; c++) {
+        if (*c == '.' || *c == 'e' || *c == 'E') {
+            is_float = TRUE;
+            break;
+        }
+    }
+
+    if (!is_float) {
+        long val = 0;
+        const char *start = p;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10 + (*p - '0');
+            p++;
+        }
+        if (p > start && *p == '\0') {
+            *out_val = ps_val_int((W)(val * sign));
+            return TRUE;
+        }
+        return FALSE;
+    } else {
+        double val = 0.0;
+        const char *digits = p;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10.0 + (*p - '0');
+            p++;
+        }
+        if (*p == '.') {
+            p++;
+            double frac = 0.1;
+            while (*p >= '0' && *p <= '9') {
+                val += (*p - '0') * frac;
+                frac *= 0.1;
+                p++;
+            }
+        }
+        if (p == digits) return FALSE; /* No digits before or after dot */
+        if (*p == 'e' || *p == 'E') {
+            p++;
+            int exp_sign = 1;
+            if (*p == '-') { exp_sign = -1; p++; }
+            else if (*p == '+') { p++; }
+            int exp = 0;
+            const char *exp_start = p;
+            while (*p >= '0' && *p <= '9') {
+                exp = exp * 10 + (*p - '0');
+                p++;
+            }
+            if (p == exp_start) return FALSE;
+            double factor = 1.0;
+            for (int i = 0; i < exp; i++) factor *= 10.0;
+            if (exp_sign < 0) val /= factor;
+            else val *= factor;
+        }
+        if (*p == '\0') {
+            *out_val = ps_val_real((float)(val * sign));
+            return TRUE;
+        }
+        return FALSE;
+    }
+}
 
 /* ── Value Constructors ─────────────────────────────────────────── */
 
@@ -949,15 +1019,7 @@ static BOOL ps_parse_token(PSContext *ctx, const char **p_in, const char *end, P
         *p_in = p;
 
         /* Check for Number */
-        char *endptr = NULL;
-        long ival = strtol(tok, &endptr, 10);
-        if (endptr && *endptr == '\0') {
-            *out_val = ps_val_int((W)ival);
-            return TRUE;
-        }
-        float rval = strtof(tok, &endptr);
-        if (endptr && *endptr == '\0') {
-            *out_val = ps_val_real(rval);
+        if (ps_parse_number(tok, out_val)) {
             return TRUE;
         }
 
@@ -1000,6 +1062,14 @@ BOOL ps_run_token_stream(PSContext *ctx, const char *script, size_t len) {
 
 BOOL ps_run_file(PSContext *ctx, const char *filepath) {
     if (!ctx || !filepath) return FALSE;
+
+    struct stat st;
+    if (stat(filepath, &st) != 0 || st.st_size <= 0 || st.st_size > 10 * 1024 * 1024) {
+        ctx->error_flag = TRUE;
+        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "invalid file or size: %s", filepath);
+        return FALSE;
+    }
+
     FILE *f = fopen(filepath, "rb");
     if (!f) {
         ctx->error_flag = TRUE;
@@ -1007,17 +1077,7 @@ BOOL ps_run_file(PSContext *ctx, const char *filepath) {
         return FALSE;
     }
 
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (sz <= 0 || sz > 10 * 1024 * 1024) {
-        fclose(f);
-        ctx->error_flag = TRUE;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "invalid file size: %ld", sz);
-        return FALSE;
-    }
-
+    long sz = (long)st.st_size;
     char *buf = (char *)malloc(sz + 1);
     if (!buf) {
         fclose(f);

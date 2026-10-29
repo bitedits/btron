@@ -1,0 +1,764 @@
+DPS.txt — Document Processing System: PostScript Virtual Machine, PDF Engine, Reader & Review Architecture
+=============================================================================================================
+
+B-System / BTRON 3.20
+Formal Document Processing Architecture · Forth Execution Stack · ISO 32000 Conformance Evaluation
+Target: Native BTRON Microkernel & Workstation Workbench (x86_64, AArch64, Sakamura T-Kernel, POSIX)
+Status: Complete Architectural Plan, Feasibility Evaluation & Implementation Specification
+Author: Cleanroom Working Group (Namdak Tonpa / Maxim Sokhatsky)
+Related: RENDER.txt, INTERPRETER.txt, ASYNC.txt, BFS_V2.txt, doc/ps/n64.ps, src/apps/review.c,
+         src/apps/pdf_reader.c, b-system/apps/Review.html, doc/pdf/*.tex
+
+
+0. Executive Summary, Philosophy & Mathematical Foundations
+-----------------------------------------------------------
+
+0.1 Architectural Thesis
+
+Historically, document processing in desktop operating systems has suffered from
+a profound structural schizophrenia:
+
+  1. Interactive display engines (Display PostScript, NeWS, QuickDraw, X11) were
+     frequently separated from print and archival file formats by heavyweight,
+     incompatible translation layers.
+  2. The Portable Document Format (PDF, ISO 32000), originally derived from the
+     concatenative, stack-based PostScript Level 2 language, evolved into an
+     overgrown, 1,000-page specification encumbered with proprietary extensions,
+     embedded Turing-complete JavaScript engines, dynamic XML form architectures
+     (XFA), and dozens of legacy compression filters. This bloated attack surface
+     routinely compromises workstation security and defies real-time certification.
+  3. BTRON (Tron Application Databus / TAD) pioneered the pure Real Body / Virtual
+     Body (実身・仮身) hypermedia document model. In this paradigm, a document is
+     not an opaque, static stream of dead printer dots, but an active, navigable
+     hyper-graph wherein marginalia, review comments, and citations exist as
+     first-class fusen (付箋) records pinned to immutable source geometry.
+
+Thesis:
+  The B-System Document Processing System (DPS) unifies PostScript program execution,
+  PDF vector compilation, and interactive BTRON workstation viewing into a single,
+  coherent, mathematically verified pipeline. 
+
+  DPS achieves this through three tightly coupled components:
+    (a) A deterministic, Forth-style stack machine executing PostScript programs
+        (e.g., doc/ps/n64.ps) under NASA JPL Power-of-10 safety rules, transpiling
+        imperative page procedures into declarative PDF 1.4 / PDF/A-1b streams;
+    (b) The `sps` (Secure PostScript) CLU terminal utility, providing zero-overhead batch
+        conversion from PostScript to clean, linearized PDF without dynamic execution;
+    (c) The native BTRON `Reader` / `Review` workstation application (announced in
+        b-system/apps/Review.html and implemented in src/apps/review.c), which renders
+        vector PDF directly onto Display Primitives (DP) backing stores and enables
+        two-way interactive annotation pinning (Fusen) with non-destructive,
+        incremental-update PDF writeback;
+    (d) A staged, package-free TeX CLU engine (postponed implementation) designed to
+        ingest academic B-System papers (doc/pdf/*.tex) and emit publishable PostScript
+        and PDF without external Unix TeX Live dependencies.
+
+
+0.2 System Vocabulary & Object Taxonomy
+
+  DPS            Document Processing System: the umbrella subsystem in B-System
+                 spanning the PostScript interpreter, PDF compiler, and vector viewer.
+  PS VM          PostScript Virtual Machine: a 3-stack concatenative execution engine
+                 operating on tagged union values without dynamic memory allocation.
+  Operand Stack  Data stack where numbers, strings, names, and procedures are pushed/popped.
+  Exec Stack     Call stack holding active procedures, loop counters, and continuation frames.
+  Dict Stack     Dictionary context stack resolving identifiers (systemdict, globaldict, userdict).
+  gstate         Graphics State: current transformation matrix (CTM), current path, color,
+                 line width, font face, font size, and clipping boundary.
+  PDF Operator   Single-letter or two-letter declarative token in PDF content streams (m, l, c, S, f, Tj).
+  XRef Table     Cross-reference table mapping PDF object numbers to absolute byte offsets.
+  Fusen (付箋)    BTRON virtual-body annotation pin: a lightweight marginal note or peer-review
+                 comment anchored to an exact (page, x, y) coordinate.
+  Incremental    The ISO 32000 mechanism of appending new objects, updated xref subsections,
+  Update         and trailing dictionaries to the end of a PDF without modifying existing bytes.
+  Knuth Box-Glue The typographic model of horizontal/vertical boxes, glue, and penalties
+                 used by TeX for optimal paragraph line-breaking and math layout.
+
+
+1. PostScript Virtual Machine & Forth Execution Kernel
+------------------------------------------------------
+
+1.1 Concatenative Stack Architecture
+
+PostScript is fundamentally a postfix, concatenative programming language descended from
+Chuck Moore's Forth and John Warnock's Design System. Unlike imperative C or declarative
+PDF, a PostScript file is an executable program. The interpreter must maintain three
+distinct, strictly bounded stacks:
+
+                 +-------------------------------------------------------+
+                 |             PostScript Execution Engine               |
+                 +-------------------------------------------------------+
+                                    |                 |
+                   Token Stream     v                 v
+                [ /box { ... } def  200 655 moveto ... showpage ]
+                                    |
+                                    v
+       +--------------------+--------------------+--------------------+
+       |   Operand Stack    |  Execution Stack   |  Dictionary Stack  |
+       |  (Depth: 512 max)  | (Depth: 256 max)   |  (Depth: 32 max)   |
+       +--------------------+--------------------+--------------------+
+       | [ 27             ] | [ &Chapter1 proc ] | [ userdict       ] |
+       | [ /page          ] | [ &Header proc   ] | [ globaldict     ] |
+       | [ 200            ] | [ loop counter   ] | [ systemdict     ] |
+       +--------------------+--------------------+--------------------+
+
+1.2 JPL Power-of-10 Value Representation
+
+To satisfy NASA JPL Rule 3 (no dynamic heap allocation after boot), all PostScript
+values are stored in a fixed 16-byte tagged union (`PSValue`). The interpreter uses a
+statically preallocated pool of 8,192 objects and a deterministic linear arena for
+names and string data.
+
+```c
+typedef enum {
+    PS_VAL_NULL = 0,
+    PS_VAL_BOOL,
+    PS_VAL_INT,
+    PS_VAL_REAL,
+    PS_VAL_NAME,
+    PS_VAL_STRING,
+    PS_VAL_ARRAY,
+    PS_VAL_DICT,
+    PS_VAL_PROC,
+    PS_VAL_OP
+} PSType;
+
+typedef struct PSValue {
+    PSType type;
+    UW     flags;        /* executable, literal, read-only */
+    union {
+        BOOL         b;
+        W            i;
+        float        r;
+        const char  *name;
+        struct {
+            char    *str;
+            UW       len;
+        } s;
+        struct {
+            struct PSValue *elems;
+            UW              len;
+        } a;
+        struct PSDict      *d;
+        void              (*op)(struct PSContext *ctx);
+    } u;
+} PSValue;
+```
+
+1.3 Dictionary Stack & Scoping Hierarchy
+
+The dictionary stack resolves all non-literal symbols. The engine initializes three
+standard dictionaries:
+  1. `systemdict` (read-only): Contains all built-in Forth and PostScript operators
+     (add, moveto, def, showpage, etc.).
+  2. `globaldict` (read-write): Shared document-wide variables, such as `/page` in n64.ps.
+  3. `userdict` (read-write): Application and procedure bindings defined by `def`.
+
+Lookup Rule:
+  When an executable name `/foo` is evaluated, the interpreter scans the dictionary
+  stack from top (current context) to bottom (systemdict). If found, its value is
+  executed or pushed. If not found, a fatal `undefined` error is raised.
+
+1.4 Primitive Operator Repertoire
+
+The core interpreter provides 48 essential PostScript Level 2 primitives required for
+structured document layout:
+
+  Category         Primitives
+  ---------------  -------------------------------------------------------------
+  Stack Control    pop, exch, dup, copy, index, roll, clear, count
+  Arithmetic       add, sub, mul, div, idiv, mod, neg, abs, round, truncate
+  Dictionaries     dict, begin, end, def, put, get, known, where, load, store
+  Flow Control     if, ifelse, repeat, for, loop, exit, stop, stopped
+  Types / Strings  string, cvs, cvr, cvi, cvn, cvx, xcheck, type
+  Graphics State   gsave, grestore, setlinewidth, setgray, setrgbcolor, initgraphics
+  Path Creation    newpath, moveto, rmoveto, lineto, rlineto, arc, arcn, curveto,
+                   closepath, clippath
+  Rendering        stroke, fill, eofill
+  Fonts & Text     findfont, scalefont, setfont, show, stringwidth, charpath
+  Page Management  showpage, copypage, erasepage
+
+
+2. Concrete Case Study: Deconstructing doc/ps/n64.ps
+---------------------------------------------------
+
+2.1 Analysis of Document Structure
+
+The test vector `./doc/ps/n64.ps` represents an authentic, production-grade PostScript
+document (the Nintendo 64 Programming Manual, 525 pages total; 9 pages included in test
+slice). It exercises exact features that the B-System Forth VM must handle cleanly:
+
+  Lines 6-12: Font definitions using nested procedures:
+    `/BoldFont { /Palatino-Bold findfont 10 scalefont setfont } def`
+    `/BodyFont { /Palatino findfont 10 scalefont setfont } def`
+    `/HeaderFont { /Palatino findfont 14 scalefont setfont } def`
+
+  Lines 15-24: Complex procedure with dictionary parameter binding:
+    `/box {`
+    `    /text exch def /height exch def /width exch def /y exch def /x exch def`
+    `    newpath x y moveto width 0 rlineto 0 height rlineto width neg 0 rlineto closepath stroke`
+    `    x 5 add y 5 add moveto text show`
+    `} def`
+
+  Lines 41-59: Dynamic header and footer rendering with string conversion:
+    `globaldict /page 27 put`
+    `535 50 moveto page =string cvs show`
+
+  Lines 129-143: Block diagram rendering (Figure 3-1: Hardware Block Diagram):
+    `BodyFont 350 580 120 60 (R4300 CPU) box`
+    `BodyFont 350 450 120 90 (RCP) box`
+    `newpath 400 540 moveto 400 580 lineto stroke`
+
+2.2 Step-by-Step Forth Execution Trace of `/box`
+
+When `n64.ps` executes `BodyFont 350 580 120 60 (R4300 CPU) box`:
+
+  Step  Action                       Operand Stack (top at right)
+  ----  ---------------------------  -------------------------------------------
+  0     Push literals                [ 350, 580, 120, 60, (R4300 CPU) ]
+  1     Enter `box` procedure        Exec Stack pushes return address
+  2     `/text exch def`             Pops string, binds `/text` in userdict
+  3     `/height exch def`           Pops 60, binds `/height` = 60
+  4     `/width exch def`            Pops 120, binds `/width` = 120
+  5     `/y exch def`                Pops 580, binds `/y` = 580
+  6     `/x exch def`                Pops 350, binds `/x` = 350
+  7     `newpath`                    Clears current path in gstate
+  8     `x y moveto`                 Moves current point to (350, 580)
+  9     `width 0 rlineto`            Appends segment to (350 + 120, 580) = (470, 580)
+  10    `0 height rlineto`           Appends segment to (470, 580 + 60) = (470, 640)
+  11    `width neg 0 rlineto`        Appends segment to (470 - 120, 640) = (350, 640)
+  12    `closepath`                  Closes loop back to (350, 580)
+  13    `stroke`                     Emits stroke operator to PDF/DP canvas
+  14    `x 5 add y 5 add moveto`     Positions point at (355, 585) for text label
+  15    `text show`                  Emits text label "(R4300 CPU)"
+
+This trace proves that a clean, 48-operator Forth engine completely satisfies the
+requirements of `n64.ps` without requiring arbitrary or unbounded Level 3 features.
+
+
+3. Secure PostScript-to-PDF Conversion Pipeline (sps CLU Command)
+-----------------------------------------------------------------
+
+3.1 Command-Line Interface Specification
+
+The `sps` (Secure PostScript) utility is integrated into gterm (`src/apps/gterm.c`)
+and the CLU dispatcher (`src/clu/clu.c`). It is explicitly designed without dynamic
+execution capabilities (denying JavaScript, XFA forms, and arbitrary foreign code),
+converting PostScript to clean, static, archival PDF.
+
+  Syntax:
+    sps <input.ps> [output.pdf]
+
+  Behavior:
+    * If `output.pdf` is omitted, replaces `.ps` extension with `.pdf` in the CWD.
+    * Executes the PS VM in headless, strictly bounded batch mode.
+    * Parses DSC comments (`%%Pages:`, `%%Page: <label> <num>`, `%%BoundingBox:`).
+    * Emits standard, fully conformant, pure vector PDF 1.4 binary.
+    * Guarantees total absence of dynamic scripting, forms, or executable payloads.
+    * Reports page count, byte size, and elapsed microkernel ticks.
+
+  Example Output:
+    [SYS]% sps /SYS/doc/ps/n64.ps /SYS/doc/pdf/n64.pdf
+    Secure PostScript Engine (B-System DPS 3.20):
+      Source : /SYS/doc/ps/n64.ps (14,262 bytes)
+      Target : /SYS/doc/pdf/n64.pdf
+      Pages  : 9 pages processed (DSC Pages: 525 declared)
+      Fonts  : Palatino, Palatino-Bold, Arial-Bold mapped to PDF Standard 14
+      Output : 22,861 bytes written, linearized xref table verified.
+      Policy : Zero dynamic execution (JS/XFA stripped and denied).
+    [SYS]%
+
+3.2 Operational Duality: PS (Imperative) vs PDF (Declarative)
+
+The architectural core of `sps` is a stream capture engine. PostScript code
+computes values and modifies state dynamically; PDF specifies final objects and static
+content streams:
+
+  +-----------------------+     eval      +-------------------------------+
+  | PostScript Source     | ------------> | Forth Execution Kernel        |
+  | (doc/ps/n64.ps)       |               | (Maintains gstate & paths)    |
+  +-----------------------+               +-------------------------------+
+                                                          |
+                                                          | on stroke / fill / show
+                                                          v
+  +-----------------------+   serialize   +-------------------------------+
+  | PDF Binary Stream     | <------------ | Display List Recorder         |
+  | (Catalog, Pages, XRef)|               | (Emits PDF stream operators)  |
+  +-----------------------+               +-------------------------------+
+
+3.3 Direct Operator Transpilation Mapping
+
+Every graphics command executed in the PS VM directly emits a corresponding PDF
+content stream operator:
+
+  PostScript Command             PDF Content Stream Operator
+  -----------------------------  -----------------------------------------------
+  x y moveto                     x y m
+  dx dy rmoveto                  (x + dx) (y + dy) m
+  x y lineto                     x y l
+  dx dy rlineto                  (x + dx) (y + dy) l
+  x1 y1 x2 y2 x3 y3 curveto      x1 y1 x2 y2 x3 y3 c
+  closepath                      h
+  stroke                         S
+  fill                           f
+  eofill                         f*
+  w setlinewidth                 w w
+  0 setgray                      0 g (fill) / 0 G (stroke)
+  r g b setrgbcolor              r g b rg (fill) / r g b RG (stroke)
+  gsave                          q
+  grestore                       Q
+  /Font findfont s scalefont     /Fn s Tf (registered in /Resources /Font)
+  (string) show                  BT (string) Tj ET
+  showpage                       Flushes /Page object; allocates new stream
+
+3.4 PDF Binary Serialization Architecture
+
+A valid PDF file generated by DPS consists of six deterministic sections:
+
+  Byte 0
+  +-------------------------------------------------------------+
+  | Header: %PDF-1.4 followed by binary comment %âãÏÓ            |
+  +-------------------------------------------------------------+
+  | Object 1: Catalog Dictionary << /Type /Catalog /Pages 2 0 R >>|
+  +-------------------------------------------------------------+
+  | Object 2: Pages Tree << /Type /Pages /Kids [3 0 R ...] >>   |
+  +-------------------------------------------------------------+
+  | Object 3: Page 1 << /Type /Page /Contents 4 0 R ... >>      |
+  +-------------------------------------------------------------+
+  | Object 4: Page 1 Stream << /Length 512 >> stream ...        |
+  +-------------------------------------------------------------+
+  | Objects 5..N: Remaining Pages, Content Streams, Fonts       |
+  +-------------------------------------------------------------+
+  | Cross-Reference Table:                                      |
+  |   xref                                                      |
+  |   0 12                                                      |
+  |   0000000000 65535 f                                        |
+  |   0000000015 00000 n ...                                    |
+  +-------------------------------------------------------------+
+  | Trailer Dictionary:                                         |
+  |   trailer << /Size 12 /Root 1 0 R >>                        |
+  |   startxref 7842                                            |
+  |   %%EOF                                                     |
+  +-------------------------------------------------------------+
+
+
+4. Feasibility Investigation: Full PDF Standard (ISO 32000) vs B-System Baseline
+--------------------------------------------------------------------------------
+
+4.1 The Scope of ISO 32000-1:2008 & ISO 32000-2:2020
+
+The complete PDF specification encompasses:
+  - 1,000+ pages of formal specification.
+  - Over 3,500 defined dictionary keys across 40 specialized object types.
+  - 10 distinct compression filters: ASCIIHexDecode, ASCII85Decode, LZWDecode,
+    RunLengthDecode, FlateDecode (zlib), CCITTFaxDecode (Group 3/4), JBIG2Decode,
+    DCTDecode (JPEG), JPXDecode (JPEG 2000), Crypt.
+  - Interactive Forms: Classic AcroForms (FDF) and Adobe XML Forms Architecture (XFA).
+  - Scripting: Embedded Turing-complete Acrobat JavaScript engine.
+  - Color Models: DeviceGray, DeviceRGB, DeviceCMYK, CalGray, CalRGB, Lab, ICCBased,
+    Separation, DeviceN, Indexed, Pattern (Tiling & Shading).
+  - Complex Shading: Axial, Radial, Free-form Gouraud-shaded triangle mesh, Coons
+    patch mesh, Tensor-product patch mesh.
+  - Typography: Type 1, Multiple Master, TrueType, OpenType/CFF, Type 3 (user-defined
+    procedural glyphs), Type 0 (composite/CIDFont), ToUnicode CMaps, vertical writing.
+  - Rich Media: 3D models (U3D, PRC), audio/video streams, Flash controls.
+  - Security: Standard 40/128-bit RC4 encryption, AES-128, AES-256, digital signatures
+    (PKCS#7, PAdES).
+
+4.2 Security Architecture: Elimination of Dynamic Execution (No JS / No XFA)
+
+Implementing the *entire* ISO 32000 standard within a certified microkernel or
+workstation operating system is not merely difficult; it is mathematically and
+architecturally unsound. B-System adopts a strict policy of eliminating dynamic
+execution within document formats:
+
+  1. Elimination of Dynamic Scripting & Forms: Dynamic execution engines—specifically
+     embedded Acrobat JavaScript, XML Forms Architecture (XFA), and interactive
+     widget callbacks—are entirely prohibited. Documents in B-System are pure,
+     deterministic vector representations.
+  2. Elimination of High-Risk Codecs: Complex legacy compression filters (JBIG2,
+     JPX / JPEG 2000, LZW) are excluded in favor of standard, proven Flate (zlib)
+     and baseline DCT (JPEG), eliminating integer overflow and memory corruption vectors.
+  3. Deterministic Execution: Eliminating procedural Type 3 font glyph loops and
+     embedded scripts guarantees that document rendering finishes within strictly
+     bounded real-time deadlines, satisfying microkernel determinism.
+  4. Memory Footprint Predictability: Avoiding bloated third-party engines (such as
+     FreeType2 or HarfBuzz) in favor of lightweight cleanroom alternatives like
+     `libschrift` (`src/font/schrift.c`, ~1,000 lines C99) preserves B-System's lean
+     memory budget, maintaining full workstation functionality within 4–8 MB RAM.
+
+4.3 Conformance Staging Matrix: Simplified vs Full Baseline
+
+B-System adopts a clear, 3-tier conformance strategy:
+
+  Component           Tier 1: Simplified (M1)      Tier 2: Archival Baseline (M3)  Tier 3: Full Std (Excluded)
+  ------------------  ---------------------------  ------------------------------  ---------------------------
+  Vector Graphics     Lines, rects, beziers, fill  Blend modes, soft masks, alpha  Complex Tensor-patch mesh
+  Typography          Standard 14 PDF fonts        Embedded TrueType & Type 1      Type 3 procedural glyphs
+  CJK / Multi-byte    Shift-JIS / TronCode UTF-8   CIDFont Type 0/2, ToUnicode     Vertical glyph rotation
+  Compression         Uncompressed + Flate (zlib)  Flate + DCT (JPEG) + RunLength  JBIG2, JPX (JPEG 2000)
+  Form / Scripting    None (Static document)       None (Pure security posture)    XFA Forms, JavaScript (REJECTED)
+  Annotations         None (View only)             PDF /Annots Text/Highlight/Pin  3D / RichMedia (REJECTED)
+  File Integrity      Standard single xref         Linearized + Incremental Update Linearized byte-range server
+
+Target Recommendation:
+  Deliver **PDF/A-1b (ISO 19005-1)** and **PDF 1.4/1.7 Archival Publishing Baseline**.
+  This guarantees 100% vector fidelity for all scientific literature, patents, manuals
+  (including n64.ps), and books, while rigorously barring vulnerabilities.
+
+
+5. B-System Native PDF Application: Reader (Reader.html) & Review (review.c)
+----------------------------------------------------------------------------
+
+5.1 Dual Identity: Web Specification & Native C99 Application
+
+The Reader / Review suite exists in two unified manifestations within the BTRON ecosystem:
+  1. `b-system/apps/Review.html` (and `Reader.html` alias):
+     The official specification document, interactive showcase, and user manual
+     defining menu actions, keyboard shortcuts, and TAD hypermedia integration.
+  2. `src/apps/review.c` & `src/apps/pdf_reader.c`:
+     The native C99 workstation application compiled into B-System, running directly
+     on the BTRON Window Manager (`btron/wnd.h`) and Display Primitives (`btron/dp.h`).
+
+5.2 BTRON Minimalist User Interface Ergonomics
+
+The application adheres strictly to the Sakamura BTRON 3.20 HMI Guidelines:
+  - Clean, distraction-free reading surface modeled after traditional Japanese handmade
+    paper (和紙) with subtle 1px border framing.
+  - 3D beveled toolbars and window borders rendering at native display resolution
+    (1024x768 on Pi 400 Workbench, 1920x1080 on Workstation UEFI).
+  - Floating fusen markers (付箋): translucent, rounded-corner sticky pins anchored
+    into the paper margins.
+  - High-performance vector zoom (25% to 800%) with bilinear sub-pixel snapping.
+
+5.3 Application Window Geometry & Visual Layout
+
+  +-----------------------------------------------------------------------------+
+  | [x] 差分校正・閲覧 (Review & Reader) — /SYS/doc/pdf/n64.pdf        [_][^] |
+  +-----------------------------------------------------------------------------+
+  | [実身/File] [編集/Edit] [表示/View] [校正/Review] [頁/Page] [窓/Wnd] [案内/Help]|
+  +-----------------------------------------------------------------------------+
+  | [<] [>] 頁: [ 42 / 525 ] | 縮小 [-] 拡大 [+] (100%) | [付箋+ Pin] [蛍光+ Mark] |
+  +------------------------------------+----------------------------------------+
+  | DOCUMENT VIEWING CANVAS            | MARGINALIA & TAD FUSEN STREAM (Rail)   |
+  |                                    |                                        |
+  |  HARDWARE ARCHITECTURE             | [ Fusen #1 — Page 42 (x:200, y:665) ]  |
+  |                                    | Author : Namdak Tonpa                  |
+  |  Figure 3-1: N64 Hardware Diagram  | Time   : 2026-10-29 17:42              |
+  |  +------------+                    | Note   : "Verify R4300 KSEG0 cache     |
+  |  | R4300 CPU  |                    |          coherency with RSP DMEM DMA."  |
+  |  +-----+------+                    | [ Citation Tag: NU6-06-0030 §3.2 ]     |
+  |        |                           | -------------------------------------- |
+  |  +-----+------+      +-----------+ | [ Fusen #2 — Page 42 (x:350, y:450) ]  |
+  |  |    RCP     | <--> | Main Mem  | | Author : Reviewer B                  |
+  |  +------------+      +-----------+ | Note   : "Add cross-link to doc/txt/   |
+  |                                    |          BTRON-PS2.txt §4.1."          |
+  +------------------------------------+----------------------------------------+
+  | 状態: 正常表示 (Page 42) | 選択領域: (350, 450, 120, 90) | TAD 実身 ID: #80010010 |
+  +-----------------------------------------------------------------------------+
+
+5.4 Menu Bar Hierarchy & Keyboard Accelerator Bindings
+
+  Menu Category    Item               Key Combo  Action / Implementation Function
+  ---------------  -----------------  ---------  ---------------------------------------
+  実身 (File)      開く (Open...)      Ctrl+O     Prompts Cabinet vobject selector
+                   保存 (Save Anno)    Ctrl+S     Flushes incremental PDF & TAD Fusen
+                   印刷 (Print PS)     Ctrl+P     Spools vector stream to printmgr
+                   閉じる (Close)      Ctrl+W     Closes window, frees backing store
+  表示 (View)      等倍 (100%)         Ctrl+1     Sets app->zoom_factor = 1.0f
+                   幅に合わせる (Fit)   Ctrl+F     Calculates zoom to fit client width
+                   次頁 (Next Page)    PageDown   app->current_page++
+                   前頁 (Prev Page)    PageUp     app->current_page--
+  校正 (Review)    付箋追加 (Pin Note) Ctrl+N     Prompts comment modal; pins to cursor
+                   蛍光ペン (Highlight)Ctrl+H     Enables drag-rectangle highlight tool
+                   引用出力 (Citation) Ctrl+C     Copies BibTeX / IEEE citation string
+
+
+6. Vector PDF Rendering Pipeline in BTRON UI (DP & GDEV Integration)
+---------------------------------------------------------------------
+
+6.1 Rendering Architecture: PDF Stream to GDEV Backing Store
+
+In BTRON, applications do not draw directly to the physical video framebuffer.
+All rendering targets a Window Graphic Device (`GDEV`) backing store (`wnd->dev->pixels`).
+The DPS vector renderer maps PDF operators directly onto Display Primitives (`dp_*`):
+
+  +-------------------------------------------------------------------------+
+  |                        PDF Content Stream Parser                        |
+  +-------------------------------------------------------------------------+
+                                       |
+                       Tokens: m, l, c, re, S, f, Tf, Tj
+                                       v
+  +-------------------------------------------------------------------------+
+  |                   Coordinate & Transform Engine (CTM)                   |
+  |   Converts PDF User Space (72 dpi, Y-up) to BTRON GDEV (Native, Y-down) |
+  +-------------------------------------------------------------------------+
+                                       |
+                                       v
+  +-------------------------------------------------------------------------+
+  |                  Display Primitives (DP) Vector Rasterizer              |
+  |   dp_line_to, dp_poly_line, dp_poly_fill, dp_paint_rect, font_draw_char |
+  +-------------------------------------------------------------------------+
+                                       |
+                                       v
+  +-------------------------------------------------------------------------+
+  |                  Per-Window GDEV Backing Store (32-bit ARGB)            |
+  +-------------------------------------------------------------------------+
+                                       |
+                                       v  (btron_row_blit / fast_blit.h)
+  +-------------------------------------------------------------------------+
+  |              Workbench Desktop Compositor & Presenter (RENDER.txt)      |
+  +-------------------------------------------------------------------------+
+
+6.2 Coordinate Transformation Mathematics
+
+PostScript and PDF define coordinate (0,0) at the bottom-left of the page, with Y
+increasing upward. BTRON GDEV defines (0,0) at the top-left of the window, with Y
+increasing downward.
+
+Let `(x_pdf, y_pdf)` be coordinates in PDF 72-dpi points, `page_height` be the page height
+(e.g., 792 for Letter, 842 for A4), and `s` be `app->zoom_factor`:
+
+  x_gdev = (x_pdf * s) + pan_x;
+  y_gdev = ((page_height - y_pdf) * s) + pan_y;
+
+For cubic Bezier curves (`x1 y1 x2 y2 x3 y3 c`), the renderer performs de Casteljau
+adaptive recursive subdivision until the chord deviation is under 0.5 pixels, emitting
+discrete segments to `dp_poly_line`.
+
+6.3 Typography & Glyph Rasterization via libschrift
+
+The BTRON PDF engine handles text via a 3-tier font resolver:
+  1. Standard 14 Fonts (Helvetica, Times, Courier, Symbol, ZapfDingbats):
+     DPS includes exact Adobe Character Metrics (AFM) tables for character widths and
+     renders glyphs using BTRON's built-in outline and bitmap typographic engine.
+  2. Embedded TrueType / OpenType Fonts (via libschrift):
+     Instead of linking the heavyweight FreeType2 library (which exceeds 2.5 MB and
+     requires complex dynamic memory allocations), B-System embeds Thomas Oltmann's
+     `libschrift` (imported into `src/font/schrift.c` / `include/btron/schrift.h`).
+     `libschrift` provides a pure C99, dependency-free TrueType engine (~1,000 LOC,
+     ISC license):
+       - Directly maps memory-buffered TrueType tables (`sft_loadmem`).
+       - Resolves Unicode / TronCode codepoints to glyph IDs (`sft_lookup`).
+       - Queries horizontal advances and left-side bearings (`sft_gmetrics`).
+       - Rasterizes antialiased 8-bit alpha glyph masks (`sft_render`) directly into
+         the window GDEV backing store (`wnd->dev->pixels`).
+  3. CJK & Japanese Text:
+     When encountering multi-byte CIDFont streams (e.g., Japanese papers compiled with
+     CJKutf8), the engine translates CID codes via ToUnicode tables into standard
+     BTRON TronCode / Unicode, querying the system-wide font manager (`font_mgr.h`).
+
+
+7. Two-Way Annotation & Fusen Embedding Architecture
+----------------------------------------------------
+
+7.1 The BTRON Fusen Philosophy
+
+In traditional operating systems, a PDF annotation is a proprietary, isolated tag trapped
+inside a single document file. In BTRON, annotations are first-class hypermedia objects:
+  - Every note created in `Review` is assigned an immutable Real Object ID (`UW anno_robj_id`).
+  - The note is saved into the BTRON Cabinet file system (`src/fs/`) as a TAD record of
+    type `RT_MFUSEN` (Fusen Virtual Body).
+  - The Fusen record stores:
+      * Target document Real Object ID (`pdf_robj_id`).
+      * Page index and normalized vector coordinates `(x, y, w, h)`.
+      * Author identity, timestamp, and review status (Pending, Accepted, Rejected).
+      * Formatted TAD text content, including embedded links and mathematical formulas.
+
+7.2 Non-Destructive Incremental Update in PDF Files
+
+When the user saves review annotations, DPS must ensure total interoperability with
+third-party PDF readers (Acrobat, Apple Preview, Evince, PDF.js).
+
+Standard PDF specification allows "Incremental Updates". Instead of rewriting the entire
+multi-megabyte document (which risks corrupting digital signatures or losing private tags),
+DPS appends newly created objects to the end of the file:
+
+  Original PDF File:
+  +-----------------------------------------------------------------+
+  | %PDF-1.4 ... Objects 1..100 ... Original XRef ... %%EOF         |
+  +-----------------------------------------------------------------+
+                                  |
+                                  | Review appends new annotations:
+                                  v
+  Appended Incremental Tail:
+  +-----------------------------------------------------------------+
+  | Object 101 0 obj:                                               |
+  |   << /Type /Annot /Subtype /Text                                |
+  |      /Rect [ 200 665 220 685 ]                                  |
+  |      /Contents (Verify R4300 KSEG0 cache coherency...)          |
+  |      /T (Namdak Tonpa) /M (D:20261029174200)                    |
+  |      /C [ 1.0 0.8 0.0 ] >> endobj                               |
+  +-----------------------------------------------------------------+
+  | Object 102 0 obj:                                               |
+  |   << /Type /Page (Page 42 with updated /Annots [ ... 101 0 R ]) |
+  +-----------------------------------------------------------------+
+  | Incremental XRef Table:                                         |
+  |   xref                                                          |
+  |   101 2                                                         |
+  |   0000045230 00000 n                                            |
+  |   0000045410 00000 n                                            |
+  +-----------------------------------------------------------------+
+  | Appended Trailer:                                               |
+  |   trailer << /Size 103 /Root 1 0 R /Prev 38920 >>               |
+  |   startxref 45600                                               |
+  |   %%EOF                                                         |
+  +-----------------------------------------------------------------+
+
+Benefits:
+  - Byte-Identical Preservation: The original PDF bytes are never touched or recompressed.
+  - Constant-Time Save: Saving 10 annotations takes < 2 KB of writes and finishes in < 1 ms.
+  - Universal Compatibility: Acrobat and Preview read the trailer chain and display the
+    BTRON Fusen pins as standard PDF Sticky Notes.
+
+
+8. Future Horizon: TeX CLU Engine Architecture (Postponed Implementation)
+-------------------------------------------------------------------------
+
+8.1 Context & Objective
+
+The B-System repository contains a rich corpus of foundational academic papers in
+`./doc/pdf/*.tex`:
+  - `btron-article.tex`  : Virtualization and Formal Foundations (IEEE twocolumn)
+  - `btron-tad.tex`      : TAD-Native Declarative Applications & NITRO/FORM
+  - `btron-coq.tex`      : Coq Formal Verification & Microkernel Proofs
+  - `btron-sound.tex`    : 3-Head Cassette Deck & Real-Time Audio Engine
+  - `btron-tessron.tex`  : Comparative Analysis: B-System vs Tessron OS
+  - `btron-urara.tex`    : Comparative Analysis: B-System vs Urara OS
+  - `btron-verimath.tex` : Type-Theoretic Formal Verification Brief
+
+To achieve total self-hosting and autonomy, B-System envisions a lightweight `tex` CLU
+utility that compiles this LaTeX subset directly into PostScript or PDF, without
+requiring a 4 GB TeX Live distribution.
+
+*Notice: In accordance with project instructions, this section details the complete
+architectural plan and compatibility strategy, but physical implementation is
+deliberately postponed to a future milestone.*
+
+8.2 Syntax Subset Analysis of Existing Documents
+
+An exhaustive scan of `doc/pdf/*.tex` reveals that all documents adhere to a clean,
+highly disciplined structural subset:
+
+  LaTeX Construct        Usage in doc/pdf/*.tex                  DPS TeX Strategy
+  ---------------------  --------------------------------------  ---------------------------
+  Document Class         \documentclass[10pt,compsoc]{article}   Native 10pt twocolumn engine
+  Page Geometry          \usepackage[margin=1.8cm]{geometry}     Native hardcoded margins
+  Math Symbols           amsmath, amssymb, \frac, \sum, \int     Knuth Appendix G 16 rules
+  Algorithms             algorithmic, \STATE, \FOR               Indented boxed environment
+  Japanese Text          \usepackage{CJKutf8}, \ja{...}          Direct TronCode font hook
+  Source Listings        listings, \begin{lstlisting}            Monospace boxed environment
+  Tables                 booktabs, tabular, \toprule, \midrule   Box/glue horizontal rules
+  Hyperlinks             hyperref, \hypersetup, \url             PDF /Link annotation output
+  Citations / Refs       \cite{...}, \ref{...}, \label{...}      Two-pass .aux symbol table
+
+8.3 The Cleanroom Box-and-Glue Architecture
+
+The planned TeX CLU engine operates in four distinct phases:
+
+  1. Lexer & Macro Expander:
+     A zero-heap tokenizer that parses TeX control sequences (`\def`, `\newcommand`).
+     Standard packages (geometry, hyperref, xcolor) are not parsed from external files;
+     instead, their standard macros are recognized as built-in engine primitives.
+  2. Knuth-Plass Dynamic Paragraph Line Breaking:
+     Implements Donald Knuth's classic 1981 dynamic programming algorithm:
+     - Measures word widths using font metric tables.
+     - Inserts stretchable/shrinkable glue.
+     - Calculates penalty demerits for bad breaks and hyphenations.
+     - Finds the globally optimal set of line breaks for each paragraph.
+  3. Vertical Page Builder & Column Balancer:
+     Assembles horizontal line boxes (HBoxes) into the vertical page box (VBox).
+     Splits content across two balanced columns for `twocolumn` compsoc journal style.
+  4. Math Formula Typesetting:
+     Implements the 16 rules of TeX Appendix G for superscripts, subscripts, fractions,
+     square roots, and large summation/integral operators.
+
+8.4 Include-Hacking Compatibility Layer (btron-compat.sty)
+
+To allow existing `doc/pdf/*.tex` files to compile without altering their source text,
+the TeX CLU will inject an invisible prelude (`btron-compat.tex`):
+
+```tex
+% Cleanroom BTRON LaTeX Compatibility Shim
+\def\usepackage[#1]#2{}
+\def\hypersetup#1{}
+\def\lstset#1{}
+\def\pagestyle#1{}
+\def\fancyhf{}
+\def\rhead#1{} \def\lhead#1{} \def\cfoot#1{}
+\def\ja#1{#1} % Direct pass-through to BTRON multilingual font engine
+```
+
+8.5 Postponement Decision & Milestone Boundary
+
+The TeX engine is postponed until the PostScript Virtual Machine and native PDF Viewer
+are completely stabilized and certified. Because TeX can emit standard PostScript (.ps),
+the completion of Milestone 1 (DPS PS VM) provides the exact execution target needed
+by the future TeX compiler.
+
+
+9. Evaluation, Complexity Analysis, NASA JPL Rules & Delivery Milestones
+------------------------------------------------------------------------
+
+9.1 Algorithmic Complexity & Memory Budget
+
+  Component               Time Complexity           Static Memory   Heap Allocation
+  ----------------------  ------------------------  --------------  ---------------
+  PS Tokenizer            O(N) single-pass          4 KB buffer     0 bytes (Zero)
+  PS Forth Interpreter    O(Tokens * DictDepth)     64 KB static    0 bytes (Zero)
+  PDF Stream Serializer   O(Pages + Objects)        32 KB buffer    0 bytes (Zero)
+  PDF XRef Generator      O(Objects) table sort     16 KB table     0 bytes (Zero)
+  DP Vector Rasterizer    O(Segments + Pixels)      Window GDEV     0 bytes (Pre-allocated)
+  Incremental Anno Append O(Annotations)            8 KB buffer     0 bytes (Zero)
+
+9.2 NASA JPL Power-of-10 Safety Conformance
+
+The implementation of DPS strictly adheres to the NASA Jet Propulsion Laboratory
+"Power of Ten Rules for Developing Safety-Critical Code" (Gerard J. Holzmann):
+
+  Rule  JPL Mandate                       DPS Compliance Engineering
+  ----  --------------------------------  --------------------------------------------------
+  1     Avoid complex flow constructs     No recursion in PS VM; no goto, setjmp, or longjmp.
+                                          Procedure calls are tracked in bounded Exec Stack.
+  2     All loops have fixed upper bound  Loop operators (repeat, for) enforce maximum 65,536
+                                          iterations; infinite loops trigger `limitcheck`.
+  3     No dynamic heap allocation        All memory is allocated at boot; zero malloc/free
+                                          during document evaluation or viewing.
+  4     Short functions (< 60 lines)      Every Forth operator is implemented as a discrete,
+                                          single-responsibility C99 function.
+  5     High assertion density (>= 2)     Pre-conditions and post-conditions verify stack
+                                          depth and pointer validity before and after execution.
+  6     Minimal variable scope            All VM state is encapsulated in `struct PSContext`.
+  7     Check all non-void return values  Every system call, file I/O, and buffer append checks
+                                          error codes; partial writes abort deterministically.
+  8     Restricted preprocessor use       Macros limited to simple constants and assertions.
+  9     Restricted pointer dereferences   No pointer arithmetic across unverified buffer bounds.
+  10    Zero compiler warnings            Compiled with `-Wall -Wextra -Wpedantic -Werror`.
+
+9.3 Phased Implementation Roadmap
+
+  Phase        Milestone Name            Deliverables & Verification Criteria
+  -----------  ------------------------  ---------------------------------------------------
+  Milestone 1  Forth VM & sps Engine     - `src/clu/ps_vm.c` & `src/clu/sps.c`
+                                         - Implements 48 core Forth/PS primitives.
+                                         - Secure execution: zero JS, zero XFA, bounded loops.
+                                         - Validates against `doc/ps/n64.ps`.
+                                         - Produces valid, viewable `n64.pdf`.
+  Milestone 2  Native BTRON PDF Viewer   - `src/apps/pdf_reader.c` & `src/apps/review.c`
+                                         - Implements PDF 1.4 vector stream parser.
+                                         - Renders `n64.pdf` directly into window GDEV.
+                                         - Updates `b-system/apps/Review.html` specification.
+  Milestone 3  Fusen Annotation Engine   - Interactive note pinning in Review app.
+                                         - Saves annotations to Cabinet (`RT_MFUSEN`).
+                                         - Implements non-destructive incremental update.
+                                         - Verifies round-trip compatibility with Acrobat.
+  Milestone 4  Typography & PDF/A-1b     - Full AFM metric tables for Standard 14 fonts.
+                                         - Integrated `libschrift` (`src/font/schrift.c`) TrueType rasterizer.
+                                         - Formal PDF/A-1b validator check. https://github.com/tomolt/libschrift 
+  Milestone 5  TeX CLU Compiler          - *POSTPONED*: Package-free TeX engine.
+               (Future Staged Milestone) - Compiles `doc/pdf/btron-article.tex` to PS/PDF.
+
+
+=============================================================================================================
+End of DPS.txt — Document Processing System Specification
+

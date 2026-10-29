@@ -50,6 +50,8 @@ __WEAK_APP WND* open_lilcu64_demo_window(void);
 __WEAK_APP WND* open_lilcu64_demo_window_rect(int x, int y, int width, int height);
 __WEAK_APP WND* open_msx_window(void);
 __WEAK_APP WND* open_msx_window_with_rom(const char *path);
+__WEAK_APP WND* open_review_window(void);
+__WEAK_APP WND* open_review_window_with_file(const char *path);
 
 void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_data, WND *wnd);
 

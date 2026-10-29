@@ -1,4 +1,4 @@
-GPU.txt — Pi 400 Graphics Hardware, BTRON BitBlt Schema, and Register-Level Detail
+VC4.txt — Pi 400 Graphics Hardware, BTRON BitBlt Schema, and Register-Level Detail
 ==================================================================================
 
 B-System / BTRON 3.20

@@ -38,7 +38,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/d
         test-xmb-render test-xmb-render-tgl test-gl-context \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
         segui-screens \
-        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-chokanji test-quake test-replay \
+        test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-sps test-chokanji test-quake test-replay \
         test-hull test-view test-secret test-render test-drone test-drone-all test-zexall msx-trace \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
         ps2-cfg ps2-dials \
@@ -197,7 +197,9 @@ CLU_APPS_SRCS = src/clu/fs.c \
                 src/clu/ln.c \
                 src/clu/df.c \
                 src/clu/st.c \
-                src/clu/tp.c
+                src/clu/tp.c \
+                src/clu/ps_vm.c \
+                src/clu/sps.c
 
 CLU_APPS_HOST_OBJS = $(CLU_APPS_SRCS:.c=.host.o)
 CLU_APPS_POSIX_OBJS = $(CLU_APPS_SRCS:.c=.posix.o)
@@ -258,6 +260,7 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/font/jis_fonts.c     \
               src/font/tibetan_fonts.c \
               src/font/font_mgr.c      \
+              src/font/schrift.c       \
               src/window/wnd.c         \
               src/window/app_menu.c    \
               src/window/event.c       \
@@ -286,6 +289,8 @@ COMMON_SRCS = src/graphics/dp_core.c   \
               src/apps/clarity_layout.c \
               src/apps/clarity_render.c \
               src/apps/clarity_export.c \
+              src/apps/pdf_reader.c     \
+              src/apps/review.c         \
               src/apps/audio_player.c  \
               src/apps/b_drivesetup.c  \
               src/media/orchestra.c     \
@@ -778,6 +783,15 @@ $(TEST_FS_BIN): verify/tests/test_fs.c $(FS_OBJS) src/clu/clu.host.o $(CLU_APPS_
 test-fs: $(TEST_FS_BIN) btron_sys.vol
 	./$(TEST_FS_BIN)
 	@echo "[FS] All FS tests passed."
+
+# ── SPS (Secure PostScript & Forth VM) unit tests ──────────────────────
+TEST_SPS_BIN = ./.build/test_sps
+$(TEST_SPS_BIN): verify/tests/test_sps.c src/clu/ps_vm.posix.o src/clu/sps.posix.o src/font/schrift.posix.o src/apps/pdf_reader.posix.o src/apps/review.posix.o src/graphics/dp_core.posix.o
+	@mkdir -p .build
+	$(CC) $(CFLAGS) $^ -o $@ -lm
+
+test-sps: $(TEST_SPS_BIN)
+	./$(TEST_SPS_BIN)
 
 # ── Cho-Kanji (B-right/V 4.02) QCOW2 tests ───────────────────────────
 # The read-write tests create, append to and delete records, so they must never

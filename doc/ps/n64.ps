@@ -1,0 +1,321 @@
+%!PS-Adobe-3.0
+%%Title: Nintendo 64 Programming Manual
+%%Pages: 525
+%%EndComments
+
+/BoldFont { /Palatino-Bold findfont 10 scalefont setfont } def
+/BodyFont { /Palatino findfont 10 scalefont setfont } def
+/TitleFont { /Arial-Bold findfont 12 scalefont setfont } def
+/SubTitleFont { /Arial-Bold findfont 10 scalefont setfont } def
+/HeaderFont { /Palatino findfont 14 scalefont setfont } def
+/FooterFont { /Arial-Bold findfont 10 scalefont setfont } def
+/ItalicFont { /Palatino-Italic findfont 12 scalefont setfont } def
+/Line { 4 setlinewidth newpath 200 655 moveto 250 655 lineto stroke } def
+
+/box {
+    /text exch def
+    /height exch def
+    /width exch def
+    /y exch def
+    /x exch def
+    newpath x y moveto width 0 rlineto 0 height rlineto width neg 0 rlineto closepath stroke
+    x 5 add y 5 add moveto
+    text show
+} def
+
+/Chapter1 {
+  200 665 moveto ItalicFont (Chapter 1) show Line
+  200 620 moveto HeaderFont (Hardware and Software Installation Notes) show BodyFont
+} def
+
+/Chapter2 {
+  200 665 moveto ItalicFont (Chapter 2) show Line
+  200 620 moveto HeaderFont (Troubleshooting Software Bringup) show BodyFont
+} def
+
+/Chapter3 {
+  200 665 moveto ItalicFont (Chapter 3) show Line
+  200 620 moveto HeaderFont (Hardware Architecture) show BodyFont
+} def
+
+/Header {
+  /chap exch def
+  /x exch def
+  HeaderFont
+  x 710 moveto chap show
+  50 710 moveto (NINTENDO 64) show
+  newpath
+  50 705 moveto
+  550 705 lineto
+  stroke
+  BodyFont
+} def
+
+/Footer {
+  FooterFont
+  50 50 moveto (NU6-06-0030-002G 30/09/2026) show
+  535 50 moveto page =string cvs show
+  BodyFont
+} def
+
+%%Page: 1 27
+globaldict /page 27 put
+185 (HARDWARE AND SOFTWARE INSTALLATION NOTES) Header Chapter1 Footer
+showpage
+
+%%Page: 1 33
+globaldict /page 33 put
+260 (TROUBLESHOOTING SOFTWARE BRINGUP) Header Chapter2 Footer
+showpage
+
+%%Page: 1 41
+globaldict /page 41 put
+200 695 moveto () show
+200 680 moveto () show
+200 665 moveto () show
+200 650 moveto () show
+200 635 moveto () show
+200 620 moveto () show
+200 605 moveto () show
+200 590 moveto () show
+200 575 moveto () show
+200 560 moveto () show
+200 545 moveto () show
+200 530 moveto () show
+200 515 moveto () show
+200 500 moveto () show
+200 485 moveto () show
+200 470 moveto () show
+350 (HARDWARE ARCHITECTURE) Header Chapter3
+200 455 moveto (This chapter describes the hardware architecture of the Nintendo 64 game) show
+200 440 moveto (machine, in order to help you write software for the machine. Later sections) show
+200 425 moveto (of this manual describe the details you need to know to program each) show
+200 410 moveto (component.) show
+200 395 moveto () show
+200 380 moveto (The Nintendo 64 game consists of a number of hardware components that) show
+200 365 moveto (work together to produce the graphics and audio for the game. The heart of) show
+200 350 moveto (the system is the Reality Coprocessor (RCP). Attached to the RCP are) show
+200 335 moveto (memory chips, the MIPS R4300 CPU, and some miscellaneous I/O chips.) show
+200 320 moveto () show
+200 305 moveto (The RCP is the center of the game; all data must pass through it. It acts as the) show
+200 290 moveto (memory controller for the CPU. The RCP runs the graphics and audio) show
+200 275 moveto (microcode. The display portion of the RCP renders into the graphics) show
+200 260 moveto (framebuffer located in main memory. The video and audio portions of the) show
+200 245 moveto (RCP, DMA framebuffer, and audio data from main memory to drive the) show
+200 230 moveto (video and audio DACs. Figure 3-1, "Nintendo 64 Hardware Block) show
+200 215 moveto (Diagram," on page 42 is a block diagram of the Nintendo 64 system.) show
+200 200 moveto () show
+200 185 moveto () show
+200 170 moveto () show
+Footer
+showpage
+
+%%Page: 1 42
+globaldict /page 42 put
+350 (HARDWARE ARCHITECTURE) Header
+
+200 665 moveto BoldFont (Figure 3-1) show
+250 665 moveto BodyFont (Nintendo 64 Hardware Block Diagram) show
+
+200 275 moveto TitleFont (Execution Overview) show BodyFont
+200 260 moveto () show
+200 245 moveto (The CPU and RCP are both processors that can execute at the same time.) show
+200 230 moveto (Threads execute on the CPU and tasks execute on the RCP. Accesses to main) show
+200 215 moveto (memory from threads and tasks also occurin parallel.) show
+200 200 moveto () show
+200 185 moveto (The game program runs on the R4300 CPU as a collection of threads, each of) show
+200 170 moveto (which has its own stack. The operating system is a collection of routines that) show
+
+BodyFont 350 580 120 60 (R4300 CPU) box
+BodyFont 350 450 120 90 (RCP) box
+BodyFont 350 350 120 60 (Memory 4MB x2) box
+BodyFont 250 500 60 40 (Cartridge) box
+BodyFont 250 450 60 40 (PIF) box
+BodyFont 500 500 80 30 (Video DAC) box
+BodyFont 500 450 80 30 (Audio DAC) box
+
+newpath
+400 540 moveto 400 580 lineto stroke % CPU to RCP
+400 410 moveto 400 450 lineto stroke % RCP to Memory
+310 520 moveto 350 520 lineto stroke % Cartridge Interface to RCP
+310 470 moveto 350 470 lineto stroke % PIF to RCP
+470 520 moveto 500 520 lineto stroke % RCP to Video DAC
+470 470 moveto 500 470 lineto stroke % RCP to Audio DAC
+Footer
+showpage
+
+%%Page: 1 43
+globaldict /page 43 put
+350 (HARDWARE ARCHITECTURE) Header
+200 695 moveto () show
+200 680 moveto () show
+200 665 moveto () show
+200 650 moveto () show
+200 635 moveto (can be called in a thread. The operating system controls which thread is) show
+200 620 moveto (running on the CPU. A thread can access all of physical memory. See) show
+200 605 moveto (Chapter 6, "Operating System Overview," for more information.) show
+200 590 moveto () show
+200 575 moveto (Tasks run on the RCP, which is a microcode engine that processes a task list.) show
+200 560 moveto (Task lists are generated by a thread running on R4300 CPU and are stored) show
+200 545 moveto (in main memory. The game program creates the task list, calls an OS routine) show
+200 530 moveto (to load the appropriate microcode, and then starts the RCP running to) show
+200 515 moveto (process the task list. The microcode on the RCP reads the task list from main) show
+200 500 moveto (memory. The RCP task can also write into main memory.) show
+200 485 moveto () show
+200 470 moveto TitleFont (RCP: Reality Coprocessor) show BodyFont
+200 455 moveto () show
+200 440 moveto (The RCP is really a collection of processors, memory interfaces, and control) show
+200 425 moveto (logic. The Reality Signal Processor \(RSP\) is the microcode engine that) show
+200 410 moveto (executes audio and graphics tasks. The Reality Display Processor \(RDP\) is) show
+200 395 moveto (the graphics display pipeline that renders into the framebuffer. The memory) show
+200 380 moveto (interfaces provide access to main memory for the CPU, RSP, RDP, video) show
+200 365 moveto (interface, audio interface, peripherial devices, and serial game controllers. It) show
+200 350 moveto (is very important to remember that these interfaces may be active at the) show
+200 335 moveto (same time and that the RSP and RDP are running in parallel.) show
+200 320 moveto () show
+200 305 moveto TitleFont (RSP: Reality Signal Processor) show BodyFont
+200 290 moveto () show
+200 275 moveto (The RSP is the processor used by the graphics and audio microcode. The RSP) show
+200 260 moveto (consists of a Scalar Unit \(SU\), a Vector Unit \(VU\), instruction memory) show
+200 245 moveto (\(IMEM\), and data memory \(DMEM\). The microcodeis fetched from EMEM) show
+200 230 moveto (and has direct access to DMEM. The RSP can also access main memory using) show
+200 215 moveto (DMA. All memory references in the RSP are physical. However, the) show
+200 200 moveto (microcode uses a segment address table to translate segmented addresses) show
+200 185 moveto (provided in the task lists into physical addresses. The IMEM and DMEM are) show
+200 170 moveto (both 4 KB. The SU implements a subset of the R4000 instruction set. The VU) show
+200 155 moveto (has eight 16-bit elements.) show
+Footer
+showpage
+
+%%Page: 1 44
+globaldict /page 44 put
+350 (HARDWARE ARCHITECTURE) Header
+200 695 moveto () show
+200 680 moveto () show
+200 665 moveto () show
+200 650 moveto () show
+200 635 moveto (For information on how the RSP is used to imlemenl part of the graphics) show
+200 620 moveto (pipeline, see Chapter 12, "RSP Graphics Programming", Chapter 19, "The) show
+200 605 moveto (Audio Library," describes how the RSP is used in audio processing) show
+200 590 moveto () show
+200 575 moveto TitleFont (RDP: Reality Display Processor) show BodyFont
+200 560 moveto () show
+200 545 moveto (The RDP is the graphics display pipeline that executes an RDP display list) show
+200 530 moveto (generated by the RSP and CPU. The RDP consists of a Rasterizer \(RS\), a) show
+200 515 moveto (Texture Unit \(TX\), 4 KB of texture memory \(TMEM\), a Texture Filter Unit) show
+200 500 moveto (\(TF\), a Color Combiner \(CC\), a Blender \(BL\), and a Memory Interface \(MI\).) show
+200 485 moveto () show
+200 470 moveto (The RS rasterizes triangles and rectangles. The TX samples textures loaded) show
+200 455 moveto (in TMEM. The TF filters the texture Samples. The CC combines and) show
+200 440 moveto (interpolates between two colors. The BL blends the resulting pixels with) show
+200 425 moveto (pixels in the frame buffer and performs z-buffer and ani-aliasing operations.) show
+200 410 moveto (The MI performs the read, modify, and write operations for the individual) show
+200 395 moveto (pixels at either one pixel per clock or one pixel for every two clocks. The MI) show
+200 380 moveto (also has special modes for lading the TMEM, filling rectangles \(fast clears\),) show
+200 365 moveto (and copying multiple pixels from the TMEM into the framebuffer \(sprites\).) show
+200 350 moveto () show
+200 335 moveto (The RDP accesses main memory using physical addresses to load the) show
+200 320 moveto (internal TMEM, to read the framebuffer for blending, to read the z-buffer for) show
+200 305 moveto (depth comparison, and to write the z and framebuffers. The microcode on) show
+200 290 moveto (the RSP translates the segmented addresses in the task list into physical) show
+200 275 moveto (addresses.) show
+200 260 moveto () show
+200 245 moveto (The global state registers are used by all stages of the pipeline. There are a) show
+200 230 moveto (number of sync commands to provide synchronization. For example, a pipe) show
+200 215 moveto (async is used before changing one of the rendering modes. This ensures that) show
+200 200 moveto (all previous rendering affected by the mode change occurs before the mode) show
+200 185 moveto (change.) show
+200 170 moveto () show
+200 155 moveto (The command list for the RDP usually comes directly from the RSP.) show
+200 140 moveto (However, it is possible to feed the RDP pipeline from a command list that) show
+200 125 moveto (has been stored in main memory. See Chapter 13, "RDP Programming") show
+200 110 moveto (for more information on the RDP.) show
+Footer
+showpage
+
+%%Page: 1 45
+globaldict /page 45 put
+200 695 moveto () show
+200 680 moveto () show
+200 665 moveto () show
+200 650 moveto () show
+200 635 moveto () show
+200 620 moveto () show
+200 605 moveto () show
+200 590 moveto () show
+200 575 moveto () show
+200 560 moveto () show
+200 545 moveto () show
+200 530 moveto () show
+200 515 moveto () show
+200 500 moveto () show
+200 485 moveto () show
+200 470 moveto () show
+200 455 moveto () show
+200 440 moveto () show
+200 425 moveto () show
+200 410 moveto () show
+200 395 moveto () show
+200 380 moveto () show
+200 365 moveto () show
+200 350 moveto () show
+200 335 moveto () show
+200 320 moveto () show
+200 305 moveto () show
+200 290 moveto () show
+200 275 moveto () show
+200 260 moveto () show
+200 245 moveto () show
+200 230 moveto () show
+200 215 moveto () show
+200 200 moveto () show
+200 185 moveto () show
+200 170 moveto () show
+Footer
+showpage
+
+%%Page: 1 47
+globaldict /page 47 put
+350 (HARDWARE ARCHITECTURE) Header
+200 695 moveto () show
+200 680 moveto () show
+200 665 moveto () show
+200 650 moveto () show
+200 635 moveto (Nintendo 64 game runs in kernel mode with 32-bit addressing. 64-bit integer) show
+200 620 moveto (operations are available in this mode. However, the 32-bit C calling) show
+200 605 moveto (convention is used to maximize performance.) show
+200 590 moveto () show
+200 575 moveto (For more information on the R4300 and the operating system control of the) show
+200 560 moveto (CPU see the MIPS Microprocessor R4000 User's Manual and Chapter 6,) show
+200 545 moveto ("Operating System Overview".) show
+200 530 moveto () show
+200 515 moveto TitleFont (Memory Issues) show BodyFont
+200 500 moveto () show
+200 485 moveto (The main memory in the system is used in parallel by the R4300 CPU, the) show
+200 470 moveto (RSP microcode engine, the RDP graphics pipeline, and the other I/O) show
+200 455 moveto (interfaces of the RCP. The software is responsible for defining the memory) show
+200 440 moveto (map. See Chapter 9, "Basic Memory Management" for more details.) show
+200 425 moveto () show
+200 410 moveto SubTitleFont (Addressing) show BodyFont
+200 395 moveto () show
+200 380 moveto (The R4300 CPU can use physical or virtual addresses. The TLB maps virtual) show
+200 365 moveto (addresses into physical addresses. It is anticipated that programs will) show
+200 350 moveto (mainly use KSEG0 (cached, unmapped) addresses for instructions and data.) show
+200 335 moveto (The RSP hardware uses physical addresses. The microcode imposes a) show
+200 320 moveto (segmented addressing scheme to generate the physical addresses. Bits 24) show
+200 305 moveto (through 27 of the segmented address are used to index into a 16-entry table) show
+200 290 moveto (to obtain the base address of the segment. The upper 4 bits are masked off.) show
+200 275 moveto () show
+200 260 moveto SubTitleFont (Data Cache) show BodyFont
+200 245 moveto () show
+200 230 moveto (The R4300 CPU has an 8 KB writeback data cache. This means that when the) show
+200 215 moveto (CPU writes a variable, it may not be written to main memory until later.) show
+200 200 moveto (Since the RSP reads the task list directly from main memory, the dynamic) show
+200 185 moveto (portion of the task list must be flushed from the data cache before the RSP) show
+200 170 moveto (starts.) show
+Footer showpage
+
+%%Page: 1 3
+showpage
+
+%%EOF

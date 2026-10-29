@@ -58,6 +58,7 @@ __attribute__((weak, weak_import)) WND* open_msx_window(void);
 __attribute__((weak, weak_import)) WND* open_lilcu64_demo_window(void);
 __attribute__((weak, weak_import)) WND* open_xmb_window(void);
 __attribute__((weak, weak_import)) WND* open_glgears_window(void);
+__attribute__((weak, weak_import)) WND* open_review_window(void);
 /* Cho-Kanji suite */
 __attribute__((weak, weak_import)) WND* open_chokanji_cabinet_window(void);
 __attribute__((weak, weak_import)) WND* open_chokanji_doc_window(void);
@@ -165,7 +166,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
     {
         .title = "アプリ(A)",
         .rect = { 216, 2, 320, 23 },
-        .item_count = 23,
+        .item_count = 24,
         .items = {
             /* General B-System apps */
             { "Editor (文書編集...)",                "Ctrl+E", GMENU_CMD_APP_TEDITOR,    FALSE, FALSE, TRUE },
@@ -175,6 +176,7 @@ static GMenuHeader g_headers[GMENU_HEADER_COUNT] = {
             { "Mail & Chat (対話通信...)",            "",       GMENU_CMD_APP_CHAT,       FALSE, FALSE, TRUE },
             { "DriveSetup (ディスク管理...)",         "",       GMENU_CMD_APP_DRIVESETUP, FALSE, FALSE, TRUE },
             { "電子帳票 (Clarity DTP...)",            "",       GMENU_CMD_APP_CLARITY,    FALSE, FALSE, TRUE },
+            { "校正・閲覧 (Review PDF Reader...)",    "Ctrl+R", GMENU_CMD_APP_REVIEW,     FALSE, FALSE, TRUE },
             { "ペイント (Paint Image Viewer...)",     "",       GMENU_CMD_APP_PAINT,      FALSE, FALSE, TRUE },
             { "MSX ゲーム (B-MSX Emulator...)",      "",       GMENU_CMD_APP_MSX,        FALSE, FALSE, TRUE },
             { "Quake (3D FPS Game...)",              "Ctrl+Q", GMENU_CMD_APP_QUAKE,      FALSE, FALSE, TRUE },
@@ -533,6 +535,9 @@ static void global_menu_execute_cmd(int cmd) {
             break;
         case GMENU_CMD_APP_CLARITY:
             if (open_clarity_window) open_clarity_window();
+            break;
+        case GMENU_CMD_APP_REVIEW:
+            if (open_review_window) open_review_window();
             break;
         case GMENU_CMD_APP_PAINT:
             if (open_paint_window) open_paint_window();

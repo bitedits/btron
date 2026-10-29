@@ -398,6 +398,11 @@ void shell_execute_cmd(const char *cmd_line, ShellOutputFn out_fn, void *user_da
         if (st_cd) snprintf(st_cd->prompt, sizeof(st_cd->prompt) - 1, "[%s]%% ", g_cwd_path);
         return;
     }
+    if (strcmp(cmd, "sps") == 0 || strcmp(cmd, "postscript") == 0 ||
+        strcmp(cmd, "bin/sps") == 0 || strcmp(cmd, "./sps") == 0) {
+        clu_sps(arg, out_fn, user_data);
+        return;
+    }
     if (strcmp(cmd, "quake") == 0 || strcmp(cmd, "bin/quake") == 0 ||
         strcmp(cmd, "./quake") == 0 || strcmp(cmd, "./bin/quake") == 0 ||
         strcmp(cmd, "/SYS/quake") == 0) {

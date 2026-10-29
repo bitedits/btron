@@ -38,6 +38,12 @@ FILE "TAD.md"             MD    doc/md/TAD.md
 FILE "BTRON3_Report.txt"         TXT   assets/texts/BTRON3_Report.txt
 FILE "Heart_Sutra_Tibetan.txt"   TXT   assets/texts/Heart_Sutra_Tibetan.txt
 
+# Secure PostScript & PDF Document Assets
+FILE "sample.ps"                 TXT   doc/ps/sample.ps
+FILE "sample.pdf"                BIN   doc/pdf/sample.pdf
+FILE "n64.ps"                    TXT   doc/ps/n64.ps
+FILE "n64.pdf"                   BIN   doc/pdf/n64.pdf
+
 
 # Clarity Ceremony Assets
 FILE "clarity.png"               PNG   assets/icons/clarity.png

@@ -781,7 +781,9 @@ void v9938_render(v9938_t *v, uint16_t *fb)
             uint32_t line_addr = page_base + eff_y * 256u;
             for (x = 0; x < MSX_SCREEN_W; x++) {
                 uint8_t b = v->vram[(line_addr + x) & (V9938_VRAM_SIZE - 1u)];
-                row[x] = v->pal[b >> 4];
+                uint8_t p0 = (uint8_t)(b >> 4);
+                uint8_t p1 = (uint8_t)(b & 0x0Fu);
+                row[x] = (p0 != bg_idx) ? v->pal[p0] : v->pal[p1];
             }
         }
     } else if (m == 0x10) {

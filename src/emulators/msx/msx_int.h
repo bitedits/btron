@@ -165,6 +165,8 @@ void    kbd_up(uint8_t row, uint8_t col);
 uint8_t kbd_row_bits(uint8_t row);                /* pressed = 0 (active low) */
 uint8_t kbd_joy_pins(uint8_t sel);                /* 0 = socket A, 1 = socket B */
 void    kbd_set_joy(uint8_t bits_a, uint8_t bits_b);
+void    kbd_set_mouse(uint16_t x, uint16_t y, uint8_t buttons);
+uint8_t kbd_mouse_in(uint8_t reg);
 void    kbd_snapshot(uint8_t *out);               /* 16 row bytes          */
 
 /* ---- bus dispatch: one place, §1.3 decode incl. incomplete decode ---- */

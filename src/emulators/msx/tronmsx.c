@@ -303,6 +303,11 @@ void msx_joy_set(uint8_t bits)
     kbd_set_joy(bits, 0u);
 }
 
+void msx_mouse_set(uint16_t x, uint16_t y, uint8_t buttons)
+{
+    kbd_set_mouse(x, y, buttons);
+}
+
 /* ---- audio -------------------------------------------------------------- */
 
 void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out)

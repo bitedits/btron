@@ -113,6 +113,7 @@ void msx_kbd_up(uint8_t row, uint8_t col);
 #define MSX_JOY_TRGB   0x40u
 
 void msx_joy_set(uint8_t bits);
+void msx_mouse_set(uint16_t x, uint16_t y, uint8_t buttons);
 
 void msx_psg_submit_pcm(int16_t *buf, uint32_t *frames_out); /* §5.2, Part 6 */
 

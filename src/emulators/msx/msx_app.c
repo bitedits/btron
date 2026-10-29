@@ -64,7 +64,11 @@ typedef struct {
     int  scale;                /* 0 = fit the screen to the window */
     BOOL paused;
     BOOL running;              /* a core is live and holds a cartridge */
-    uint8_t joy;               /* joystick A level, rebuilt from key events */
+    uint8_t joy;               /* combined joystick A level: joy_keys | joy_mouse */
+    uint8_t joy_keys;          /* joystick bits held by keyboard */
+    uint8_t joy_mouse;         /* joystick bits held by mouse */
+    uint8_t mouse_decay;       /* frame decay timer for mouse impulses */
+    uint8_t mouse_buttons;     /* proportional mouse buttons: bit0=L, bit1=R */
     uint64_t frames;
     int  emu_header;           /* エミュレータ(E), or -1 before the bar exists */
     int  machine_item;         /* status row that names the running machine */
@@ -190,7 +194,9 @@ static uint16_t msx_machine_for(const char *name, size_t size)
         return BMSX_MACHINE_MSX2_CBIOS_JP;
     if (size > 65536u ||
         (name && (strstr(name, "BULLRUSH") || strstr(name, "NEON") ||
-                  strstr(name, "NIGHT"))))
+                  strstr(name, "NIGHT") || strstr(name, "btron") ||
+                  strstr(name, "BTRON") || strstr(name, "bmsx") ||
+                  strstr(name, "BMSX"))))
         return BMSX_MACHINE_MSXTR_CBIOS;
     return BMSX_MACHINE_MSX;
 }
@@ -322,6 +328,9 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     st->paused  = FALSE;
     st->running = TRUE;
     st->joy     = 0u;
+    st->joy_keys = 0u;
+    st->joy_mouse = 0u;
+    st->mouse_decay = 0u;
     st->frames  = 0;
     msx_joy_set(0u);
     return TRUE;
@@ -422,6 +431,9 @@ static BOOL msx_load(MsxViewer *st, const char *name)
     st->paused  = FALSE;
     st->running = TRUE;
     st->joy     = 0u;
+    st->joy_keys = 0u;
+    st->joy_mouse = 0u;
+    st->mouse_decay = 0u;
     st->frames  = 0;
     msx_joy_set(0u);
     return TRUE;
@@ -657,6 +669,14 @@ static void msx_view(WND *wnd, GDEV *dev)
      * frame, because nothing else would ever ask for one. */
     if (st->running && !st->paused && (s_frame_due || s_tsk <= 0)) {
         s_frame_due = FALSE;
+        if (st->mouse_decay > 0) {
+            st->mouse_decay--;
+            if (st->mouse_decay == 0) {
+                st->joy_mouse &= (uint8_t)~(MSX_JOY_UP | MSX_JOY_DOWN | MSX_JOY_LEFT | MSX_JOY_RIGHT);
+                st->joy = st->joy_keys | st->joy_mouse;
+                msx_joy_set(st->joy);
+            }
+        }
         msx_run_frame();
         msx_host_pump_audio(1);
         msx_blit_rgb565(s_fb);
@@ -695,6 +715,9 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
                 msx_host_ac_reset();
                 st->frames = 0;
                 st->joy = 0u;
+                st->joy_keys = 0u;
+                st->joy_mouse = 0u;
+                st->mouse_decay = 0u;
                 msx_joy_set(0u);
             }
             break;
@@ -754,17 +777,24 @@ static const MsxKeyMap s_keymap[] = {
     { BTRON_KEY_DOWN,      MSX_JOY_DOWN,  MSX_KEY_DOWN_R,  MSX_KEY_DOWN_C },
     { BTRON_KEY_LEFT,      MSX_JOY_LEFT,  MSX_KEY_LEFT_R,  MSX_KEY_LEFT_C },
     { BTRON_KEY_RIGHT,     MSX_JOY_RIGHT, MSX_KEY_RIGHT_R, MSX_KEY_RIGHT_C },
-    { BTRON_KEY_SPACE,     MSX_JOY_TRGA,  MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
-    { ' ',                 MSX_JOY_TRGA,  MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
+    { BTRON_KEY_SPACE,     0u,            MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
+    { ' ',                 0u,            MSX_KEY_SPACE_R, MSX_KEY_SPACE_C },
     { 'z',                 MSX_JOY_TRGA,  5u, 7u },
     { 'Z',                 MSX_JOY_TRGA,  5u, 7u },
     { 'x',                 MSX_JOY_TRGB,  5u, 5u },
     { 'X',                 MSX_JOY_TRGB,  5u, 5u },
     { BTRON_KEY_RETURN,    0u, MSX_KEY_ENTER_R,  MSX_KEY_ENTER_C },
+    { '\r',                0u, MSX_KEY_ENTER_R,  MSX_KEY_ENTER_C },
+    { '\n',                0u, MSX_KEY_ENTER_R,  MSX_KEY_ENTER_C },
+    { BTRON_KEY_KP_ENTER,  0u, MSX_KEY_ENTER_R,  MSX_KEY_ENTER_C },
     { BTRON_KEY_BACKSPACE, 0u, MSX_KEY_BS_R,     MSX_KEY_BS_C },
+    { 0x08,                0u, MSX_KEY_BS_R,     MSX_KEY_BS_C },
     { BTRON_KEY_TAB,       0u, MSX_KEY_TAB_R,    MSX_KEY_TAB_C },
+    { '\t',                0u, MSX_KEY_TAB_R,    MSX_KEY_TAB_C },
     { BTRON_KEY_ESCAPE,    0u, MSX_KEY_ESC_R,    MSX_KEY_ESC_C },
+    { 27,                  0u, MSX_KEY_ESC_R,    MSX_KEY_ESC_C },
     { BTRON_KEY_DELETE,    0u, MSX_KEY_DEL_R,    MSX_KEY_DEL_C },
+    { 127,                 0u, MSX_KEY_DEL_R,    MSX_KEY_DEL_C },
     { BTRON_KEY_HOME,      0u, MSX_KEY_HOME_R,   MSX_KEY_HOME_C },
     { BTRON_KEY_F1,        0u, MSX_KEY_F1_R,     MSX_KEY_F1_C },
     { BTRON_KEY_F3,        0u, MSX_KEY_F3_R,     MSX_KEY_F3_C },
@@ -785,7 +815,7 @@ static void msx_key(MsxViewer *st, UW key, BOOL down)
     if (down && dsk_menu_active()) {
         if (key == BTRON_KEY_UP) { dsk_menu_key(0); return; }
         if (key == BTRON_KEY_DOWN) { dsk_menu_key(1); return; }
-        if (key == BTRON_KEY_RETURN) { dsk_menu_key(2); return; }
+        if (key == BTRON_KEY_RETURN || key == '\r' || key == '\n') { dsk_menu_key(2); return; }
     }
 
     /* F2 belongs to the menu bar (app_menu_handle_key), so the MSX F2 cell is
@@ -793,8 +823,9 @@ static void msx_key(MsxViewer *st, UW key, BOOL down)
     for (size_t i = 0; i < sizeof(s_keymap) / sizeof(s_keymap[0]); i++) {
         if (s_keymap[i].key != key) continue;
         if (s_keymap[i].joy) {
-            if (down) st->joy |= s_keymap[i].joy;
-            else      st->joy &= (uint8_t)~s_keymap[i].joy;
+            if (down) st->joy_keys |= s_keymap[i].joy;
+            else      st->joy_keys &= (uint8_t)~s_keymap[i].joy;
+            st->joy = st->joy_keys | st->joy_mouse;
             msx_joy_set(st->joy);
         }
         if (s_keymap[i].row != 0xFFu) {
@@ -812,6 +843,27 @@ static void msx_key(MsxViewer *st, UW key, BOOL down)
 
 /* ── Events ──────────────────────────────────────────────────────────────── */
 
+static void msx_update_host_mouse(WND *wnd, MsxViewer *st, H rel_x, H rel_y)
+{
+    MsxView v;
+    int scr_w, scr_h, mx, my;
+
+    if (!wnd || !wnd->dev || !st->running) return;
+    msx_compute_view(wnd->dev, &v);
+    scr_w = (int)MSX_SCR_W * v.scale;
+    scr_h = (int)MSX_SCR_H * v.scale;
+    if (scr_w <= 0 || scr_h <= 0) return;
+
+    mx = ((int)rel_x - v.x) * 512 / scr_w;
+    my = ((int)rel_y - v.y) * 212 / scr_h;
+    if (mx < 0) mx = 0;
+    if (mx > 511) mx = 511;
+    if (my < 0) my = 0;
+    if (my > 211) my = 211;
+
+    msx_mouse_set((uint16_t)mx, (uint16_t)my, st->mouse_buttons);
+}
+
 static void msx_handle_event(WND *wnd, const EVT *evt)
 {
     MsxViewer *st = &s_msx;
@@ -822,7 +874,13 @@ static void msx_handle_event(WND *wnd, const EVT *evt)
     rel_y = (H)(evt->pos.y - (wnd->bounds.top + 26));
 
     if (evt->type == EV_MOUSE_MOVE) {
-        if (app_menu_handle_mouse_move(&st->menu_bar, rel_x, rel_y)) inval_wnd(wnd);
+        if (app_menu_handle_mouse_move(&st->menu_bar, rel_x, rel_y)) {
+            inval_wnd(wnd);
+            return;
+        }
+        if (st->running && rel_y >= MSX_MENU_H) {
+            msx_update_host_mouse(wnd, st, rel_x, rel_y);
+        }
         return;
     }
 
@@ -837,6 +895,25 @@ static void msx_handle_event(WND *wnd, const EVT *evt)
             app_menu_close(&st->menu_bar);
             inval_wnd(wnd);
             return;
+        }
+        /* Click inside running emulator forwards proportional mouse + Trigger A */
+        if (st->running) {
+            st->mouse_buttons |= 0x01u;
+            msx_update_host_mouse(wnd, st, rel_x, rel_y);
+            st->joy_mouse |= MSX_JOY_TRGA;
+            st->joy = st->joy_keys | st->joy_mouse;
+            msx_joy_set(st->joy);
+        }
+        return;
+    }
+
+    if (evt->type == EV_BUT_UP) {
+        if (st->running) {
+            st->mouse_buttons &= (uint8_t)~0x01u;
+            msx_update_host_mouse(wnd, st, rel_x, rel_y);
+            st->joy_mouse &= (uint8_t)~MSX_JOY_TRGA;
+            st->joy = st->joy_keys | st->joy_mouse;
+            msx_joy_set(st->joy);
         }
         return;
     }

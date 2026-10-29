@@ -26,6 +26,12 @@ static uint8_t s_matrix[MSX_INPUT_ROWS];
 /* Pressed-level bits per socket in the MSX_JOY_* layout of tronmsx.h. */
 static uint8_t s_joy[2];
 
+/* Proportional host mouse state in Screen 7 space (512x212). */
+static uint16_t s_mouse_x = 256u;
+static uint8_t  s_mouse_y = 106u;
+static uint8_t  s_mouse_buttons = 0u;
+static uint8_t  s_mouse_active = 0u;
+
 void kbd_init(void)
 {
     kbd_reset();
@@ -36,6 +42,10 @@ void kbd_reset(void)
     memset(s_matrix, 0xFF, sizeof(s_matrix));   /* nothing pressed at power-up */
     s_joy[0] = 0u;
     s_joy[1] = 0u;
+    s_mouse_x = 256u;
+    s_mouse_y = 106u;
+    s_mouse_buttons = 0u;
+    s_mouse_active = 0u;
 }
 
 void kbd_down(uint8_t row, uint8_t col)
@@ -59,6 +69,29 @@ void kbd_set_joy(uint8_t bits_a, uint8_t bits_b)
 {
     s_joy[0] = bits_a;
     s_joy[1] = bits_b;
+}
+
+void kbd_set_mouse(uint16_t x, uint16_t y, uint8_t buttons)
+{
+    if (x > 511u) x = 511u;
+    if (y > 211u) y = 211u;
+    s_mouse_x = x;
+    s_mouse_y = (uint8_t)y;
+    s_mouse_buttons = (uint8_t)(buttons & 0x03u);
+    s_mouse_active = 1u;
+}
+
+uint8_t kbd_mouse_in(uint8_t reg)
+{
+    if (!s_mouse_active) return 0xFFu;
+    switch (reg) {
+    case 0: return (uint8_t)(s_mouse_x & 0xFFu);
+    case 1: return (uint8_t)(((s_mouse_x >> 8) & 0x01u) |
+                             ((s_mouse_buttons & 0x03u) << 1) |
+                             0x80u);
+    case 2: return s_mouse_y;
+    default: return 0xFFu;
+    }
 }
 
 uint8_t kbd_joy_pins(uint8_t sel)

@@ -751,6 +751,7 @@ uint8_t msx_bus_in(uint8_t port)
     uint8_t reg;
 
     if (is_hd64180() && hd64180_is_internal_io(port)) return hd64180_io_read(port);
+    if (port >= 0x2Cu && port <= 0x2Eu) return kbd_mouse_in((uint8_t)(port - 0x2Cu));
     if (port >= 0x88u && port <= 0x8Bu) return vdp_read(port);
     if (port >= 0x98u && port <= 0x9Bu) return vdp_read(port);
     if (port == 0x8Du || port == 0x9Du || port == 0x8Fu || port == 0x9Fu) {

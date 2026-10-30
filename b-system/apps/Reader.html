@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reader – PDF・文書閲覧 | B-System Specification</title>
+  <meta name="description" content="Reader（PDF・文書閲覧）は、B-Systemの仕様に準拠したC99実装アプリケーション。ベクトルPDF、PostScript変換文書の高速表示およびTAD付箋注釈アプレット。">
+  <link rel="stylesheet" href="../../index.css">
+  <link rel="stylesheet" href="../settings/settings.css">
+  <link rel="stylesheet" href="./apps.css">
+</head>
+<body>
+  <nav class="sticky" aria-label="Site navigation">
+    <div class="nav-container">
+        <ul class="nav-links">
+                <li><a href="../../b-media/index.html">B-Media</a></li>
+                <li><a href="../../index.html">B-System</a></li>
+                <li><a href="../../b-book/index.html">B-Book</a></li>
+                <li><a href="../../conformance.html">B-Spec</a></li>
+                <li><a href="../../virtio.html">VirtIO</a></li>
+                <li><a href="../../mobile.html">FOMA</a></li>
+                <li><a href="../../releases.html">Releases</a></li>
+                <li><a href="https://github.com/bitedits/btron">GitHub</a></li>
+        </ul>
+    </div>
+  </nav>
+
+  <nav class="setting-nav">
+    <a href="../../index.html">B-System</a>
+    <span class="sep">/</span>
+    <a href="../../index.html#apps-section">Applications</a>
+    <span class="sep">/</span>
+    <span class="current">Reader</span>
+  </nav>
+
+  <div class="setting-hero">
+    <div class="setting-hero-icon"><img src="https://openmoji.org/data/color/svg/1F4D6.svg" alt="📖" width="64" height="64"></div>
+    <h1>PDF閲覧・校正 (Reader / Review)</h1>
+    <div class="setting-hero-badge">ベクトルPDF閲覧 · PostScript変換 · TAD付箋注釈 · BTRON3 3.20 準拠 · C99 実装</div>
+    <div class="subtitle">Reader アプリケーションの機能仕様および内部構造<br><span style="font-size:0.9em; opacity:0.85;">"High-fidelity vector PDF reader, marginalia annotation, and PostScript presentation engine."</span></div>
+  </div>
+
+  <div class="setting-content">
+    <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
+
+    <div class="tagline-card">
+      <strong>PDF閲覧（Reader）</strong> — B-System native PDF application with vector Display Primitives (DP) rasterization, Forth-based PostScript transpilation, and two-way TAD Fusen (付箋) annotation embedding.<br>
+      <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
+        "Official technical specification for the Reader application within the B-System operating environment (see doc/txt/DPS.txt for full engine architecture)."
+      </span>
+    </div>
+
+    <!-- 画面プレビュー -->
+    <div class="section">
+      <h2>画面プレビュー (Screen Preview)</h2>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_Application.png" alt="PDF閲覧・校正 (Reader / Review Application - Native Headless GDEV Capture)">
+        <p>実機描画フレームバッファより自動抽出されたPDF閲覧・校正ウィンドウ (ベクトルPDFレンダリング・TAD付箋注釈・マージナリア欄・水平/垂直スクロールバー)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_Menu_Opened.png" alt="PDF閲覧・校正 – メニュー展開 (Reader / Review Menu Opened)">
+        <p>実機描画フレームバッファより自動抽出されたインアップメニュー展開画面 (ファイルメニュー: 開く・増分保存・BibTeX引用出力・閉じる)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_About.png" alt="PDF閲覧・校正 バージョン情報 (About Reader / Review)">
+        <p>実機描画フレームバッファより自動抽出されたNano About Boxダイアログ (Secure PostScript &amp; ISO 32000 Engine)</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>概要 (Overview)</h2>
+      <p>
+        PDF閲覧（Reader）は、B-Systemの仕様に準拠したC99クリーンルーム実装アプリケーションです。
+        PostScriptファイル（<code>doc/ps/n64.ps</code> 等）から生成されたPDF文書および学術論文PDFを高精細ベクトル描画し、
+        余白へのTAD付箋注釈（Fusen）の埋め込み、およびISO 32000準拠の非破壊インクリメンタル更新書き戻しを提供します。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"High-fidelity vector PDF viewing with marginalia pin annotations, citation generation, and incremental PDF save."</span>
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>1. メニュー構造と操作体系 (Menu Architecture &amp; Operations)</h2>
+      <p>
+        Reader / Review が提供する標準メニューバー構造および操作体系の仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Standard menu bar hierarchy and interactive command bindings."</span>
+      </p>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>メニュー項目</th>
+            <th>機能説明 (Functional Description)</th>
+            <th>技術仕様・C99実装 (C99 Architecture)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>実身 (File)</b></td>
+            <td>開く（Ctrl+O）、保存（Ctrl+S）、印刷（Ctrl+P）、閉じる（Ctrl+W）</td>
+            <td><code>src/apps/pdf_reader.c</code>, <code>src/apps/review.c</code></td>
+          </tr>
+          <tr>
+            <td><b>編集 (Edit)</b></td>
+            <td>文字列選択、図形領域コピー、引用出力（Ctrl+C）</td>
+            <td><code>pdf_tad_anno_export_citation</code></td>
+          </tr>
+          <tr>
+            <td><b>表示 (View)</b></td>
+            <td>等倍（Ctrl+1）、幅に合わせる（Ctrl+F）、拡大（+）、縮小（-）、次頁（PageDown）、前頁（PageUp）</td>
+            <td><code>pdf_reader_render_page</code></td>
+          </tr>
+          <tr>
+            <td><b>校正 (Review)</b></td>
+            <td>付箋注釈ピン配置（Ctrl+N）、蛍光ペン強調（Ctrl+H）、抹消線</td>
+            <td><code>review_add_annotation</code> / <code>RT_MFUSEN</code></td>
+          </tr>
+          <tr>
+            <td><b>案内 (Help)</b></td>
+            <td>バージョン情報（Nano About Box 420×170px）</td>
+            <td><code>app_menu_create_about_dialog</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>2. 機能仕様とアーキテクチャ (Functional &amp; Architecture Specifications)</h2>
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th>コンポーネント・機能名</th>
+            <th>動作概要と機能仕様 (Functional Specification)</th>
+            <th>技術仕様・参照 (Architecture Reference)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Secure PostScriptエンジン</b></td>
+            <td>Forthスタックマシンによる安全なPS Level 2インタプリタおよびPDFトランスパイラ（動的実行・JS/XFA排除）。</td>
+            <td><code>sps</code> CLU, <code>doc/txt/DPS.txt §1-§3</code></td>
+          </tr>
+          <tr>
+            <td><b>ベクトル描画器</b></td>
+            <td>PDFオペレータ（m, l, c, re, S, f, Tj）をBTRON Display Primitives（DP）へ直結。</td>
+            <td><code>btron/dp.h</code>, <code>doc/txt/DPS.txt §6</code></td>
+          </tr>
+          <tr>
+            <td><b>付箋注釈統合</b></td>
+            <td>TAD実身・仮身モデルに基づく付箋注釈（<code>RT_MFUSEN</code>）とPDF <code>/Annots</code> 更新。</td>
+            <td><code>src/fs/</code>, <code>doc/txt/DPS.txt §7</code></td>
+          </tr>
+          <tr>
+            <td><b>インクリメンタル更新</b></td>
+            <td>元PDFバイナリを変更せず、末尾に新規注釈オブジェクトと差分xrefを追記。</td>
+            <td>ISO 32000-1 Incremental Update</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>関連コンポーネント (Related Components)</h2>
+      <div class="related-apps">
+        <a href="Review.html">🔍 差分校正 (Review)</a>
+        <a href="Browser.html">🌐 TADブラウザ (Browser)</a>
+        <a href="Editor.html">✍️ 文書編集 (Editor)</a>
+        <a href="Cabinet.html">📁 キャビネット (Cabinet)</a>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div class="app-footer-top">
+      <a href="../../index.html">← B-System</a>
+      <span class="site-name">Applications</span>
+    </div>
+    <div class="app-footer-bottom">B-System &nbsp;·&nbsp; Synrc VE OS.1 &nbsp;·&nbsp; Technical Specification</div>
+  </footer>
+</body>
+</html>
+

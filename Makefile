@@ -3345,7 +3345,18 @@ $(TEST_MSX_AUDIO_BIN): $(TEST_MSX_AUDIO_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_MSX_AUDIO_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-review test-drivesetup test-fs test-hd64180 test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
+TEST_AUREL_VAULT_SRCS = verify/tests/test_aurel_vault.c $(MSX_SRCS)
+TEST_AUREL_VAULT_OBJS = $(TEST_AUREL_VAULT_SRCS:.c=.test.o)
+TEST_AUREL_VAULT_BIN  = ./.build/test_aurel_vault
+
+test-aurel-vault: $(TEST_AUREL_VAULT_BIN)
+	@./$(TEST_AUREL_VAULT_BIN)
+
+$(TEST_AUREL_VAULT_BIN): $(TEST_AUREL_VAULT_OBJS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_AUREL_VAULT_OBJS) -o $@ $(LDFLAGS)
+
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-review test-drivesetup test-fs test-hd64180 test-aurel-vault test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

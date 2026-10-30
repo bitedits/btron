@@ -101,16 +101,20 @@ void msx_blit_rgb565(uint16_t *fb);       /* 256x212, caller-owned   */
 void msx_kbd_down(uint8_t row, uint8_t col);
 void msx_kbd_up(uint8_t row, uint8_t col);
 
-/* Joystick socket A pin levels, as the BIOS reads them on the PSG's port A
- * input (2.5): TRGA bit0, up/down/left/right bits 1..4, TRGB bit6; port-B
- * steering is latched under TRGB.  Level, not edge.
- * The same bits are what a caller hands to msx_joy_set() below. */
-#define MSX_JOY_TRGA   0x01u
-#define MSX_JOY_UP     0x02u
-#define MSX_JOY_DOWN   0x04u
-#define MSX_JOY_LEFT   0x08u
-#define MSX_JOY_RIGHT  0x10u
-#define MSX_JOY_TRGB   0x40u
+/* Joystick socket pin levels matching the MSX hardware PSG port A (reg 14) layout:
+ *   bit 0: Up
+ *   bit 1: Down
+ *   bit 2: Left
+ *   bit 3: Right
+ *   bit 4: Trigger A
+ *   bit 5: Trigger B
+ * Level, not edge. Idle = 0, pressed = 1 passed to msx_joy_set(). */
+#define MSX_JOY_UP     0x01u
+#define MSX_JOY_DOWN   0x02u
+#define MSX_JOY_LEFT   0x04u
+#define MSX_JOY_RIGHT  0x08u
+#define MSX_JOY_TRGA   0x10u
+#define MSX_JOY_TRGB   0x20u
 
 void msx_joy_set(uint8_t bits);
 void msx_mouse_set(uint16_t x, uint16_t y, uint8_t buttons);

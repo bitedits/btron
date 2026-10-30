@@ -48,8 +48,17 @@ typedef enum {
     XCMD_VIEW_2X,
     XCMD_VIEW_3X,
     XCMD_VIEW_4X,
+    XCMD_INPUT_KBD_MODE,
+    XCMD_INPUT_JOY_MODE,
+    XCMD_INPUT_DUAL_MODE,
     XCMD_HELP_ABOUT
 } MSX_CMD;
+
+typedef enum {
+    MSX_INPUT_KBD_PRIORITY = 0, /* Arrows & keys drive MSX keyboard matrix (authentic) */
+    MSX_INPUT_JOY_PRIORITY = 1, /* Arrows & Z/X drive MSX Joypad port 1 only */
+    MSX_INPUT_DUAL         = 2  /* Arrows & Z/X drive both simultaneously */
+} MsxInputMode;
 
 typedef struct {
     APP_MENU_BAR menu_bar;
@@ -64,6 +73,7 @@ typedef struct {
     int  scale;                /* 0 = fit the screen to the window */
     BOOL paused;
     BOOL running;              /* a core is live and holds a cartridge */
+    MsxInputMode input_mode;
     uint8_t joy;               /* combined joystick A level: joy_keys | joy_mouse */
     uint8_t joy_keys;          /* joystick bits held by keyboard */
     uint8_t joy_mouse;         /* joystick bits held by mouse */
@@ -72,6 +82,10 @@ typedef struct {
     uint64_t frames;
     int  emu_header;           /* エミュレータ(E), or -1 before the bar exists */
     int  machine_item;         /* status row that names the running machine */
+    int  input_header;         /* 入力(I), or -1 before the bar exists */
+    int  input_kbd_item;
+    int  input_joy_item;
+    int  input_dual_item;
 } MsxViewer;
 
 static MsxViewer   s_msx;
@@ -484,6 +498,10 @@ static void msx_init_menu_bar(MsxViewer *st)
     app_menu_init(&st->menu_bar, APP_MENU_STYLE_CLASSIC_3D);
     st->emu_header = -1;
     st->machine_item = -1;
+    st->input_header = -1;
+    st->input_kbd_item = -1;
+    st->input_joy_item = -1;
+    st->input_dual_item = -1;
 
     int h0 = app_menu_add_header(&st->menu_bar, "ファイル(F)", 104);
     app_menu_add_submenu_item(&st->menu_bar, h0, "ROM カセット ▶",
@@ -513,8 +531,20 @@ static void msx_init_menu_bar(MsxViewer *st)
     app_menu_add_item(&st->menu_bar, h2, "3x 768x636", "", XCMD_VIEW_3X, TRUE);
     app_menu_add_item(&st->menu_bar, h2, "4x 1024x848", "", XCMD_VIEW_4X, TRUE);
 
-    int h3 = app_menu_add_header(&st->menu_bar, "ヘルプ(H)", 88);
-    app_menu_add_item(&st->menu_bar, h3, "B-MSX について (About)",
+    int h3 = app_menu_add_header(&st->menu_bar, "入力(I)", 88);
+    st->input_header = h3;
+    st->input_kbd_item = app_menu_add_item(&st->menu_bar, h3,
+                                           "(*) キーボード優先 (Keyboard)",
+                                           "", XCMD_INPUT_KBD_MODE, TRUE);
+    st->input_joy_item = app_menu_add_item(&st->menu_bar, h3,
+                                           "( ) ジョイスティック (Joypad 1)",
+                                           "", XCMD_INPUT_JOY_MODE, TRUE);
+    st->input_dual_item = app_menu_add_item(&st->menu_bar, h3,
+                                            "( ) 両方 (Dual Matrix+Joy)",
+                                            "", XCMD_INPUT_DUAL_MODE, TRUE);
+
+    int h4 = app_menu_add_header(&st->menu_bar, "ヘルプ(H)", 88);
+    app_menu_add_item(&st->menu_bar, h4, "B-MSX について (About)",
                       "", XCMD_HELP_ABOUT, TRUE);
 }
 
@@ -529,6 +559,28 @@ static void msx_sync_menu_state(MsxViewer *st)
             snprintf(hdr->items[st->machine_item].label,
                      sizeof(hdr->items[st->machine_item].label), "%s",
                      msx_machine_label(msx_get_machine()));
+        }
+    }
+
+    if (st->input_header >= 0 && st->input_header < st->menu_bar.header_count) {
+        APP_MENU_HEADER *hdr = &st->menu_bar.headers[st->input_header];
+        if (st->input_kbd_item >= 0 && st->input_kbd_item < hdr->item_count) {
+            snprintf(hdr->items[st->input_kbd_item].label,
+                     sizeof(hdr->items[st->input_kbd_item].label),
+                     "%s キーボード優先 (Keyboard)",
+                     st->input_mode == MSX_INPUT_KBD_PRIORITY ? "(*)" : "( )");
+        }
+        if (st->input_joy_item >= 0 && st->input_joy_item < hdr->item_count) {
+            snprintf(hdr->items[st->input_joy_item].label,
+                     sizeof(hdr->items[st->input_joy_item].label),
+                     "%s ジョイスティック (Joypad 1)",
+                     st->input_mode == MSX_INPUT_JOY_PRIORITY ? "(*)" : "( )");
+        }
+        if (st->input_dual_item >= 0 && st->input_dual_item < hdr->item_count) {
+            snprintf(hdr->items[st->input_dual_item].label,
+                     sizeof(hdr->items[st->input_dual_item].label),
+                     "%s 両方 (Dual Matrix+Joy)",
+                     st->input_mode == MSX_INPUT_DUAL ? "(*)" : "( )");
         }
     }
 
@@ -635,13 +687,19 @@ static void msx_draw_status(const MsxViewer *st, GDEV *dev)
         snprintf(msg, sizeof(msg),
                  "B-MSX | %s | ディスク | Up Down Enter",
                  msx_basename(st->path));
-    else if (st->running)
+    else if (st->running) {
+        const char *mode_str = (st->input_mode == MSX_INPUT_KBD_PRIORITY)
+            ? "矢印/Z/X=キーボード (F2=面再開)"
+            : (st->input_mode == MSX_INPUT_JOY_PRIORITY)
+            ? "矢印=ジョイスティックA  Z=ボタンA  X=ボタンB"
+            : "両方 (Dual Matrix+Joy)";
         snprintf(msg, sizeof(msg),
-                 "B-MSX | %s | T=%llu T-states | %s | 矢印=ジョイスティックA"
-                 "  Z=ボタンA  X=ボタンB",
+                 "B-MSX | %s | T=%llu T-states | %s | %s",
                  msx_basename(st->path),
                  (unsigned long long)msx_total_cycles(),
-                 st->paused ? "一時停止" : "実行中");
+                 st->paused ? "一時停止" : "実行中",
+                 mode_str);
+    }
     else
         snprintf(msg, sizeof(msg), "%s | ROM 未装填 (%d 本発見)",
                  msx_version_string(), st->rom_count);
@@ -751,6 +809,19 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
         case XCMD_VIEW_2X:  st->scale = 2; break;
         case XCMD_VIEW_3X:  st->scale = 3; break;
         case XCMD_VIEW_4X:  st->scale = 4; break;
+        case XCMD_INPUT_KBD_MODE:
+            st->input_mode = MSX_INPUT_KBD_PRIORITY;
+            st->joy_keys = 0u;
+            st->joy = st->joy_keys | st->joy_mouse;
+            msx_joy_set(st->joy);
+            break;
+        case XCMD_INPUT_JOY_MODE:
+            st->input_mode = MSX_INPUT_JOY_PRIORITY;
+            kbd_reset();
+            break;
+        case XCMD_INPUT_DUAL_MODE:
+            st->input_mode = MSX_INPUT_DUAL;
+            break;
         case XCMD_HELP_ABOUT:
             app_menu_create_about_dialog("B-MSX", "エムエスエックス",
                                          "tronMSX clean-room MSX1 emulator core",
@@ -797,6 +868,7 @@ static const MsxKeyMap s_keymap[] = {
     { 127,                 0u, MSX_KEY_DEL_R,    MSX_KEY_DEL_C },
     { BTRON_KEY_HOME,      0u, MSX_KEY_HOME_R,   MSX_KEY_HOME_C },
     { BTRON_KEY_F1,        0u, MSX_KEY_F1_R,     MSX_KEY_F1_C },
+    { BTRON_KEY_F2,        0u, MSX_KEY_F2_R,     MSX_KEY_F2_C },
     { BTRON_KEY_F3,        0u, MSX_KEY_F3_R,     MSX_KEY_F3_C },
     { BTRON_KEY_F4,        0u, MSX_KEY_F4_R,     MSX_KEY_F4_C },
     { BTRON_KEY_F5,        0u, MSX_KEY_F5_R,     MSX_KEY_F5_C },
@@ -818,17 +890,24 @@ static void msx_key(MsxViewer *st, UW key, BOOL down)
         if (key == BTRON_KEY_RETURN || key == '\r' || key == '\n') { dsk_menu_key(2); return; }
     }
 
-    /* F2 belongs to the menu bar (app_menu_handle_key), so the MSX F2 cell is
-     * not reachable and stays out of the table. */
     for (size_t i = 0; i < sizeof(s_keymap) / sizeof(s_keymap[0]); i++) {
         if (s_keymap[i].key != key) continue;
-        if (s_keymap[i].joy) {
+
+        /* In Joypad or Dual mode, keys with a joypad mapping drive Joypad Port 1 */
+        if (s_keymap[i].joy && (st->input_mode == MSX_INPUT_JOY_PRIORITY ||
+                                st->input_mode == MSX_INPUT_DUAL)) {
             if (down) st->joy_keys |= s_keymap[i].joy;
             else      st->joy_keys &= (uint8_t)~s_keymap[i].joy;
             st->joy = st->joy_keys | st->joy_mouse;
             msx_joy_set(st->joy);
         }
-        if (s_keymap[i].row != 0xFFu) {
+
+        /* In Keyboard or Dual mode, keys assert MSX keyboard matrix.
+         * For keys without a joypad assignment (e.g. F1-F5, Enter, Esc), always assert matrix. */
+        BOOL assert_matrix = (st->input_mode == MSX_INPUT_KBD_PRIORITY ||
+                              st->input_mode == MSX_INPUT_DUAL ||
+                              !s_keymap[i].joy);
+        if (assert_matrix && s_keymap[i].row != 0xFFu) {
             if (down) msx_kbd_down(s_keymap[i].row, s_keymap[i].col);
             else      msx_kbd_up(s_keymap[i].row, s_keymap[i].col);
         }
@@ -920,6 +999,12 @@ static void msx_handle_event(WND *wnd, const EVT *evt)
 
     if (evt->type == EV_KEY_DOWN) {
         int cmd = 0;
+        /* When running and dropdown is closed, route F2 directly to MSX matrix */
+        if (st->running && st->menu_bar.active_menu < 0 &&
+            (evt->key == BTRON_KEY_F2 || evt->key == 0x4000003Bu)) {
+            msx_key(st, evt->key, TRUE);
+            return;
+        }
         if (app_menu_handle_key(&st->menu_bar, evt->key,
                                 (uint16_t)(uintptr_t)evt->data, &cmd)) {
             msx_apply_cmd(wnd, st, cmd, -1);

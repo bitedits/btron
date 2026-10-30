@@ -887,6 +887,7 @@ wrslt:
                 call    m, select_subslot
                 pop     bc              ; B = slot ID, C = data to write
                 pop     hl
+                push    hl              ; preserve HL across restore_subslot
                 push    de              ; D = slot ID, E = saved SSL
 
                 push    hl
@@ -917,6 +918,7 @@ wrslt:
                 pop     de              ; D = slot ID, E = saved SSL
                 bit     7, d
                 call    nz, restore_subslot
+                pop     hl
                 ret
 
 ; ------------------------------------------------------------------------------

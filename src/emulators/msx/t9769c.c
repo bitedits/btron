@@ -190,7 +190,7 @@ void t9769c_write(t9769c_t *t, uint8_t port, uint8_t val)
     case 0xE5:
         if (t->s1990_reg == 6) {
             t->cpu_status = (uint8_t)(val & 0x60u);
-            fprintf(stderr, ">>> S1990 CPU SWITCH: cpu_status=0x%02X (is_r800=%d)\n", t->cpu_status, t9769c_is_r800(t));
+            /* CPU status switch */
         }
         break;
     case 0xE6:

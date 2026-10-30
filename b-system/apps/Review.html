@@ -44,10 +44,27 @@
     <a href="../../index.html#apps-section" class="back-link">← アプリケーション一覧 (Applications Index)</a>
 
     <div class="tagline-card">
-      <strong>差分校正（Review）</strong> — 差分校正（Review）は、B-Systemの仕様に準拠したC99実装アプリケーション。TAD実身バイナリおよびソースコードの視覚的差分比較・校正アプレット。<br>
+      <strong>差分校正（Review）</strong> — B-Systemネイティブの科学的PDF閲覧・査読ワークスペース・TAD引用注釈エンジン。Display Primitives (DP) によるベクトル描画、非破壊インクリメンタルPDF保存、BibTeX引用出力、およびマージナリア付箋（Fusen）注釈に対応。<br>
       <span style="display:block; margin-top:0.45rem; font-size:0.88rem; color:#6b4f7e;">
-        "Official technical specification for the Review application within the B-System operating environment."
+        "Official technical specification for the Review application within the B-System operating environment (see doc/txt/DPS.txt for full engine architecture)."
       </span>
+    </div>
+
+    <!-- 画面プレビュー -->
+    <div class="section">
+      <h2>画面プレビュー (Screen Preview)</h2>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_Application.png" alt="差分校正・閲覧 Review PDF Application (Native Headless GDEV Capture)">
+        <p>実機描画フレームバッファより自動抽出された差分校正・閲覧ウィンドウ (ベクトルPDFレンダリング・TAD付箋注釈・マージナリア欄・水平/垂直スクロールバー・ステータス表示)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_Menu_Opened.png" alt="差分校正・閲覧 – ファイルメニュー展開 (Review File Menu Opened)">
+        <p>実機描画フレームバッファより自動抽出されたインアップメニュー展開画面 (ファイルメニュー: 開く・増分保存・BibTeX引用出力・閉じる)</p>
+      </div>
+      <div class="screen-preview">
+        <img src="../img/screens/Review_About.png" alt="差分校正・閲覧 バージョン情報 (About Review)">
+        <p>実機描画フレームバッファより自動抽出されたNano About Boxダイアログ (Secure PostScript &amp; ISO 32000 Engine)</p>
+      </div>
     </div>
 
     <div class="section">
@@ -61,37 +78,120 @@
     <div class="section">
       <h2>1. メニュー構造と操作体系 (Menu Architecture &amp; Operations)</h2>
       <p>
-        Review が提供する標準メニューバー構造および操作体系の仕様。<br>
-        <span style="font-size:0.9em; opacity:0.85;">"Standard menu bar hierarchy and interactive command bindings."</span>
+        Review が提供する標準メニューバー構造（<code>APP_MENU_BAR</code>）および操作体系の仕様。<br>
+        <span style="font-size:0.9em; opacity:0.85;">"Standard in-app menu bar hierarchy, keyboard shortcuts, and interactive command bindings."</span>
       </p>
       <table class="market-table">
         <thead>
           <tr>
             <th>メニュー項目</th>
             <th>機能説明 (Functional Description)</th>
-            <th>技術仕様・C99実装 (C99 Architecture)</th>
+            <th>短縮キー (Shortcut)</th>
+            <th>コマンドID / 実装 (C99 Architecture)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><b>ファイル (File)</b></td>
-            <td>新規作成、開く、保存、閉じる</td>
-            <td><code>src/apps/review.c</code></td>
+            <td><b>ファイル(F)</b></td>
+            <td>PDF文書の開く、増分保存、BibTeX引用出力、閉じる</td>
+            <td>—</td>
+            <td><code>h_file</code> (幅 96px)</td>
           </tr>
           <tr>
-            <td><b>編集 (Edit)</b></td>
-            <td>元に戻す、切り取り、コピー、貼り付け</td>
-            <td>クリップボード連携</td>
+            <td>└ 開く (Open PDF...)</td>
+            <td>検証用PDF文書（<code>n64.pdf</code> / <code>sample.pdf</code>）の切り替え読み込み</td>
+            <td><code>Ctrl+O</code></td>
+            <td><code>CMD_PDF_OPEN</code> (1001)</td>
           </tr>
           <tr>
-            <td><b>操作 (Action)</b></td>
-            <td>メイン機能実行、パラメータ設定</td>
-            <td>内部状態ディスパッチ</td>
+            <td>└ 増分保存 (Incremental Save)</td>
+            <td>ISO 32000非破壊アペンドによる注釈オブジェクトのPDF末尾追記</td>
+            <td><code>Ctrl+S</code></td>
+            <td><code>CMD_PDF_SAVE</code> (1002)</td>
           </tr>
           <tr>
-            <td><b>ヘルプ (Help)</b></td>
-            <td>バージョン情報（Nano About Box 420×170px）</td>
-            <td><code>app_menu_create_about_dialog</code></td>
+            <td>└ BibTeX引用出力 (Export Citation)</td>
+            <td>TAD実身IDに基づく学術BibTeXフォーマットの引用レコード生成</td>
+            <td><code>Ctrl+C</code></td>
+            <td><code>CMD_PDF_CITE</code> (1003)</td>
+          </tr>
+          <tr>
+            <td>└ 閉じる (Close)</td>
+            <td>Reviewウィンドウの安全な終了・リソース解放</td>
+            <td><code>Ctrl+W</code></td>
+            <td><code>CMD_PDF_CLOSE</code> (1004)</td>
+          </tr>
+          <tr>
+            <td><b>表示(V)</b></td>
+            <td>頁移動および高品位拡大・縮小ズーム制御</td>
+            <td>—</td>
+            <td><code>h_view</code> (幅 80px)</td>
+          </tr>
+          <tr>
+            <td>└ 前のページ (Previous)</td>
+            <td>前頁へのナビゲーション</td>
+            <td><code>PageUp</code> / <code>p</code> / <code>BS</code></td>
+            <td><code>CMD_PDF_PREV</code> (1005)</td>
+          </tr>
+          <tr>
+            <td>└ 次のページ (Next)</td>
+            <td>次頁へのナビゲーション</td>
+            <td><code>PageDown</code> / <code>n</code> / <code>Space</code> / <code>Enter</code></td>
+            <td><code>CMD_PDF_NEXT</code> (1006)</td>
+          </tr>
+          <tr>
+            <td>└ 拡大 (Zoom In +)</td>
+            <td>表示倍率を +20% 拡大（最大 300%）</td>
+            <td><code>Ctrl++</code> / <code>+</code> / <code>=</code></td>
+            <td><code>CMD_PDF_ZOOM_IN</code> (1007)</td>
+          </tr>
+          <tr>
+            <td>└ 縮小 (Zoom Out -)</td>
+            <td>表示倍率を -20% 縮小（最小 40%）</td>
+            <td><code>Ctrl+-</code> / <code>-</code> / <code>_</code></td>
+            <td><code>CMD_PDF_ZOOM_OUT</code> (1008)</td>
+          </tr>
+          <tr>
+            <td>└ 等倍 (Actual 100%)</td>
+            <td>原寸（100%）表示リセットおよびスクロール位置初期化</td>
+            <td><code>Ctrl+0</code> / <code>0</code></td>
+            <td><code>CMD_PDF_ZOOM_100</code> (1009)</td>
+          </tr>
+          <tr>
+            <td>└ 窓に合わせる (Fit Window)</td>
+            <td>現在のウィンドウ幅・高さに応じた最適ズーム自動計算</td>
+            <td><code>Ctrl+F</code> / <code>f</code></td>
+            <td><code>CMD_PDF_ZOOM_FIT</code> (1010)</td>
+          </tr>
+          <tr>
+            <td><b>校正(R)</b></td>
+            <td>TAD付箋（Fusen）注釈ピンの配置・検証</td>
+            <td>—</td>
+            <td><code>h_rev</code> (幅 80px)</td>
+          </tr>
+          <tr>
+            <td>└ 付箋メモ追加 (Add Fusen Note...)</td>
+            <td>現頁への付箋注釈カード追加およびキャビネット実身登録</td>
+            <td><code>Ctrl+M</code></td>
+            <td><code>CMD_PDF_ADD_ANNO</code> (1011)</td>
+          </tr>
+          <tr>
+            <td>└ 全付箋の検証 (Verify All)</td>
+            <td>マージナリア全注釈の整合性検証および再描画</td>
+            <td>—</td>
+            <td><code>CMD_PDF_LIST_ANNO</code> (1012)</td>
+          </tr>
+          <tr>
+            <td><b>ヘルプ(H)</b></td>
+            <td>Reviewシステム情報およびアーキテクチャ案内</td>
+            <td>—</td>
+            <td><code>h_help</code> (幅 80px)</td>
+          </tr>
+          <tr>
+            <td>└ Review について (About...)</td>
+            <td>Nano About Box（420×170px 3Dプレート）のポップアップ表示</td>
+            <td>—</td>
+            <td><code>CMD_PDF_ABOUT</code> (1013)</td>
           </tr>
         </tbody>
       </table>
@@ -113,24 +213,29 @@
         </thead>
         <tbody>
           <tr>
-            <td><b>アーキテクチャ</b></td>
-            <td>BTRON3 Specification 3.20に完全準拠したC99クリーンルーム実装。</td>
-            <td><code>src/apps/review.c</code></td>
+            <td><b>PDFベクトル描画</b></td>
+            <td>PDF 1.4のコンテンツストリーム（BT/ET、Tf、Tm、Td、Tj、m/l/c/h、re、w、RG/rg/G/g、S/s/f/b）をDP線分・矩形・TRONフォントへと直接ラスタライズ。</td>
+            <td><code>pdf_reader_render_page()</code>, <code>pdf_exec_stream()</code></td>
           </tr>
           <tr>
-            <td><b>メニューシステム</b></td>
-            <td>3DベベルおよびModern Flat Cardメニューバーに完全対応。</td>
-            <td><code>APP_MENU_BAR</code></td>
+            <td><b>インアップメニューバー</b></td>
+            <td>クラシック3Dベベルスタイルのヘッダーとドロップダウンプレート。マウスホバーによるヘッダー滑空（Glide）、外側クリック自動消去、ステータス右端表示（頁数・倍率・付箋数）。</td>
+            <td><code>APP_MENU_BAR</code>, <code>app_menu_paint_bar()</code></td>
           </tr>
           <tr>
-            <td><b>メモリ管理</b></td>
-            <td>不変ドキュメントコンテキスト分離とリソースの自動解放。</td>
-            <td><code>user_data</code> コンテキスト</td>
+            <td><b>標準スクロールバー</b></td>
+            <td>BTRON伝統の3Dステッパー矢印（▲/▼、◄/►）とエレベータ親指（Thumb）。マウスドラッグによる連続スクロール、トラッククリックによる半画面ページジャンプ、方向キー（↑↓←→）連動。</td>
+            <td><code>paint_scrollbar_v()</code>, <code>paint_scrollbar_h()</code></td>
           </tr>
           <tr>
-            <td><b>イベント処理</b></td>
-            <td>マウス座標、キーボードショートカット、ウィンドウリサイズイベントの処理。</td>
-            <td><code>event_handler</code></td>
+            <td><b>マージナリア欄 (Marginalia)</b></td>
+            <td>ウィンドウ幅 640px 以上で右側に 230px の校正メモレールを自動展開。頁番号、著者、タイムスタンプ、ゴールドのピンバッジ付きカード表示。</td>
+            <td><code>ReviewAnnotation</code>, <code>app->annos[]</code></td>
+          </tr>
+          <tr>
+            <td><b>About ダイアログ</b></td>
+            <td>親ウィンドウ連動のNano About Box（420×170px）。エンボスアイコン、タイトル、Secure PostScript/ISO 32000エンジン情報、Cleanroom Working Group帰属表示、OKボタン。</td>
+            <td><code>open_review_about_window()</code>, <code>app_menu_create_about_dialog()</code></td>
           </tr>
         </tbody>
       </table>

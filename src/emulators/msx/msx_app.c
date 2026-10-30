@@ -92,19 +92,17 @@ static MsxViewer   s_msx;
 static uint16_t    s_fb[MSX_SCR_W * MSX_SCR_H];   /* RGB565 written by the core */
 static WND        *s_wnd;
 static ID          s_tsk;
-/* Set by the 60 Hz tick task, cleared by the paint callback.  One byte, one
- * writer, one reader: a lost tick costs one frame, and it does not burst.
- * Without it a repaint caused by desktop damage would fast-forward the machine.
- * The deadline is 17, 17, 16 ms (50 ms for three frames). A flat 16 ms is
- * 62.5 Hz, and each frame submits 735 samples, so the queue fills and drops
- * audio while the picture keeps going. */
-static volatile BOOL s_frame_due;
+/* Counter set by the 60 Hz tick task, decremented by the paint callback.
+ * Paces the machine accurately even when desktop damage, event processing,
+ * or host VSync jitter delays a paint call. Catch-up steps both CPU and audio
+ * so the audio buffer never starves. */
+static volatile int s_frames_due;
 
 /* One emulated frame of S16, pumped like lilcu64_synth_pump_virtio: write
- * while the device is under ~100 ms, otherwise count a drop. The device is
+ * while the device is under ~200 ms, otherwise count a drop. The device is
  * process-wide, so this window does not close it and does not reopen it
  * when another producer already holds 44100 Hz stereo. */
-#define MSX_AUDIO_TARGET_BYTES 17640u
+#define MSX_AUDIO_TARGET_BYTES 35280u
 static int16_t  s_pcm[735u * 2u];
 static uint32_t s_audio_drops;
 static int      s_audio_open_tried;
@@ -720,25 +718,30 @@ static void msx_view(WND *wnd, GDEV *dev)
 
     if (st->menu_bar.header_count == 0) msx_init_menu_bar(st);
 
-    /* The tick task is the pacer: with one running, a repaint advances the machine
-     * only when a frame is actually due, so damage from elsewhere on the desktop
-     * never fast-forwards the emulator.  Where no task was created - a target
-     * whose cre_tsk() fails, or the headless capture harness - every repaint is a
-     * frame, because nothing else would ever ask for one. */
-    if (st->running && !st->paused && (s_frame_due || s_tsk <= 0)) {
-        s_frame_due = FALSE;
-        if (st->mouse_decay > 0) {
-            st->mouse_decay--;
-            if (st->mouse_decay == 0) {
-                st->joy_mouse &= (uint8_t)~(MSX_JOY_UP | MSX_JOY_DOWN | MSX_JOY_LEFT | MSX_JOY_RIGHT);
-                st->joy = st->joy_keys | st->joy_mouse;
-                msx_joy_set(st->joy);
+    /* The tick task is the pacer: with one running, paint advances the machine
+     * only when frames are due, handling catch-up cleanly so neither audio nor video
+     * stutters under host VSync or key event delays. Where no task was created,
+     * every repaint is a frame. */
+    int due = s_frames_due;
+    if (s_tsk <= 0 && due < 1) due = 1;
+    if (due > 3) due = 3; /* cap catch-up per paint to keep frame rate responsive */
+    if (st->running && !st->paused && due > 0) {
+        s_frames_due -= due;
+        if (s_frames_due < 0) s_frames_due = 0;
+        for (int step = 0; step < due; step++) {
+            if (st->mouse_decay > 0) {
+                st->mouse_decay--;
+                if (st->mouse_decay == 0) {
+                    st->joy_mouse &= (uint8_t)~(MSX_JOY_UP | MSX_JOY_DOWN | MSX_JOY_LEFT | MSX_JOY_RIGHT);
+                    st->joy = st->joy_keys | st->joy_mouse;
+                    msx_joy_set(st->joy);
+                }
             }
+            msx_run_frame();
+            msx_host_pump_audio(1);
+            st->frames++;
         }
-        msx_run_frame();
-        msx_host_pump_audio(1);
         msx_blit_rgb565(s_fb);
-        st->frames++;
     }
 
     msx_compute_view(dev, &v);
@@ -777,6 +780,7 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
                 st->joy_mouse = 0u;
                 st->mouse_decay = 0u;
                 msx_joy_set(0u);
+                s_frames_due = 0;
             }
             break;
         case XCMD_FILE_QUIT:
@@ -792,7 +796,7 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
             if (st->running && st->paused) {
                 msx_pause(FALSE);
                 st->paused = FALSE;
-                s_frame_due = TRUE;
+                s_frames_due = 1;
             }
             break;
         case XCMD_EMU_FAST_FORWARD:
@@ -801,7 +805,7 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
                     msx_run_frame();
                     msx_host_pump_audio(0);
                 }
-                s_frame_due = TRUE;
+                s_frames_due = 1;
             }
             break;
         case XCMD_VIEW_FIT: st->scale = 0; break;
@@ -1034,7 +1038,7 @@ static void msx_task(VW exinf)
         SYSTIME now = 0;
         int delay;
 
-        s_frame_due = TRUE;
+        if (s_frames_due < 5) s_frames_due++;
         inval_wnd(s_wnd);
         next += (SYSTIME)step[phase];
         phase = phase < 2u ? phase + 1u : 0u;
@@ -1064,7 +1068,7 @@ static void destroy_msx_wnd(WND *wnd)
     if (s_msx.running) msx_shutdown();
     s_msx.running = FALSE;
     s_msx.paused = FALSE;
-    s_frame_due = FALSE;
+    s_frames_due = 0;
     s_wnd = NULL;
 }
 
@@ -1150,7 +1154,7 @@ void msx_app_fast_forward(int frames)
             msx_run_frame();
             msx_host_pump_audio(0);
         }
-        s_frame_due = TRUE;
+        s_frames_due = 1;
         if (s_wnd) inval_wnd(s_wnd);
     }
 }

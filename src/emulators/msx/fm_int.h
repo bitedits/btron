@@ -118,11 +118,10 @@ static inline int32_t fm_amp(int32_t s, uint16_t eg, uint16_t tl)
     return (s * (int32_t)fm_exp[att >> 2]) >> 15;
 }
 
-/* Rising key restarts the operator. AR 15 reaches full amplitude immediately. */
+/* Rising key restarts the operator envelope. Free-running phase prevents clicks. */
 static inline void fm_op_key(FmOp *o, int key, uint8_t ar)
 {
     if (key && !o->key) {
-        o->phase = 0u;
         o->stage = 0u;
         o->eg = 511u;
         o->eg_ct = 0u;

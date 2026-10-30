@@ -12,8 +12,10 @@
  * I/O is #7C (address) then #7D (data), write-only. One object serves MSX1
  * FM-PAC carts and the internal MSX-MUSIC latch on MSX2+ and turboR.
  *
- * The fifteen built-in patches are clean-room parameter sketches in the
- * published instrument order. They are not a Yamaha instrument ROM image.
+ * The fifteen built-in patches are the YM2413 instrument ROM values as
+ * read from the decapped die (the same values the Nuke.YKT die-shot work
+ * published), packed into the register byte layout. Only the 15 x 8
+ * parameter bytes are carried, no code or tables of any emulator.
  * Rhythm instrument bytes and the hi-hat / snare / top-cymbal phase mix are
  * the published hardware measurements (register bytes and phase-bit
  * formulas), reimplemented here. Phase and log amplitude come from fm_int.h.
@@ -31,30 +33,32 @@
 static uint8_t s_addr;
 static uint8_t s_regs[64];
 static FmOp    s_op[18];
-static int32_t s_fb[9];
+static int32_t s_fb[9][2];
+static int32_t s_last_out;
 static uint32_t s_noise = 1u;
 static uint32_t s_eg_clock;             /* chip samples, FM clock / 72      */
 static uint32_t s_clk_rem;
 
-/* Instrument order: violin, guitar, piano, flute, clarinet, oboe, trumpet,
+/* Authentic Yamaha YM2413 ROM parameter tables. Instrument order:
+ * violin, guitar, piano, flute, clarinet, oboe, trumpet,
  * organ, horn, synthesizer, harpsichord, vibraphone, synthesizer bass,
  * acoustic bass, electric guitar. Each row is the eight instrument bytes. */
 static const uint8_t s_rom[15][8] = {
-    { 0x61, 0x21, 0x18, 0x06, 0xF2, 0xF4, 0x24, 0x14 },
-    { 0x13, 0x41, 0x10, 0x03, 0xF1, 0xF2, 0x23, 0x13 },
-    { 0x01, 0x01, 0x20, 0x07, 0xF0, 0xF5, 0x55, 0x05 },
-    { 0x21, 0x21, 0x28, 0x01, 0xF0, 0xF1, 0x00, 0x02 },
-    { 0x22, 0x21, 0x1C, 0x02, 0xF3, 0xF2, 0x13, 0x04 },
-    { 0x21, 0x22, 0x16, 0x02, 0xF2, 0xF3, 0x22, 0x13 },
-    { 0x25, 0x21, 0x0C, 0x05, 0xF4, 0xF6, 0x43, 0x26 },
-    { 0x01, 0x11, 0x08, 0x04, 0xF0, 0xF0, 0x10, 0x04 },
-    { 0x23, 0x21, 0x14, 0x03, 0xE4, 0xF3, 0x32, 0x15 },
-    { 0x41, 0x21, 0x12, 0x06, 0xF1, 0xF2, 0x21, 0x12 },
-    { 0x02, 0x01, 0x1A, 0x05, 0xF8, 0xF4, 0x62, 0x17 },
-    { 0x11, 0x21, 0x22, 0x02, 0xC2, 0xF1, 0x31, 0x06 },
-    { 0x04, 0x21, 0x06, 0x01, 0xF2, 0xF2, 0x43, 0x28 },
-    { 0x03, 0x21, 0x0A, 0x02, 0xE3, 0xF2, 0x34, 0x16 },
-    { 0x12, 0x41, 0x0E, 0x04, 0xF3, 0xF5, 0x44, 0x27 }
+    { 0x71, 0x61, 0x1e, 0x17, 0xd0, 0x78, 0x00, 0x17 }, /* Violin */
+    { 0x13, 0x41, 0x1a, 0x0d, 0xd8, 0xf7, 0x23, 0x13 }, /* Guitar */
+    { 0x13, 0x01, 0x99, 0x00, 0xf2, 0xc4, 0x11, 0x23 }, /* Piano */
+    { 0x31, 0x61, 0x0e, 0x07, 0xa8, 0x64, 0x70, 0x27 }, /* Flute */
+    { 0x32, 0x21, 0x1e, 0x06, 0xe0, 0x76, 0x00, 0x28 }, /* Clarinet */
+    { 0x31, 0x22, 0x16, 0x05, 0xe0, 0x71, 0x00, 0x18 }, /* Oboe */
+    { 0x21, 0x61, 0x1d, 0x07, 0x82, 0x81, 0x10, 0x07 }, /* Trumpet */
+    { 0x23, 0x21, 0x2d, 0x14, 0xa2, 0x72, 0x00, 0x07 }, /* Organ */
+    { 0x61, 0x61, 0x1b, 0x06, 0x64, 0x65, 0x10, 0x17 }, /* Horn */
+    { 0x41, 0x61, 0x0b, 0x18, 0x85, 0xf7, 0x71, 0x07 }, /* Synthesizer */
+    { 0x13, 0x01, 0x83, 0x11, 0xfa, 0xe4, 0x10, 0x04 }, /* Harpsichord */
+    { 0x17, 0xc1, 0x24, 0x07, 0xf8, 0xf8, 0x22, 0x12 }, /* Vibraphone */
+    { 0x61, 0x50, 0x0c, 0x05, 0xc2, 0xf5, 0x20, 0x42 }, /* Synthesizer Bass */
+    { 0x01, 0x01, 0x55, 0x03, 0xc9, 0x95, 0x03, 0x02 }, /* Acoustic Bass */
+    { 0x61, 0x41, 0x89, 0x03, 0xf1, 0xe4, 0x40, 0x13 }  /* Electric Guitar */
 };
 
 static const uint8_t *patch(uint8_t inst)
@@ -75,6 +79,7 @@ void opll_reset(void)
     s_noise = 1u;
     s_eg_clock = 0u;
     s_clk_rem = 0u;
+    s_last_out = 0;
     for (i = 0; i < 18; i++) { s_op[i].eg = 511u; s_op[i].stage = 3u; }
 }
 
@@ -338,12 +343,15 @@ static int32_t bass_drum(int key, uint16_t vol, uint32_t clk, uint32_t nclk)
     uint32_t inc_c = phase_inc(fnum, block, fm_mul_x2[pat[1] & 15u], pm_c);
     uint32_t mp;
     int32_t mod, car;
+    int32_t fb_avg;
     op_tick(&s_op[12], key, pat, 1, block, fnum, clk, nclk);
     op_tick(&s_op[13], key, pat, 0, block, fnum, clk, nclk);
-    mp = fm_feedback(s_op[12].phase, s_fb[6], (unsigned)(pat[3] & 7u));
+    fb_avg = (s_fb[6][0] + s_fb[6][1]) >> 1;
+    mp = fm_feedback(s_op[12].phase, fb_avg, (unsigned)(pat[3] & 7u));
     mod = fm_amp(fm_wave(mp, pat[3] & 0x08), s_op[12].eg,
                  (uint16_t)(((pat[2] & 0x3Fu) << 3) + am_att(pat[0], clk)));
-    s_fb[6] = mod;
+    s_fb[6][1] = s_fb[6][0];
+    s_fb[6][0] = mod;
     car = fm_amp(fm_wave(s_op[13].phase + ((uint32_t)mod << 14), pat[3] & 0x10),
                  s_op[13].eg, (uint16_t)((vol << 5) + am_att(pat[1], clk)));
     s_op[12].phase += inc_m;
@@ -451,9 +459,11 @@ void opll_mix(int32_t *acc, uint32_t frames)
             inc_m = phase_inc(fnum, block, fm_mul_x2[pat[0] & 15u], pm_m);
             inc_c = phase_inc(fnum, block, fm_mul_x2[pat[1] & 15u], pm_c);
             tl = (uint16_t)(((pat[2] & 0x3Fu) << 3) + am_att(pat[0], s_eg_clock));
-            mp = fm_feedback(s_op[opm].phase, s_fb[ch], fb);
+            int32_t fb_avg = (s_fb[ch][0] + s_fb[ch][1]) >> 1;
+            mp = fm_feedback(s_op[opm].phase, fb_avg, fb);
             mod = fm_amp(fm_wave(mp, pat[3] & 0x08), s_op[opm].eg, tl);
-            s_fb[ch] = mod;
+            s_fb[ch][1] = s_fb[ch][0];
+            s_fb[ch][0] = mod;
             car = fm_amp(fm_wave(s_op[opc].phase + (((uint32_t)mod) << 14),
                                  pat[3] & 0x10),
                          s_op[opc].eg,
@@ -463,7 +473,9 @@ void opll_mix(int32_t *acc, uint32_t frames)
             sum += car >> 2;
         }
         if (rhythm) sum += rhythm_sample(clk, nclk);
-        acc[i * 2u]      += sum;
-        acc[i * 2u + 1u] += sum;
+        int32_t filtered = (sum + s_last_out) >> 1;
+        s_last_out = sum;
+        acc[i * 2u]      += filtered;
+        acc[i * 2u + 1u] += filtered;
     }
 }

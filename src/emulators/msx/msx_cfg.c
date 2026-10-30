@@ -447,3 +447,4 @@ int bmsx_cfg_load(const char *name_or_key, uint16_t machine, bmsx_machine_cfg_t 
 
     return 1;
 }
+

@@ -101,3 +101,4 @@ int bmsx_cfg_find_path(const char *name_or_path, char *out_path, uint32_t out_ca
 int bmsx_cfg_load(const char *name_or_key, uint16_t machine, bmsx_machine_cfg_t *cfg);
 
 #endif /* _BTRON_EMULATOR_MSX_CFG_H_ */
+

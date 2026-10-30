@@ -83,6 +83,14 @@ typedef struct {
 #  define MSX_ROM_CATALOGUE    "/SYS/msx"
 #endif
 
+#define BMSX_BIOS_CBIOS 0
+#define BMSX_BIOS_TBIOS 1
+
+int  msx_get_bios_mode(void);
+void msx_set_bios_mode(int mode);
+int  msx_is_r800_active(void);
+void msx_cpu_go(uint16_t pc, uint16_t sp);
+
 int  msx_init(const msx_cfg_t *cfg);      /* -> MSX_* codes          */
 void msx_shutdown(void);                  /* idempotent              */
 
@@ -95,6 +103,7 @@ uint8_t *msx_rom_buffer(uint32_t *cap);
 void msx_reset(void);
 void msx_pause(BOOL on);
 uint16_t msx_get_machine(void);           /* BMSX_MACHINE_* last init */
+uint16_t msx_get_pc(void);
 void msx_run_frame(void);                 /* exactly T_PER_FRAME T   */
 void msx_blit_rgb565(uint16_t *fb);       /* 256x212, caller-owned   */
 

@@ -191,6 +191,11 @@
             <td><code>msx_app_fast_forward()</code> による高速フレームスキップ。最終行は状態表示で、<code>msx_init</code> が選んだ機械を表示：空の窓は turboR / R800。XRacing、YAZZIER、c0man は MSX1 / TMS9918A。Bad Apple は MSX2+ / V9958。Dynamite Go! Go! は MSX2 JP / V9938。Hitachi HC-90 / HC-95 カートリッジや設定時は <code>Hitachi HC-90 / HD64180</code>、<code>Hitachi HC-95 / HD64180</code>、<code>Hitachi HC-95 FDD / HD64180</code> を表示。</td>
           </tr>
           <tr>
+            <td><b>BIOS(B)</b></td>
+            <td><b>(*) C-BIOS + Nextor (標準 / Default)</b><br><b>( ) T-BIOS + T-DOS (Clean-Room)</b></td>
+            <td>B-MSX 独自の専用トップレベルメニュー。デフォルトの C-BIOS + Nextor 環境と、100% クリーンルーム実装の T-BIOS + T-DOS 環境をランタイムで動的切り替え。T-BIOS 選択時は <code>tdos_disk.rom</code> および Grauw Page-0 RAM 環境、FAT12/16、MSX-DOS 1/2 コールが即座に起動。</td>
+          </tr>
+          <tr>
             <td><b>表示 (View)</b></td>
             <td>等倍表示 (256×212)<br>2倍拡大 (512×424)<br>アスペクト比固定 (4:3)</td>
             <td>フレームバッファスケーリング（最近傍法 / リニア補間）、BTRON ウィンドウ枠自動追従リサイズ。</td>
@@ -227,27 +232,27 @@
           <tr>
             <td><b>CPU コア</b></td>
             <td>Zilog Z80A (3.58 MHz)<br>ASCII R800 (28.6 MHz 相当)<br>Hitachi HD64180 (6.144 MHz)</td>
-            <td>全非公開命令（Undocumented opcodes）、フラグ計算、割込みモード 1/2（IM1/IM2）、リフレッシュレジスタ（R）の完全エミュレーション。R800 の 16ビット乗算（MULUB/MULUW）、HD64180 の 8ビット符号なし乗算（MLT BC/DE/HL/SP）、内部I/Oレジスタ（IN0/OUT0）、非破壊論理積（TST/TSTIO）、スリープ（SLP）、およびプログラマブル・リロードタイマ（PRT ch0/1）をネイティブサポート。標準Z80命令は直接パススルーによりゼロオーバーヘッド実行。</td>
+            <td>全非公開命令（Undocumented opcodes）、フラグ計算、割込みモード 1/2（IM1/IM2）、リフレッシュレジスタ（R）の完全エミュレーション。R800 の 16ビット乗算（MULUB/MULUW）、HD64180 の 8ビット符号なし乗算（MLT BC/DE/HL/SP）、内部I/Oレジスタ（IN0/OUT0）、非破壊論理積（TST/TSTIO）、スリープ（SLP）、プログラマブル・リロードタイマ（PRT ch0/1）、20ビット MMU アドレス変換（CBR/BBR/CBAR）、DMAC（ch0/1 メモリ/IO間転送）、ASCI（全二重シリアル FIFO）、および CSIO（クロック同期シリアル）をネイティブサポート。標準Z80命令は直接パススルーによりゼロオーバーヘッド実行。</td>
           </tr>
           <tr>
             <td><b>VDP ビデオ</b></td>
             <td>TI TMS9918A<br>Yamaha V9938 / V9958 / V9968</td>
-            <td>SCREEN 0〜8、カラーテーブル、パターンジェネレータ、32枚スプライトプレーン、ライン割込み、コマンドエンジン（HMMV/LMMV/HMMC等）。I/Oポートは標準 0x98〜0x9B および MSX2 ワークステーション互換エイリアス 0x88〜0x8B の双方に対応。</td>
+            <td>SCREEN 0〜8、SCREEN 10〜12（YJK/YAE）、カラーテーブル、パターンジェネレータ、32枚スプライトプレーン、ライン割込み、コマンドエンジン（HMMV/LMMV/HMMC等）、パレットレジスタ、Sub-ROM（EXTROM）グラフィックプリミティブ。I/Oポートは標準 0x98〜0x9B および MSX2 ワークステーション互換エイリアス 0x88〜0x8B の双方に対応。</td>
           </tr>
           <tr>
-            <td><b>音源システム</b></td>
-            <td>AY-3-8910 / YM2149 (PSG)<br>Konami SCC<br>Yamaha YM2413 (MSX-MUSIC)<br>Y8950 (MSX-AUDIO FM)<br>turboR PCM</td>
-            <td>再生中の設定は Rigour。B-Sound の譜面用設定は Subtle。両者は 44.1 kHz ステレオ S16 だけを共有し、シンセはチップへ書き込まない。Hitachi HC-90/95 は PSG (ポート A0H〜A3H) を使用。</td>
+            <td><b>音源 &amp; MIDI システム</b></td>
+            <td>AY-3-8910 / YM2149 (PSG)<br>Konami SCC / SCC+<br>Yamaha YM2413 (MSX-MUSIC)<br>Y8950 (MSX-AUDIO FM/ADPCM)<br>turboR PCM<br>MSX-MIDI / turbo R MIDI</td>
+            <td>PSG、Konami SCC/SCC+（独立5ch波形メモリ $B800〜$B8AF）、YM2413（APRLOPLLヘッダ）、Y8950、turboR 8ビットPCM（PCMPLY/PCMREC）。さらにポート E8H〜EFH において Intel 8251 UART（TxRDY/RxRDY/TxEMPTY）および 8253 タイマ（ch2 タイマ割込み解放 EAH）による MSX-MIDI / turbo R MIDI ハードウェアを完全エミュレーション。</td>
           </tr>
           <tr>
-            <td><b>BIOS &amp; 漢字ROM</b></td>
-            <td>オープンソース C-BIOS<br>(MSX / MSX2 / turboR / HC-90 / HC-95)<br>Kanji ROM Level 1 / 2</td>
-            <td>商用 ROM 不要のクリーンルーム BIOS 実装。カートリッジのヘッダ解析、初期化ベクタディスパッチ、DOS コール互換レイヤ。HC-90/95 では日本語 MSX2 C-BIOS (<code>cbios_main_msx2_jp.rom</code>) と漢字 ROM、HC-95 FDD ではフロッピーディスクドライブ ROM (720KB) を自動装填。</td>
+            <td><b>BIOS &amp; OS レイヤ</b></td>
+            <td>C-BIOS (標準) + Nextor<br>T-BIOS (クリーンルーム) + T-DOS<br>Kanji ROM Level 1 / 2</td>
+            <td>商用 ROM 不要のデュアル BIOS 実装。T-BIOS モードでは <code>tbios_main_*.rom</code>、<code>tbios_sub.rom</code>、<code>tbios_music.rom</code>、および <code>tdos_disk.rom</code> をロードし、Grauw Page-0 RAM 環境、FAT12/16、MSX-DOS 1 FCB（$00〜$30）、MSX-DOS 2 ハンドル/環境変数（$40〜$6F）、EXTBIO $0402 メモリーマッパー管理をフルサポート。</td>
           </tr>
           <tr>
-            <td><b>メモリマッパー</b></td>
-            <td>Flat 32K / Konami / ASCII 8K / ASCII 16K</td>
-            <td>最大 4 MiB までの MegaROM バンク切り替えレジスタ監視。スロットセレクト（PPI 8255 ポート A）エミュレーション。</td>
+            <td><b>メモリ &amp; MegaROM マッパー</b></td>
+            <td>20 種類の MegaROM マッパー<br>最大 4 MiB Memory Mapper RAM</td>
+            <td>ASCII8/16（バッテリーバックアップ SRAM 対応）、Konami、Konami SCC/SCC+、Game Master 2（SRAM）、Irem R-Type、Zemina 80-in-1 / 90-in-1、Cross Blaim、Super Lode Runner、Harry Fox、Halnote、Majutsushi、NEO8/16、Manbow2 を完備。ハッシュおよびヘッダ解析による自動マッパー判定。</td>
           </tr>
         </tbody>
       </table>

@@ -118,6 +118,15 @@ uint8_t dsk_bank_byte(uint8_t bank, uint16_t off)
     return s_img[o];
 }
 
+void dsk_write_bank_byte(uint8_t bank, uint16_t off, uint8_t val)
+{
+    uint32_t o;
+    if (bank < 2u) return;
+    o = ((uint32_t)(bank - 2u) << 13) + off;
+    if (o >= s_size) return;
+    s_img[o] = val;
+}
+
 static uint16_t fat_next(uint16_t cl)
 {
     uint32_t o = (uint32_t)s_res * 512u + (uint32_t)cl + ((uint32_t)cl >> 1);
@@ -349,6 +358,12 @@ static void bdos_seq(z80 *z, uint16_t fcb)
     bdos_a(z, (n == recsize) ? 0 : 1);
 }
 
+static char up_ch(uint8_t c)
+{
+    if (c >= 'a' && c <= 'z') return (char)(c - 32u);
+    return (char)c;
+}
+
 static void bdos_setdta(z80 *z, uint16_t de)
 {
     slots_write(0xF23Du, (uint8_t)de);
@@ -356,10 +371,343 @@ static void bdos_setdta(z80 *z, uint16_t de)
     bdos_a(z, 0);
 }
 
-/* Credits and "Loading..." are not the picture. The COM keeps going
- * when this returns zero. */
+static uint16_t bdos_get_dta(void)
+{
+    uint16_t d = (uint16_t)(slots_read(0xF23Du) | (slots_read(0xF23Eu) << 8));
+    return d ? d : 0x0080u;
+}
+
 static void bdos_strout(z80 *z)
 {
+    bdos_a(z, 0);
+}
+
+static uint16_t s_search_idx = 0;
+static uint8_t  s_search_want[11];
+
+static void bdos_sfirst(z80 *z, uint16_t fcb)
+{
+    int k;
+    for (k = 0; k < 11; k++) s_search_want[k] = slots_read((uint16_t)(fcb + 1u + (uint16_t)k));
+    s_search_idx = 0;
+    for (; s_search_idx < s_root_ent; s_search_idx++) {
+        uint32_t o = (uint32_t)s_root * 512u + (uint32_t)s_search_idx * 32u;
+        uint8_t attr;
+        uint16_t dta;
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        attr = s_img[o + 11u];
+        if (attr == 0x0Fu || (attr & 0x08u)) continue;
+        if (!name_eq(s_search_want, s_img + o)) continue;
+
+        dta = bdos_get_dta();
+        slots_ram_store(dta, 0x00u); /* drive code 0 */
+        for (k = 0; k < 32; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), s_img[o + (uint32_t)k]);
+        s_search_idx++;
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xFFu);
+}
+
+static void bdos_snext(z80 *z)
+{
+    int k;
+    for (; s_search_idx < s_root_ent; s_search_idx++) {
+        uint32_t o = (uint32_t)s_root * 512u + (uint32_t)s_search_idx * 32u;
+        uint8_t attr;
+        uint16_t dta;
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        attr = s_img[o + 11u];
+        if (attr == 0x0Fu || (attr & 0x08u)) continue;
+        if (!name_eq(s_search_want, s_img + o)) continue;
+
+        dta = bdos_get_dta();
+        slots_ram_store(dta, 0x00u);
+        for (k = 0; k < 32; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), s_img[o + (uint32_t)k]);
+        s_search_idx++;
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xFFu);
+}
+
+static void bdos_rdrnd(z80 *z, uint16_t fcb)
+{
+    uint32_t recno = 0;
+    int i;
+    for (i = 0; i < 3; i++) {
+        recno |= (uint32_t)slots_read((uint16_t)(fcb + 33u + (uint16_t)i)) << (8 * i);
+    }
+    slots_ram_store((uint16_t)(fcb + 32u), (uint8_t)(recno & 127u));
+    slots_ram_store((uint16_t)(fcb + 12u), (uint8_t)((recno >> 7) & 0xFFu));
+    bdos_seq(z, fcb);
+}
+
+static void bdos_fsize(z80 *z, uint16_t fcb)
+{
+    uint8_t want[11];
+    uint32_t i, fsize = 0, recs, recsize;
+    int k, found = 0;
+    for (k = 0; k < 11; k++) want[k] = slots_read((uint16_t)(fcb + 1u + (uint16_t)k));
+    for (i = 0; i < s_root_ent; i++) {
+        uint32_t o = (uint32_t)s_root * 512u + i * 32u;
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        if (!name_eq(want, s_img + o)) continue;
+        fsize = (uint32_t)s_img[o + 28u] | ((uint32_t)s_img[o + 29u] << 8) |
+                ((uint32_t)s_img[o + 30u] << 16) | ((uint32_t)s_img[o + 31u] << 24);
+        found = 1;
+        break;
+    }
+    if (!found) { bdos_a(z, 0xFFu); return; }
+    recsize = (uint32_t)slots_read((uint16_t)(fcb + 14u)) |
+              ((uint32_t)slots_read((uint16_t)(fcb + 15u)) << 8);
+    if (recsize == 0) recsize = 128u;
+    recs = (fsize + recsize - 1u) / recsize;
+    for (k = 0; k < 4; k++) {
+        slots_ram_store((uint16_t)(fcb + 33u + (uint16_t)k), (uint8_t)(recs >> (8 * k)));
+    }
+    bdos_a(z, 0);
+}
+
+static void bdos_alloc(z80 *z)
+{
+    uint32_t clus = (s_spc && s_size) ? (s_size / (512u * (uint32_t)s_spc)) : 714u;
+    z->a = s_spc ? s_spc : 2u;
+    z->b = 0;
+    z->c = 2; /* 512 bytes per sector */
+    z->ix = 512;
+    z->e = (uint8_t)(clus & 0xFFu);
+    z->d = (uint8_t)((clus >> 8) & 0xFFu);
+    z->l = z->e;
+    z->h = z->d;
+    bdos_a(z, z->a);
+}
+
+/* ---- DOS 2 File Handles & FIB support ------------------------------------ */
+
+#define DSK_HANDLES_MAX 16
+typedef struct {
+    uint8_t  used;
+    uint16_t cluster;
+    uint32_t size;
+    uint32_t pos;
+} DskHandle;
+
+static DskHandle s_hnd[DSK_HANDLES_MAX];
+
+static void bdos_hopen(z80 *z, uint16_t de)
+{
+    char path[64];
+    uint8_t want[11];
+    int len = 0, k, slot = -1;
+    uint32_t i;
+    const char *p, *slash, *colon, *dot;
+
+    while (len < 63) {
+        uint8_t c = slots_read((uint16_t)(de + (uint16_t)len));
+        if (c == 0 || c == '\r' || c == '\n') break;
+        path[len++] = (char)c;
+    }
+    path[len] = '\0';
+
+    memset(want, ' ', 11);
+    p = path;
+    slash = strrchr(path, '\\');
+    if (slash) p = slash + 1;
+    colon = strrchr(p, ':');
+    if (colon) p = colon + 1;
+    for (k = 0; p[k] && p[k] != '.' && k < 8; k++) want[k] = (uint8_t)up_ch((uint8_t)p[k]);
+    dot = strchr(p, '.');
+    if (dot) {
+        for (k = 0; dot[1 + k] && k < 3; k++) want[8 + k] = (uint8_t)up_ch((uint8_t)dot[1 + k]);
+    }
+
+    for (i = 0; i < s_root_ent; i++) {
+        uint32_t o = (uint32_t)s_root * 512u + i * 32u;
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        if (!name_eq(want, s_img + o)) continue;
+
+        for (k = 5; k < DSK_HANDLES_MAX; k++) {
+            if (!s_hnd[k].used) { slot = k; break; }
+        }
+        if (slot < 0) { bdos_a(z, 0xDCu); return; }
+        s_hnd[slot].used = 1;
+        s_hnd[slot].cluster = (uint16_t)(s_img[o + 26u] | (s_img[o + 27u] << 8));
+        s_hnd[slot].size = (uint32_t)s_img[o + 28u] | ((uint32_t)s_img[o + 29u] << 8) |
+                           ((uint32_t)s_img[o + 30u] << 16) | ((uint32_t)s_img[o + 31u] << 24);
+        s_hnd[slot].pos = 0;
+        z->b = (uint8_t)slot;
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xD7u); /* _NOFIL */
+}
+
+static void bdos_hread(z80 *z, uint8_t h, uint16_t dst, uint16_t count)
+{
+    uint32_t avail, n, copied;
+    if (h >= DSK_HANDLES_MAX || !s_hnd[h].used) { bdos_a(z, 0xD8u); return; }
+    if (s_hnd[h].pos >= s_hnd[h].size || count == 0) {
+        z->h = 0; z->l = 0;
+        bdos_a(z, 0xC7u); /* _EOF */
+        return;
+    }
+    avail = s_hnd[h].size - s_hnd[h].pos;
+    n = (count < avail) ? (uint32_t)count : avail;
+    copied = file_copy(s_hnd[h].cluster, s_hnd[h].pos, dst, n);
+    s_hnd[h].pos += copied;
+    z->l = (uint8_t)(copied & 0xFFu);
+    z->h = (uint8_t)((copied >> 8) & 0xFFu);
+    bdos_a(z, 0);
+}
+
+static void bdos_hseek(z80 *z, uint8_t h, uint8_t method, int32_t off)
+{
+    int64_t npos;
+    if (h >= DSK_HANDLES_MAX || !s_hnd[h].used) { bdos_a(z, 0xD8u); return; }
+    if (method == 0) npos = off;
+    else if (method == 1) npos = (int64_t)s_hnd[h].pos + off;
+    else npos = (int64_t)s_hnd[h].size + off;
+    if (npos < 0) npos = 0;
+    if (npos > (int64_t)s_hnd[h].size) npos = (int64_t)s_hnd[h].size;
+    s_hnd[h].pos = (uint32_t)npos;
+    z->l = (uint8_t)(s_hnd[h].pos & 0xFFu);
+    z->h = (uint8_t)((s_hnd[h].pos >> 8) & 0xFFu);
+    z->e = (uint8_t)((s_hnd[h].pos >> 16) & 0xFFu);
+    z->d = (uint8_t)((s_hnd[h].pos >> 24) & 0xFFu);
+    bdos_a(z, 0);
+}
+
+static void bdos_hclose(z80 *z, uint8_t h)
+{
+    if (h < DSK_HANDLES_MAX) s_hnd[h].used = 0;
+    bdos_a(z, 0);
+}
+
+static uint16_t s_fib_idx = 0;
+
+static void bdos_ffirst(z80 *z)
+{
+    uint16_t dta = bdos_get_dta();
+    s_fib_idx = 0;
+    for (; s_fib_idx < s_root_ent; s_fib_idx++) {
+        uint32_t o = (uint32_t)s_root * 512u + (uint32_t)s_fib_idx * 32u;
+        uint8_t attr;
+        int k, n = 0;
+        char name[16];
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        attr = s_img[o + 11u];
+        if (attr == 0x0Fu || (attr & 0x08u)) continue;
+
+        slots_ram_store(dta, 0xFFu);
+        for (k = 0; k < 8 && s_img[o + (uint32_t)k] != ' '; k++) name[n++] = up_ch(s_img[o + (uint32_t)k]);
+        if (s_img[o + 8u] != ' ') {
+            name[n++] = '.';
+            for (k = 0; k < 3 && s_img[o + 8u + (uint32_t)k] != ' '; k++) name[n++] = up_ch(s_img[o + 8u + (uint32_t)k]);
+        }
+        name[n] = '\0';
+        for (k = 0; k <= n && k < 13; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), (uint8_t)name[k]);
+        for (; k < 13; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), 0);
+        slots_ram_store((uint16_t)(dta + 14u), attr);
+        slots_ram_store((uint16_t)(dta + 15u), s_img[o + 22u]);
+        slots_ram_store((uint16_t)(dta + 16u), s_img[o + 23u]);
+        slots_ram_store((uint16_t)(dta + 17u), s_img[o + 24u]);
+        slots_ram_store((uint16_t)(dta + 18u), s_img[o + 25u]);
+        slots_ram_store((uint16_t)(dta + 19u), s_img[o + 26u]);
+        slots_ram_store((uint16_t)(dta + 20u), s_img[o + 27u]);
+        slots_ram_store((uint16_t)(dta + 21u), s_img[o + 28u]);
+        slots_ram_store((uint16_t)(dta + 22u), s_img[o + 29u]);
+        slots_ram_store((uint16_t)(dta + 23u), s_img[o + 30u]);
+        slots_ram_store((uint16_t)(dta + 24u), s_img[o + 31u]);
+        slots_ram_store((uint16_t)(dta + 25u), 1u);
+        s_fib_idx++;
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xD7u);
+}
+
+static void bdos_fnext(z80 *z)
+{
+    uint16_t dta = bdos_get_dta();
+    for (; s_fib_idx < s_root_ent; s_fib_idx++) {
+        uint32_t o = (uint32_t)s_root * 512u + (uint32_t)s_fib_idx * 32u;
+        uint8_t attr;
+        int k, n = 0;
+        char name[16];
+        if (o + 32u > s_size || s_img[o] == 0) break;
+        if (s_img[o] == 0xE5u) continue;
+        attr = s_img[o + 11u];
+        if (attr == 0x0Fu || (attr & 0x08u)) continue;
+
+        slots_ram_store(dta, 0xFFu);
+        for (k = 0; k < 8 && s_img[o + (uint32_t)k] != ' '; k++) name[n++] = up_ch(s_img[o + (uint32_t)k]);
+        if (s_img[o + 8u] != ' ') {
+            name[n++] = '.';
+            for (k = 0; k < 3 && s_img[o + 8u + (uint32_t)k] != ' '; k++) name[n++] = up_ch(s_img[o + 8u + (uint32_t)k]);
+        }
+        name[n] = '\0';
+        for (k = 0; k <= n && k < 13; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), (uint8_t)name[k]);
+        for (; k < 13; k++) slots_ram_store((uint16_t)(dta + 1u + (uint16_t)k), 0);
+        slots_ram_store((uint16_t)(dta + 14u), attr);
+        slots_ram_store((uint16_t)(dta + 15u), s_img[o + 22u]);
+        slots_ram_store((uint16_t)(dta + 16u), s_img[o + 23u]);
+        slots_ram_store((uint16_t)(dta + 17u), s_img[o + 24u]);
+        slots_ram_store((uint16_t)(dta + 18u), s_img[o + 25u]);
+        slots_ram_store((uint16_t)(dta + 19u), s_img[o + 26u]);
+        slots_ram_store((uint16_t)(dta + 20u), s_img[o + 27u]);
+        slots_ram_store((uint16_t)(dta + 21u), s_img[o + 28u]);
+        slots_ram_store((uint16_t)(dta + 22u), s_img[o + 29u]);
+        slots_ram_store((uint16_t)(dta + 23u), s_img[o + 30u]);
+        slots_ram_store((uint16_t)(dta + 24u), s_img[o + 31u]);
+        slots_ram_store((uint16_t)(dta + 25u), 1u);
+        s_fib_idx++;
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xD7u);
+}
+
+static void bdos_genv(z80 *z, uint16_t name_ptr, uint16_t val_ptr, uint8_t max_len)
+{
+    char name[32];
+    int len = 0, k;
+    const char *val = NULL;
+
+    while (len < 31) {
+        uint8_t c = slots_read((uint16_t)(name_ptr + (uint16_t)len));
+        if (c == 0 || c == '=' || c == ' ') break;
+        name[len++] = up_ch(c);
+    }
+    name[len] = '\0';
+
+    if (strcmp(name, "PATH") == 0) val = "A:\\";
+    else if (strcmp(name, "PROMPT") == 0) val = "$p$g";
+    else if (strcmp(name, "SHELL") == 0) val = "TCOMMAND.COM";
+    else if (strcmp(name, "PROGRAM") == 0) val = "A:\\AUTOEXEC.BAT";
+
+    if (val) {
+        for (k = 0; val[k] && k + 1 < (int)max_len; k++) {
+            slots_ram_store((uint16_t)(val_ptr + (uint16_t)k), (uint8_t)val[k]);
+        }
+        slots_ram_store((uint16_t)(val_ptr + (uint16_t)k), 0);
+        bdos_a(z, 0);
+        return;
+    }
+    bdos_a(z, 0xDEu); /* _ENVX */
+}
+
+static void bdos_dosver(z80 *z)
+{
+    z->b = 0x02u;
+    z->c = 0x20u;
+    z->d = 0x02u;
+    z->e = 0x20u;
     bdos_a(z, 0);
 }
 
@@ -368,21 +716,192 @@ void dsk_bdos(z80 *z)
     uint16_t fcb;
     uint16_t hl;
     if (!z) return;
+
+    /* T-DOS boot trigger: OUT (D4), A with A = 0xFF */
+    if (z->a == 0xFFu) {
+        dsk_auto_launch();
+        return;
+    }
+
     fcb = (uint16_t)(z->e | (z->d << 8));
     hl = (uint16_t)(z->l | (z->h << 8));
-    if (z->c == 0x0Fu) bdos_open(z, fcb);
-    else if (z->c == 0x09u) bdos_strout(z);
-    else if (z->c == 0x14u) bdos_seq(z, fcb);
-    else if (z->c == 0x1Au) bdos_setdta(z, fcb);
-    else if (z->c == 0x27u) bdos_read(z, fcb, hl);
-}
 
-/* ---- root menu ---------------------------------------------------------- */
-
-static char up_ch(uint8_t c)
-{
-    if (c >= 'a' && c <= 'z') return (char)(c - 32u);
-    return (char)c;
+    switch (z->c) {
+    case 0x00u: /* _TERM0 */
+        bdos_a(z, 0);
+        break;
+    case 0x01u: /* _CONIN */
+    case 0x07u: /* _DIRIN */
+    case 0x08u: /* _INNOE */
+        bdos_a(z, 0);
+        break;
+    case 0x02u: /* _CONOUT */
+    case 0x06u: /* _DIRIO */
+        bdos_a(z, (z->e == 0xFFu) ? 0 : z->e);
+        break;
+    case 0x09u: /* _STROUT */
+        bdos_strout(z);
+        break;
+    case 0x0Au: /* _BUFIN */
+        bdos_a(z, 0);
+        break;
+    case 0x0Bu: /* _CONST */
+        bdos_a(z, 0);
+        break;
+    case 0x0Cu: /* _CPMVER */
+        z->h = 0x00u; z->l = 0x22u;
+        bdos_a(z, 0x22u);
+        break;
+    case 0x0Du: /* _DSKRST */
+        bdos_a(z, 0);
+        break;
+    case 0x0Eu: /* _SELDSK */
+        bdos_a(z, 1);
+        break;
+    case 0x0Fu: /* _FOPEN */
+        bdos_open(z, fcb);
+        break;
+    case 0x10u: /* _FCLOSE */
+        bdos_a(z, 0);
+        break;
+    case 0x11u: /* _SFIRST */
+        bdos_sfirst(z, fcb);
+        break;
+    case 0x12u: /* _SNEXT */
+        bdos_snext(z);
+        break;
+    case 0x13u: /* _FDEL */
+        bdos_a(z, 0);
+        break;
+    case 0x14u: /* _RDSEQ */
+        bdos_seq(z, fcb);
+        break;
+    case 0x15u: /* _WRSEQ */
+        bdos_a(z, 0);
+        break;
+    case 0x16u: /* _FMAKE */
+        bdos_a(z, 0);
+        break;
+    case 0x17u: /* _FREN */
+        bdos_a(z, 0);
+        break;
+    case 0x18u: /* _LOGIN */
+        z->l = 1; z->h = 0;
+        bdos_a(z, 1);
+        break;
+    case 0x19u: /* _CURDRV */
+        bdos_a(z, 0);
+        break;
+    case 0x1Au: /* _SETDTA */
+        bdos_setdta(z, fcb);
+        break;
+    case 0x1Bu: /* _ALLOC */
+    case 0x1Cu: /* _ALLOD */
+        bdos_alloc(z);
+        break;
+    case 0x21u: /* _RDRND */
+        bdos_rdrnd(z, fcb);
+        break;
+    case 0x22u: /* _WRRND */
+        bdos_a(z, 0);
+        break;
+    case 0x23u: /* _FSIZE */
+        bdos_fsize(z, fcb);
+        break;
+    case 0x24u: /* _SETRND */
+        bdos_a(z, 0);
+        break;
+    case 0x26u: /* _WRRNDB */
+    case 0x28u: /* _WRRND0 */
+        bdos_a(z, 0);
+        break;
+    case 0x27u: /* _RDRNDB */
+        bdos_read(z, fcb, hl);
+        break;
+    case 0x2Au: /* _GETDAT */
+        z->h = (uint8_t)(2026 >> 8); z->l = (uint8_t)(2026 & 0xFFu);
+        z->d = 10; z->e = 31;
+        bdos_a(z, 0);
+        break;
+    case 0x2Cu: /* _GETTIM */
+        z->h = 12; z->l = 0; z->d = 0;
+        bdos_a(z, 0);
+        break;
+    case 0x2Fu: /* _GETDTA */
+        {
+            uint16_t d = bdos_get_dta();
+            z->e = (uint8_t)(d & 0xFFu);
+            z->d = (uint8_t)(d >> 8);
+            bdos_a(z, 0);
+        }
+        break;
+    case 0x40u: /* _FFIRST */
+        bdos_ffirst(z);
+        break;
+    case 0x41u: /* _FNEXT */
+        bdos_fnext(z);
+        break;
+    case 0x43u: /* _OPEN */
+    case 0x44u: /* _CREATE */
+        bdos_hopen(z, fcb);
+        break;
+    case 0x45u: /* _CLOSE */
+        bdos_hclose(z, z->b);
+        break;
+    case 0x46u: /* _ENSURE */
+    case 0x4Bu: /* _IOCTL */
+    case 0x4Du: /* _DELETE */
+    case 0x4Eu: /* _RENAME */
+    case 0x50u: /* _ATTR */
+    case 0x51u: /* _FTIME */
+        bdos_a(z, 0);
+        break;
+    case 0x48u: /* _READ */
+        bdos_hread(z, z->b, fcb, hl);
+        break;
+    case 0x49u: /* _WRITE */
+        z->l = (uint8_t)(hl & 0xFFu); z->h = (uint8_t)((hl >> 8) & 0xFFu);
+        bdos_a(z, 0);
+        break;
+    case 0x4Au: /* _SEEK */
+        bdos_hseek(z, z->b, z->a, (int32_t)((uint32_t)hl | ((uint32_t)fcb << 16)));
+        break;
+    case 0x59u: /* _GETCD */
+        slots_ram_store(fcb, '\\');
+        slots_ram_store((uint16_t)(fcb + 1u), 0);
+        bdos_a(z, 0);
+        break;
+    case 0x5Au: /* _CHDIR */
+    case 0x5Bu: /* _PARSE */
+    case 0x5Cu: /* _PFILE */
+    case 0x62u: /* _TERM */
+    case 0x63u: /* _DEFAB */
+    case 0x64u: /* _DEFER */
+        bdos_a(z, 0);
+        break;
+    case 0x65u: /* _ERROR */
+        z->b = 0;
+        bdos_a(z, 0);
+        break;
+    case 0x66u: /* _EXPLAIN */
+        slots_ram_store(fcb, '$');
+        bdos_a(z, 0);
+        break;
+    case 0x6Bu: /* _GENV */
+        bdos_genv(z, hl, fcb, z->b);
+        break;
+    case 0x6Cu: /* _SENV */
+    case 0x6Du: /* _FENV */
+    case 0x6Eu: /* _DSKCHK */
+        bdos_a(z, 0);
+        break;
+    case 0x6Fu: /* _DOSVER */
+        bdos_dosver(z);
+        break;
+    default:
+        bdos_a(z, 0);
+        break;
+    }
 }
 
 static uint32_t file_bytes(uint16_t cluster, uint8_t *dst, uint32_t n)
@@ -746,20 +1265,129 @@ static void launch_dos(const DskRow *e)
     slots_ram_store(0x0001u, 0x00u);
     slots_ram_store(0x0002u, 0x00u);
     slots_ram_store(0x0005u, 0xC3u);
-    slots_ram_store(0x0006u, 0x00u);
-    slots_ram_store(0x0007u, 0xF2u);
+    slots_ram_store(0x0006u, 0x7Du);
+    slots_ram_store(0x0007u, 0xF3u);
+
+    /* Grauw dos2_environment.php trampolines:
+     * $000C RDSLT, $0014 WRSLT, $001C CALSLT, $0024 ENASLT */
+    slots_ram_store(0x000Cu, 0xC3u);
+    slots_ram_store(0x000Du, 0x40u);
+    slots_ram_store(0x000Eu, 0xF2u);
+
+    slots_ram_store(0x0014u, 0xC3u);
+    slots_ram_store(0x0015u, 0x50u);
+    slots_ram_store(0x0016u, 0xF2u);
+
+    slots_ram_store(0x001Cu, 0xC3u);
+    slots_ram_store(0x001Du, 0x60u);
+    slots_ram_store(0x001Eu, 0xF2u);
+
+    slots_ram_store(0x0024u, 0xC3u);
+    slots_ram_store(0x0025u, 0x70u);
+    slots_ram_store(0x0026u, 0xF2u);
+
     slots_ram_store(0x0030u, 0xC3u);
     slots_ram_store(0x0031u, 0x30u);
     slots_ram_store(0x0032u, 0xF2u);
     slots_ram_store(0x0038u, 0xC3u);
     slots_ram_store(0x0039u, 0x10u);
     slots_ram_store(0x003Au, 0xF2u);
+
     plant_bdos_entry();
     for (i = 0; i < sizeof(tramp); i++)
         slots_write((uint16_t)(0xF210u + i), tramp[i]);
     slots_write(0xF218u, slots_ram_ssec());
     for (i = 0; i < sizeof(callf); i++)
         slots_write((uint16_t)(0xF230u + i), callf[i]);
+
+    /* Trampoline helper templates:
+     * IN A, ($A8); PUSH AF; AND $FC; OUT ($A8), A; CALL target; POP AF; OUT ($A8), A; RET */
+    {
+        static const uint8_t slot_tramp[14] = {
+            0xDB, 0xA8,
+            0xF5,
+            0xE6, 0xFC,
+            0xD3, 0xA8,
+            0xCD, 0x00, 0x00,
+            0xF1,
+            0xD3, 0xA8,
+            0xC9
+        };
+        uint8_t tr[14];
+        uint32_t k;
+        memcpy(tr, slot_tramp, 14);
+
+        /* $F240: RDSLT -> CALL $000C */
+        tr[7] = 0x0Cu; tr[8] = 0x00u;
+        for (k = 0; k < 14; k++) slots_write((uint16_t)(0xF240u + k), tr[k]);
+
+        /* $F250: WRSLT -> CALL $0014 */
+        tr[7] = 0x14u; tr[8] = 0x00u;
+        for (k = 0; k < 14; k++) slots_write((uint16_t)(0xF250u + k), tr[k]);
+
+        /* $F260: CALSLT -> CALL $001C */
+        tr[7] = 0x1Cu; tr[8] = 0x00u;
+        for (k = 0; k < 14; k++) slots_write((uint16_t)(0xF260u + k), tr[k]);
+
+        /* $F270: ENASLT -> CALL $0024 */
+        tr[7] = 0x24u; tr[8] = 0x00u;
+        for (k = 0; k < 14; k++) slots_write((uint16_t)(0xF270u + k), tr[k]);
+
+        /* DOS 2 Memory Mapper Jump Table at $F100 */
+        /* ALL_SEG ($F100): XOR A; RET; NOP */
+        slots_write(0xF100u, 0xAFu); slots_write(0xF101u, 0xC9u); slots_write(0xF102u, 0x00u);
+        /* FRE_SEG ($F103): XOR A; RET; NOP */
+        slots_write(0xF103u, 0xAFu); slots_write(0xF104u, 0xC9u); slots_write(0xF105u, 0x00u);
+        /* RD_SEG ($F106): RET */
+        slots_write(0xF106u, 0xC9u); slots_write(0xF107u, 0x00u); slots_write(0xF108u, 0x00u);
+        /* WR_SEG ($F109): RET */
+        slots_write(0xF109u, 0xC9u); slots_write(0xF10Au, 0x00u); slots_write(0xF10Bu, 0x00u);
+        /* CAL_SEG ($F10C): RET */
+        slots_write(0xF10Cu, 0xC9u); slots_write(0xF10Du, 0x00u); slots_write(0xF10Eu, 0x00u);
+        /* CALLS ($F10F): RET */
+        slots_write(0xF10Fu, 0xC9u); slots_write(0xF110u, 0x00u); slots_write(0xF111u, 0x00u);
+        /* PUT_PH ($F112): RET */
+        slots_write(0xF112u, 0xC9u); slots_write(0xF113u, 0x00u); slots_write(0xF114u, 0x00u);
+        /* GET_PH ($F115): RET */
+        slots_write(0xF115u, 0xC9u); slots_write(0xF116u, 0x00u); slots_write(0xF117u, 0x00u);
+        /* PUT_P0 ($F118): LD A, B; OUT ($FC), A; RET */
+        slots_write(0xF118u, 0x78u); slots_write(0xF119u, 0xD3u); slots_write(0xF11Au, 0xFCu); slots_write(0xF11Bu, 0xC9u);
+        /* GET_P0 ($F11C): IN A, ($FC); RET */
+        slots_write(0xF11Cu, 0xDBu); slots_write(0xF11Du, 0xFCu); slots_write(0xF11Eu, 0xC9u);
+        /* PUT_P1 ($F11F): LD A, B; OUT ($FD), A; RET */
+        slots_write(0xF11Fu, 0x78u); slots_write(0xF120u, 0xD3u); slots_write(0xF121u, 0xFDu); slots_write(0xF122u, 0xC9u);
+        /* GET_P1 ($F123): IN A, ($FD); RET */
+        slots_write(0xF123u, 0xDBu); slots_write(0xF124u, 0xFDu); slots_write(0xF125u, 0xC9u);
+        /* PUT_P2 ($F126): LD A, B; OUT ($FE), A; RET */
+        slots_write(0xF126u, 0x78u); slots_write(0xF127u, 0xD3u); slots_write(0xF128u, 0xFEu); slots_write(0xF129u, 0xC9u);
+        /* GET_P2 ($F12A): IN A, ($FE); RET */
+        slots_write(0xF12Au, 0xDBu); slots_write(0xF12Bu, 0xFEu); slots_write(0xF12Cu, 0xC9u);
+        /* PUT_P3 ($F12D): LD A, B; OUT ($FF), A; RET */
+        slots_write(0xF12Du, 0x78u); slots_write(0xF12Eu, 0xD3u); slots_write(0xF12Fu, 0xFFu); slots_write(0xF130u, 0xC9u);
+        /* GET_P3 ($F131): IN A, ($FF); RET */
+        slots_write(0xF131u, 0xDBu); slots_write(0xF132u, 0xFFu); slots_write(0xF133u, 0xC9u);
+
+        /* EXTBIO hook at $FFCA for DOS 2 Memory Mapper table */
+        static const uint8_t extbio_code[] = {
+            0xF5,                     /* PUSH AF */
+            0x7A,                     /* LD A, D */
+            0xFE, 0x04,               /* CP 4 (DOS 2) */
+            0x20, 0x0D,               /* JR NZ, +13 */
+            0x7B,                     /* LD A, E */
+            0xFE, 0x02,               /* CP 2 (Memory Mapper table) */
+            0x20, 0x08,               /* JR NZ, +8 */
+            0xF1,                     /* POP AF */
+            0x3E, 0x20,               /* LD A, 32 (512 KiB segments) */
+            0x06, 0x88,               /* LD B, $88 (Slot 3-2) */
+            0x21, 0x00, 0xF1,         /* LD HL, $F100 */
+            0xC9,                     /* RET */
+            0xF1,                     /* POP AF */
+            0xC9                      /* RET */
+        };
+        for (k = 0; k < sizeof(extbio_code); k++)
+            slots_write((uint16_t)(0xFFCAu + k), extbio_code[k]);
+    }
+
     msx_cpu_go(0x0100u, 0xE000u);
 }
 
@@ -792,6 +1420,50 @@ static void launch_com(int idx)
     else launch_dos(e);
     s_hold = 0;
     s_ran = 1;
+}
+
+int dsk_auto_launch(void)
+{
+    int i, pick = -1;
+    if (!s_fat_ok) return 0;
+    if (s_rows == 0) build_list();
+    if (s_rows == 0) return 0;
+
+    /* 1. Try AUTOEXEC.BAT target */
+    for (i = 0; i < s_rows; i++) {
+        if (s_row[i].bat && strcmp(s_row[i].name, "AUTOEXEC.BAT") == 0) {
+            pick = bat_target(i);
+            break;
+        }
+    }
+    if (pick >= 0) {
+        launch_com(pick);
+        return 1;
+    }
+
+    /* 2. Try any .COM file */
+    for (i = 0; i < s_rows; i++) {
+        if (s_row[i].com) {
+            launch_com(i);
+            return 1;
+        }
+    }
+
+    /* 3. Try BSAVE image ($FE header) or AUTOEXEC.BAS */
+    for (i = 0; i < s_rows; i++) {
+        uint16_t start, end, exec;
+        if (bload_header(&s_row[i], &start, &end, &exec)) {
+            launch_bload(&s_row[i], start, end, exec);
+            s_hold = 0;
+            s_ran = 1;
+            return 1;
+        }
+    }
+
+    /* 4. Fallback: arm interactive menu */
+    arm_menu();
+    paint_menu();
+    return 0;
 }
 
 int dsk_menu_service(void)

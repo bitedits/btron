@@ -310,6 +310,132 @@ static void test_z80_compat(void)
     printf("  [PASS] Z80 standard instruction passthrough without quality degradation\n");
 }
 
+/* ── Test 7: ASCI Channels 0 & 1 Transmission and FIFO ───────────────────── */
+static void test_asci(void)
+{
+    hd64180_t cpu;
+    setup_cpu(&cpu);
+
+    /* Verify initial status has TDRE (bit 1) set */
+    assert((hd64180_io_read(0x04) & 0x02) != 0); /* STAT0 TDRE = 1 */
+    assert((hd64180_io_read(0x05) & 0x02) != 0); /* STAT1 TDRE = 1 */
+    assert((hd64180_io_read(0x04) & 0x80) == 0); /* STAT0 RDRF = 0 */
+
+    /* Transmit byte on Ch 0 */
+    hd64180_io_write(0x06, 0x55); /* TDR0 = 0x55 */
+    assert(hd64180_asci_get_tx(0) == 0x55);
+
+    /* Enable RX on Ch 0 (CNTLA0 bit 5 = RE) */
+    hd64180_io_write(0x00, 0x20);
+
+    /* Receive byte into Ch 0 */
+    hd64180_asci_rx(0, 0xA5);
+    assert((hd64180_io_read(0x04) & 0x80) != 0); /* STAT0 RDRF = 1 */
+
+    /* Enqueue another byte into FIFO */
+    hd64180_asci_rx(0, 0x5A);
+
+    /* Read first byte */
+    uint8_t rx1 = hd64180_io_read(0x08);
+    assert(rx1 == 0xA5);
+    /* FIFO pops second byte and keeps RDRF = 1 */
+    assert((hd64180_io_read(0x04) & 0x80) != 0);
+    uint8_t rx2 = hd64180_io_read(0x08);
+    assert(rx2 == 0x5A);
+    /* Now buffer empty, RDRF = 0 */
+    assert((hd64180_io_read(0x04) & 0x80) == 0);
+
+    printf("  [PASS] HD64180 ASCI dual-channel async serial & FIFO queueing\n");
+}
+
+/* ── Test 8: CSIO Clocked Serial I/O ─────────────────────────────────────── */
+static void test_csio(void)
+{
+    hd64180_t cpu;
+    setup_cpu(&cpu);
+
+    /* Enable TE in CNTR (bit 4) */
+    hd64180_io_write(0x0A, 0x10);
+    assert((hd64180_io_read(0x0A) & 0x80) == 0); /* EF = 0 */
+
+    /* Write data to TRDR */
+    hd64180_io_write(0x0B, 0x3C);
+    assert((hd64180_io_read(0x0A) & 0x80) != 0); /* EF (End Flag) set */
+
+    /* Reading TRDR clears EF */
+    uint8_t data = hd64180_io_read(0x0B);
+    assert(data == 0x3C);
+    assert((hd64180_io_read(0x0A) & 0x80) == 0); /* EF cleared */
+
+    printf("  [PASS] HD64180 CSIO clocked synchronous serial transmission\n");
+}
+
+/* ── Test 9: DMAC Channels 0 & 1 Block Transfers ─────────────────────────── */
+static void test_dmac(void)
+{
+    hd64180_t cpu;
+    setup_cpu(&cpu);
+
+    /* Setup source data in RAM at $2000..$200F */
+    for (int i = 0; i < 16; i++) {
+        s_ram[0x2000 + i] = (uint8_t)(0x10 + i);
+        s_ram[0x3000 + i] = 0x00;
+    }
+
+    /* Configure DMAC Channel 0:
+     * SAR0 = 0x2000 (SAR0L=0x00, SAR0H=0x20, SAR0B=0x00)
+     * DAR0 = 0x3000 (DAR0L=0x00, DAR0H=0x30, DAR0B=0x00)
+     * BCR0 = 16 (BCR0L=0x10, BCR0H=0x00)
+     * DMODE = 0 (Memory increment for both source and destination)
+     * DSTAT: DWE0=1, DE0=1, DIE0=1
+     */
+    hd64180_io_write(0x20, 0x00);
+    hd64180_io_write(0x21, 0x20);
+    hd64180_io_write(0x22, 0x00);
+    hd64180_io_write(0x23, 0x00);
+    hd64180_io_write(0x24, 0x30);
+    hd64180_io_write(0x25, 0x00);
+    hd64180_io_write(0x26, 0x10);
+    hd64180_io_write(0x27, 0x00);
+    hd64180_io_write(0x31, 0x00); /* DMODE */
+
+    /* Enable DMA 0 with interrupt */
+    cpu.iff1 = 1;
+    hd64180_io_write(0x30, 0x55); /* DSTAT: DE0=1, DWE0=1, DIE0=1, DME=1 */
+
+    /* Execute DMA transfer */
+    hd64180_dma_exec(&cpu, 0);
+
+    /* Verify data copied from $2000 to $3000 */
+    for (int i = 0; i < 16; i++) {
+        assert(s_ram[0x3000 + i] == (uint8_t)(0x10 + i));
+    }
+
+    /* Verify registers after transfer */
+    assert(g_hd64180_state.dma_bcr0 == 0);
+    assert((g_hd64180_state.dma_dstat & 0x40) == 0); /* DE0 cleared */
+    assert(g_hd64180_state.dma_sar0 == 0x2010);
+    assert(g_hd64180_state.dma_dar0 == 0x3010);
+    assert(cpu.int_pending == 1); /* Interrupt asserted */
+
+    /* Channel 1 Memory-to-I/O transfer */
+    hd64180_io_write(0x28, 0x00);
+    hd64180_io_write(0x29, 0x30);
+    hd64180_io_write(0x2A, 0x00); /* MAR1 = $3000 */
+    hd64180_io_write(0x2B, 0x88);
+    hd64180_io_write(0x2C, 0x00); /* IAR1 = 0x88 (e.g. VDP port) */
+    hd64180_io_write(0x2E, 0x04);
+    hd64180_io_write(0x2F, 0x00); /* BCR1 = 4 bytes */
+    hd64180_io_write(0x30, 0xA1); /* DE1=1, DWE1=1, DME=1 */
+
+    hd64180_dma_exec(&cpu, 1);
+    assert(s_ext_ports[0x88] == s_ram[0x3003]);
+    assert(g_hd64180_state.dma_bcr1 == 0);
+    assert((g_hd64180_state.dma_dstat & 0x80) == 0); /* DE1 cleared */
+
+    printf("  [PASS] HD64180 DMAC multi-channel block transfers & completion interrupt\n");
+}
+
 int main(void)
 {
     printf("==========================================================\n");
@@ -322,9 +448,12 @@ int main(void)
     test_slp_and_block_io();
     test_timer();
     test_z80_compat();
+    test_asci();
+    test_csio();
+    test_dmac();
 
     printf("==========================================================\n");
-    printf(" ALL 6/6 HD64180 CPU TEST SUITES PASSED CLEANLY.\n");
+    printf(" ALL 9/9 HD64180 CPU & PERIPHERAL TESTS PASSED CLEANLY.\n");
     printf("==========================================================\n");
     return 0;
 }

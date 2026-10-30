@@ -4,6 +4,7 @@
  */
 
 #include "s1985.h"
+#include "msx_int.h"
 #include <string.h>
 
 void s1985_init(s1985_t *s)
@@ -43,7 +44,7 @@ uint8_t s1985_read(s1985_t *s, uint8_t port)
     case 0xFD:
     case 0xFE:
     case 0xFF:
-        return (uint8_t)(s->mapper_regs[port & 3] | 0xE0u); /* MSX 512KB mapper returns 5 bits */
+        return (uint8_t)(s->mapper_regs[port & 3] | (uint8_t)~MSX_MAPPER_MASK);
     default:
         return 0xFF;
     }
@@ -69,7 +70,7 @@ void s1985_write(s1985_t *s, uint8_t port, uint8_t val)
     case 0xFD:
     case 0xFE:
     case 0xFF:
-        s->mapper_regs[port & 3] = (uint8_t)(val & 0x1Fu); /* 32 segments = 512KB */
+        s->mapper_regs[port & 3] = (uint8_t)(val & MSX_MAPPER_MASK);
         break;
     default:
         break;

@@ -135,7 +135,7 @@ uint8_t t9769c_read(t9769c_t *t, uint8_t port)
     case 0xFD:
     case 0xFE:
     case 0xFF:
-        return (uint8_t)(t->mapper_regs[port & 3] | 0xE0u);
+        return (uint8_t)(t->mapper_regs[port & 3] | (uint8_t)~MSX_MAPPER_MASK);
     default:
         return 0xFF;
     }
@@ -211,7 +211,7 @@ void t9769c_write(t9769c_t *t, uint8_t port, uint8_t val)
     case 0xFD:
     case 0xFE:
     case 0xFF:
-        t->mapper_regs[port & 3] = (uint8_t)(val & 0x1Fu);
+        t->mapper_regs[port & 3] = (uint8_t)(val & MSX_MAPPER_MASK);
         break;
     default:
         break;

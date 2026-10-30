@@ -5,6 +5,7 @@
 
 #include "msx_int.h"
 #include "msx_body.h"
+#include "msx_cfg.h"
 #include <emulators/tronmsx.h>
 #include <string.h>
 
@@ -40,6 +41,9 @@ extern t9769c_t g_t9769c;
  * this search share (MSX_BIOS_DEFAULT_DIR), so neither can drift from the other. */
 #if BTRON_HOSTED
 static const char *s_search_dirs[] = {
+    ".build/tbios",
+    "assets/msx/tbios",
+    "third_party/tbios",
     "third_party/cbios-nextor_FDD-and-turboR/cbios/derived/bin",
     "third_party/cbios-nextor_FDD-and-turboR/configs/blueMSX/Machines/Shared Roms",
     "third_party/openMSX/Contrib/cbios",
@@ -48,10 +52,23 @@ static const char *s_search_dirs[] = {
 };
 #else
 static const char *s_search_dirs[] = {
+    "/SYS/tbios",
     MSX_BIOS_DEFAULT_DIR,
     NULL
 };
 #endif
+
+static int s_bios_mode = BMSX_BIOS_CBIOS;
+
+int bios_get_mode(void)
+{
+    return s_bios_mode;
+}
+
+void bios_set_mode(int mode)
+{
+    s_bios_mode = (mode == BMSX_BIOS_TBIOS) ? BMSX_BIOS_TBIOS : BMSX_BIOS_CBIOS;
+}
 
 static uint32_t read_rom_path(const char *path, uint8_t *buf, uint32_t cap)
 {
@@ -183,16 +200,37 @@ static int machine_has_kanji(uint16_t machine)
             machine == BMSX_MACHINE_HC95_CBIOS_FDD);
 }
 
+static const char *main_rom_name_tbios(uint16_t machine)
+{
+    if (machine >= BMSX_MACHINE_MSXTR_CBIOS) return "tbios_main_msxtr.rom";
+    if (machine >= BMSX_MACHINE_MSX2P_CBIOS) return "tbios_main_msx2+.rom";
+    return "tbios_main_msx2.rom";
+}
+
 int bios_load(uint16_t machine, const char *dir)
 {
     const char *main_name = main_rom_name(machine);
     const char *logo_name = logo_rom_name(machine);
-    uint32_t n;
+    uint32_t n = 0;
 
     slots_set_machine(machine);
 
     /* 1. Main ROM (mandatory) */
-    n = read_rom(dir, main_name, s_main, sizeof(s_main));
+    if (s_bios_mode == BMSX_BIOS_TBIOS) {
+        if (g_bmsx_cfg.main_rom[0]) {
+            n = read_rom(dir, g_bmsx_cfg.main_rom, s_main, sizeof(s_main));
+        }
+        if (!n) {
+            const char *t_name = main_rom_name_tbios(machine);
+            n = read_rom(dir, t_name, s_main, sizeof(s_main));
+            if (!n && strcmp(t_name, "tbios_main_msx2.rom") != 0) {
+                n = read_rom(dir, "tbios_main_msx2.rom", s_main, sizeof(s_main));
+            }
+        }
+    }
+    if (!n) {
+        n = read_rom(dir, main_name, s_main, sizeof(s_main));
+    }
     if (!n) {
         /* Fallback to generic tag */
         if (machine >= BMSX_MACHINE_MSXTR_CBIOS) {
@@ -204,34 +242,59 @@ int bios_load(uint16_t machine, const char *dir)
         }
     }
     if (!n) return MSX_ERR_BIOS;
+    if (s_bios_mode == BMSX_BIOS_TBIOS) {
+        if (machine >= BMSX_MACHINE_MSXTR_CBIOS) s_main[0x002D] = 0x03;
+        else if (machine >= BMSX_MACHINE_MSX2P_CBIOS) s_main[0x002D] = 0x02;
+    }
     slots_set_bios(s_main, n);
 
     /* 2. Logo ROM (optional) */
-    n = read_rom(dir, logo_name, s_logo, sizeof(s_logo));
+    n = 0;
+    if (s_bios_mode == BMSX_BIOS_TBIOS) {
+        if (g_bmsx_cfg.logo_rom[0]) n = read_rom(dir, g_bmsx_cfg.logo_rom, s_logo, sizeof(s_logo));
+        if (!n) n = read_rom(dir, "tbios_logo.rom", s_logo, sizeof(s_logo));
+    }
+    if (!n) n = read_rom(dir, logo_name, s_logo, sizeof(s_logo));
     if (n) slots_set_logo(s_logo, n);
 
     /* 3. Sub-ROM (for MSX2, MSX2+, Turbo R) */
     if (machine != BMSX_MACHINE_MSX) {
-        n = read_rom(dir, "cbios_sub.rom", s_sub, sizeof(s_sub));
+        n = 0;
+        if (s_bios_mode == BMSX_BIOS_TBIOS) {
+            if (g_bmsx_cfg.sub_rom[0]) n = read_rom(dir, g_bmsx_cfg.sub_rom, s_sub, sizeof(s_sub));
+            if (!n) n = read_rom(dir, "tbios_sub.rom", s_sub, sizeof(s_sub));
+        }
+        if (!n) n = read_rom(dir, "cbios_sub.rom", s_sub, sizeof(s_sub));
         if (n) slots_set_sub(s_sub, n);
     }
 
     /* 4. MSX-MUSIC (for MSX2+ and Turbo R) */
-    if (machine_has_music(machine)) {
-        n = read_rom(dir, "cbios_music.rom", s_music, sizeof(s_music));
+    if (machine_has_music(machine) || g_bmsx_cfg.music_rom[0]) {
+        n = 0;
+        if (s_bios_mode == BMSX_BIOS_TBIOS) {
+            if (g_bmsx_cfg.music_rom[0]) n = read_rom(dir, g_bmsx_cfg.music_rom, s_music, sizeof(s_music));
+            if (!n) n = read_rom(dir, "tbios_music.rom", s_music, sizeof(s_music));
+        }
+        if (!n) n = read_rom(dir, "cbios_music.rom", s_music, sizeof(s_music));
         if (n) slots_set_music(s_music, n);
     }
 
     /* 5. Disk ROM (for FDD machines) */
-    if (machine_has_fdd(machine)) {
-        n = read_rom(dir, "cbios_disk.rom", s_disk, sizeof(s_disk));
+    if (machine_has_fdd(machine) || g_bmsx_cfg.fdc_count || g_bmsx_cfg.disk_rom[0]) {
+        n = 0;
+        if (s_bios_mode == BMSX_BIOS_TBIOS) {
+            if (g_bmsx_cfg.disk_rom[0]) n = read_rom(dir, g_bmsx_cfg.disk_rom, s_disk, sizeof(s_disk));
+            if (!n) n = read_rom(dir, "tdos_disk.rom", s_disk, sizeof(s_disk));
+        }
+        if (!n) n = read_rom(dir, "cbios_disk.rom", s_disk, sizeof(s_disk));
         if (!n) n = read_rom(dir, "nextor-tc8566af.rom", s_disk, sizeof(s_disk));
         if (n) slots_set_disk(s_disk, n);
     }
 
     /* 6. KANJI ROM (for JP and Turbo R machines) */
-    if (machine_has_kanji(machine)) {
-        n = read_rom(dir, "KANJI.rom", s_kanji, sizeof(s_kanji));
+    if (machine_has_kanji(machine) || g_bmsx_cfg.kanji_rom[0]) {
+        if (g_bmsx_cfg.kanji_rom[0]) n = read_rom(dir, g_bmsx_cfg.kanji_rom, s_kanji, sizeof(s_kanji));
+        if (!n) n = read_rom(dir, "KANJI.rom", s_kanji, sizeof(s_kanji));
         if (n) {
             t9769b_set_kanji(&g_t9769b, s_kanji, n);
             t9769c_set_kanji(&g_t9769c, s_kanji, n);

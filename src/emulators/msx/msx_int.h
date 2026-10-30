@@ -38,7 +38,36 @@
 #else
 #define MSX_DSK_CAP         737280u
 #endif
-#define MSX_MAPPER_RAM_SIZE 524288u /* 512 KiB */
+#if defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 1
+#define MSX_MAPPER_RAM_SIZE 4194304u /* Up to 4 MiB (256 x 16 KiB segments) */
+#else
+#define MSX_MAPPER_RAM_SIZE  524288u /* 512 KiB */
+#endif
+#define MSX_MAPPER_MASK     ((MSX_MAPPER_RAM_SIZE >> 14) - 1)
+
+enum {
+    MAPPER_NONE = 0,
+    MAPPER_PLAIN,
+    MAPPER_ASCII16,
+    MAPPER_ASCII16_SRAM,
+    MAPPER_ASCII8,
+    MAPPER_ASCII8_SRAM,
+    MAPPER_KONAMI,
+    MAPPER_KONAMI_SCC,
+    MAPPER_KONAMI_SCC_PLUS,
+    MAPPER_GAMEMASTER2,
+    MAPPER_RTYPE,
+    MAPPER_ZEMINA80,
+    MAPPER_ZEMINA90,
+    MAPPER_CROSSBLAIM,
+    MAPPER_NEO8,
+    MAPPER_NEO16,
+    MAPPER_MANBOW2,
+    MAPPER_SUPERLODERUNNER,
+    MAPPER_HARRYFOX,
+    MAPPER_HALNOTE,
+    MAPPER_MAJUTSUSHI
+};
 #define MSX_SCREEN_W         256u
 #define MSX_SCREEN_H     MSX_DISPLAY_LINES
 
@@ -79,11 +108,15 @@ void    slots_map_com_pages(void);
 /* Page 0 stays the BIOS. Pages 1-3 show main RAM. A Disk BASIC BLOAD
  * image calls the BIOS directly and is not a TPA program. */
 void    slots_map_bios_ram(void);
+void    slots_map_disk_rom(void);
 void    slots_set_rom(const uint8_t *img, uint32_t size);
 uint8_t *slots_rom_ptr(uint32_t *cap);
 void    slots_primary_select(uint8_t value);      /* PPI port A alias      */
 uint8_t slots_read(uint16_t addr);
 void    slots_write(uint16_t addr, uint8_t value);
+int     slots_get_mapper(void);
+void    slots_set_mapper(int mapper);
+uint8_t *slots_get_sram(uint32_t *size);
 uint8_t *slots_ram_ptr(uint32_t *size);
 uint8_t slots_ppi_a(void);                    /* primary slot-select latch, #A8 */
 
@@ -176,9 +209,11 @@ void    msx_bus_out(uint8_t port, uint8_t value);
 /* FNV-1a 64, the only hash in the module (D7). */
 uint64_t msx_fnv1a64(const void *data, uint32_t len);
 
-/* ---- bios.c: C-BIOS image loader (settings-loaded, outside the sum, §5.3) */
-/* Loads cbios_main_<tag>.rom (+ optional logo) for `machine` from `dir` into
+/* ---- bios.c: C-BIOS / T-BIOS image loader (settings-loaded, outside the sum, §5.3) */
+/* Loads cbios_main_<tag>.rom / tbios_main_<tag>.rom (+ optional logo) for `machine` from `dir` into
  * the slot 0 views.  -> MSX_OK, or MSX_ERR_BIOS when the main ROM is absent. */
+int  bios_get_mode(void);
+void bios_set_mode(int mode);
 int  bios_load(uint16_t machine, const char *dir);
 
 /* ---- dsk.c: FAT12 behind the C-BIOS MegaROM window and BDOS 0x0F/0x27 -- */
@@ -186,8 +221,10 @@ void    dsk_clear(void);
 void    dsk_reset_open(void);
 int     dsk_set_image(const uint8_t *img, uint32_t size); /* 1 = accepted */
 uint8_t dsk_bank_byte(uint8_t bank, uint16_t off);
+void    dsk_write_bank_byte(uint8_t bank, uint16_t off, uint8_t val);
 struct z80;
 void    dsk_bdos(struct z80 *z);
+int     dsk_auto_launch(void);
 /* Root menu drawn into the text name table. dsk_menu_service() is called
  * from the frame loop: 1 means the menu owns this frame and the CPU stays. */
 int     dsk_menu_service(void);
@@ -203,6 +240,7 @@ void msx_set_bios_dir(const char *dir);
 void msx_step_one(void);
 /* Point the running CPU at a loaded COM. Does not reset the chip. */
 void msx_cpu_go(uint16_t pc, uint16_t sp);
+struct z80 *msx_get_cpu(void);
 void msx_cpu_words(uint16_t *pc, uint16_t *sp, uint16_t *bc,
                    uint16_t *de, uint16_t *hl, uint8_t *a);
 /* Copy port hit counts since the previous take, then zero them. */

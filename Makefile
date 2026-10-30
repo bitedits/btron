@@ -31,13 +31,14 @@
 #   debug-gdb     QEMU + GDB stub on Pi 2B
 
 CC ?= gcc
+CXX ?= c++
 CFLAGS ?= -O2 -Wall -Wextra -std=c99 -Iinclude -Iinclude/gl -Isrc/gl -Iinclude/drivers -Isrc/kernel -Isrc/cores -Isrc/quake/include
 
 .PHONY: all posix qemu kernel tkernel sakamura foma uefi pc98 arm-elf arm64-elf m68k ps2 mips \
         check-structure test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map xmb-atlas test-xmb-atlas test-ps2-opengl-routing \
         test-xmb-render test-xmb-render-tgl test-gl-context \
         html2tad book2tad tad_bin test test-kernel test-yoko test-yoko4 test-m68k test-mips test-ps2 test-foma test-foma-ui foma-screens \
-        segui-screens \
+        segui-screens tbios-tools tbios-roms test-tbios \
         test-mozc test-editor test-hmi test-tad test-chat test-wylie verify test-fs test-sps test-chokanji test-quake test-replay \
         test-hull test-view test-secret test-render test-drone test-drone-all test-zexall msx-trace \
         run-posix run-qemu run-kernel run-yoko run-yoko4 run-sakamura run-foma run-uefi run-eufi run-uefu run-pc98 run-m68k run-ps2 run-mips debug-virtio debug-gdb clean \
@@ -187,6 +188,8 @@ MSX_SRCS = src/emulators/msx/z80.c        \
            src/emulators/msx/ppi.c        \
            src/emulators/msx/kbd.c        \
            src/emulators/msx/geo3d.c      \
+           src/emulators/msx/midi.c       \
+           src/emulators/msx/msx_cfg.c    \
            src/emulators/msx/tronmsx.c
 
 # ── CLU Applications (POSIX commands) ─────────────────────────────
@@ -3356,7 +3359,153 @@ $(TEST_AUREL_VAULT_BIN): $(TEST_AUREL_VAULT_OBJS)
 	@mkdir -p ./.build
 	$(CC) $(TEST_AUREL_VAULT_OBJS) -o $@ $(LDFLAGS)
 
-test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-review test-drivesetup test-fs test-hd64180 test-aurel-vault test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
+TEST_BMSX_CFG_SRCS = verify/tests/test_bmsx_cfg.c $(MSX_SRCS)
+TEST_BMSX_CFG_OBJS = $(TEST_BMSX_CFG_SRCS:.c=.test.o)
+TEST_BMSX_CFG_BIN  = ./.build/test_bmsx_cfg
+
+test-bmsx-cfg: $(TEST_BMSX_CFG_BIN) $(TBIOS_ROMS)
+	@./$(TEST_BMSX_CFG_BIN)
+
+$(TEST_BMSX_CFG_BIN): $(TEST_BMSX_CFG_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_BMSX_CFG_OBJS) -o $@ $(LDFLAGS)
+
+# ═══════════════════════════════════════════════════════════════════
+# T-BIOS & T-DOS Clean-Room Toolchain, ROMs, and Differential Tests
+# ═══════════════════════════════════════════════════════════════════
+PASMO_BIN    = ./.build/pasmo
+PASMO_SRCS   = third_party/pasmo/pasmo/asm.cxx \
+               third_party/pasmo/pasmo/cpc.cxx \
+               third_party/pasmo/pasmo/pasmo.cxx \
+               third_party/pasmo/pasmo/tap.cxx \
+               third_party/pasmo/pasmo/asmerror.cxx \
+               third_party/pasmo/pasmo/macro.cxx \
+               third_party/pasmo/pasmo/pasmotypes.cxx \
+               third_party/pasmo/pasmo/token.cxx \
+               third_party/pasmo/pasmo/asmfile.cxx \
+               third_party/pasmo/pasmo/nullstream.cxx \
+               third_party/pasmo/pasmo/spectrum.cxx \
+               third_party/pasmo/pasmo/tzx.cxx \
+               third_party/pasmo/pasmo/memmap.cxx
+
+$(PASMO_BIN): $(PASMO_SRCS)
+	@mkdir -p ./.build
+	$(CXX) -O2 -std=c++14 -DNDEBUG $(PASMO_SRCS) -o $@
+
+IHX2ROM_BIN  = ./.build/ihx2rom
+IHX2ROM_SRCS = src/emulators/msx/tbios/sdcc/ihx2rom.c
+
+$(IHX2ROM_BIN): $(IHX2ROM_SRCS)
+	@mkdir -p ./.build
+	$(CC) -O2 $(IHX2ROM_SRCS) -o $@
+
+tbios-tools: $(PASMO_BIN) $(IHX2ROM_BIN)
+
+TBIOS_ROMS = ./.build/tbios/tbios_main_msx2.rom \
+             ./.build/tbios/tbios_main_msx2+.rom \
+             ./.build/tbios/tbios_main_msxtr.rom \
+             ./.build/tbios/tbios_sub.rom \
+             ./.build/tbios/tbios_logo.rom \
+             ./.build/tbios/tbios_music.rom \
+             ./.build/tbios/tdos_disk.rom
+
+./.build/tbios/tbios_main_msx2.rom: src/emulators/msx/tbios/asm/entry_main.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc -E MSX_VER=1 src/emulators/msx/tbios/asm/entry_main.asm $@
+
+./.build/tbios/tbios_main_msx2+.rom: src/emulators/msx/tbios/asm/entry_main.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc -E MSX_VER=2 src/emulators/msx/tbios/asm/entry_main.asm $@
+
+./.build/tbios/tbios_main_msxtr.rom: src/emulators/msx/tbios/asm/entry_main.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc -E MSX_VER=3 src/emulators/msx/tbios/asm/entry_main.asm $@
+
+./.build/tbios/tbios_sub.rom: src/emulators/msx/tbios/asm/entry_sub.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc src/emulators/msx/tbios/asm/entry_sub.asm $@
+
+./.build/tbios/tbios_logo.rom: src/emulators/msx/tbios/asm/entry_logo.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc src/emulators/msx/tbios/asm/entry_logo.asm $@
+
+./.build/tbios/tbios_music.rom: src/emulators/msx/tbios/asm/entry_music.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc src/emulators/msx/tbios/asm/entry_music.asm $@
+
+./.build/tbios/tdos_disk.rom: src/emulators/msx/tbios/asm/entry_disk.asm $(PASMO_BIN)
+	@mkdir -p ./.build/tbios
+	@$(PASMO_BIN) -I src/emulators/msx/tbios/inc src/emulators/msx/tbios/asm/entry_disk.asm $@
+
+tbios-roms: $(TBIOS_ROMS)
+
+TEST_TBIOS_DIFF_SRCS = verify/tests/test_tbios_diff.c $(MSX_SRCS)
+TEST_TBIOS_DIFF_OBJS = $(TEST_TBIOS_DIFF_SRCS:.c=.test.o)
+TEST_TBIOS_DIFF_BIN  = ./.build/test_tbios_diff
+
+$(TEST_TBIOS_DIFF_BIN): $(TEST_TBIOS_DIFF_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_DIFF_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_CORE_SRCS = verify/tests/test_tbios_core.c $(MSX_SRCS)
+TEST_TBIOS_CORE_OBJS = $(TEST_TBIOS_CORE_SRCS:.c=.test.o)
+TEST_TBIOS_CORE_BIN  = ./.build/test_tbios_core
+
+$(TEST_TBIOS_CORE_BIN): $(TEST_TBIOS_CORE_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_CORE_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_VIDEO_SRCS = verify/tests/test_tbios_video.c $(MSX_SRCS)
+TEST_TBIOS_VIDEO_OBJS = $(TEST_TBIOS_VIDEO_SRCS:.c=.test.o)
+TEST_TBIOS_VIDEO_BIN  = ./.build/test_tbios_video
+
+$(TEST_TBIOS_VIDEO_BIN): $(TEST_TBIOS_VIDEO_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_VIDEO_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_AUDIO_SRCS = verify/tests/test_tbios_audio.c $(MSX_SRCS)
+TEST_TBIOS_AUDIO_OBJS = $(TEST_TBIOS_AUDIO_SRCS:.c=.test.o)
+TEST_TBIOS_AUDIO_BIN  = ./.build/test_tbios_audio
+
+$(TEST_TBIOS_AUDIO_BIN): $(TEST_TBIOS_AUDIO_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_AUDIO_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_CPU_SRCS = verify/tests/test_tbios_cpu.c $(MSX_SRCS)
+TEST_TBIOS_CPU_OBJS = $(TEST_TBIOS_CPU_SRCS:.c=.test.o)
+TEST_TBIOS_CPU_BIN  = ./.build/test_tbios_cpu
+
+$(TEST_TBIOS_CPU_BIN): $(TEST_TBIOS_CPU_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_CPU_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_MEGAROM_SRCS = verify/tests/test_tbios_megarom.c $(MSX_SRCS)
+TEST_TBIOS_MEGAROM_OBJS = $(TEST_TBIOS_MEGAROM_SRCS:.c=.test.o)
+TEST_TBIOS_MEGAROM_BIN  = ./.build/test_tbios_megarom
+
+$(TEST_TBIOS_MEGAROM_BIN): $(TEST_TBIOS_MEGAROM_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_MEGAROM_OBJS) -o $@ $(LDFLAGS)
+
+TEST_TBIOS_DISK_SRCS = verify/tests/test_tbios_disk.c $(MSX_SRCS)
+TEST_TBIOS_DISK_OBJS = $(TEST_TBIOS_DISK_SRCS:.c=.test.o)
+TEST_TBIOS_DISK_BIN  = ./.build/test_tbios_disk
+
+$(TEST_TBIOS_DISK_BIN): $(TEST_TBIOS_DISK_OBJS) $(TBIOS_ROMS)
+	@mkdir -p ./.build
+	$(CC) $(TEST_TBIOS_DISK_OBJS) -o $@ $(LDFLAGS)
+
+test-tbios: $(TEST_TBIOS_DIFF_BIN) $(TEST_TBIOS_CORE_BIN) $(TEST_TBIOS_VIDEO_BIN) $(TEST_TBIOS_AUDIO_BIN) $(TEST_TBIOS_CPU_BIN) $(TEST_TBIOS_MEGAROM_BIN) $(TEST_TBIOS_DISK_BIN) $(TEST_BMSX_CFG_BIN) $(TBIOS_ROMS)
+	@./$(TEST_TBIOS_DIFF_BIN)
+	@./$(TEST_TBIOS_CORE_BIN)
+	@./$(TEST_TBIOS_VIDEO_BIN)
+	@./$(TEST_TBIOS_AUDIO_BIN)
+	@./$(TEST_TBIOS_CPU_BIN)
+	@./$(TEST_TBIOS_MEGAROM_BIN)
+	@./$(TEST_TBIOS_DISK_BIN)
+	@./$(TEST_BMSX_CFG_BIN)
+
+test: test-tad test-editor test-chat test-mozc test-wylie test-hmi test-ski test-tracker test-deskclip test-settings test-global-menu test-app-menu test-review test-drivesetup test-fs test-hd64180 test-aurel-vault test-bmsx-cfg test-tbios test-quake test-ps2-softfloat test-arm-aeabi test-ps2-gs-pack test-ps2-gs-env test-ps2-gs-rec test-ps2-vu1-geom test-ps2-vu0-kernel test-gscube-nexus test-ps2-gs-poster test-ps2-gs-read test-ps2-gs-tex test-ps2-pointer test-ps2-fused-row test-ps2-gif-ring test-ps2-paintw test-eegs-raster test-eegs-present test-gl-math test-gl-backend-choice test-ps2-fb-order test-grid-map test-xmb-atlas test-ps2-opengl-routing test-gl-context
 	@echo "=========================================================="
 	@echo " ALL B-SYSTEM TEST SUITES PASSED (100% SUCCESS)!"
 	@echo "=========================================================="

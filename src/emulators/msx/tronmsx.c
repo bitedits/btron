@@ -18,6 +18,7 @@
 #include "r800.h"
 #include "hd64180.h"
 #include "t9769c.h"
+#include "msx_cfg.h"
 
 #define MSX_VERSION "tronMSX 0.2 (TurboR R800 / MSX2 / MSX2+)"
 #define MSX_PCM_FRAME 735u          /* 44100 / 60 */
@@ -143,6 +144,8 @@ int msx_init(const msx_cfg_t *cfg)
     s_body_hash = 0u;
     s_paused    = 0;
 
+    bmsx_cfg_load(cfg ? cfg->bios_key : NULL, machine, &g_bmsx_cfg);
+
     slots_init();
     slots_set_machine(machine);
     rc = bios_load(machine, s_bios_dir);
@@ -194,8 +197,12 @@ void msx_pause(BOOL on)
 
 /* ---- frame loop --------------------------------------------------------- */
 
+int  msx_get_bios_mode(void) { return bios_get_mode(); }
+void msx_set_bios_mode(int mode) { bios_set_mode(mode); }
+
 uint16_t msx_get_pc(void) { return s_cpu.pc; }
 uint16_t msx_get_machine(void) { return s_machine; }
+z80 *msx_get_cpu(void) { return &s_cpu; }
 
 void msx_cpu_words(uint16_t *pc, uint16_t *sp, uint16_t *bc,
                    uint16_t *de, uint16_t *hl, uint8_t *a)
@@ -221,8 +228,8 @@ void msx_port_take(uint32_t r[256], uint32_t w[256])
  * cycle; the frame budget and the VDP both count bus cycles. */
 static uint32_t step_one(void)
 {
-    int is_r800 = (s_machine >= BMSX_MACHINE_MSXTR_CBIOS && s_machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD) && t9769c_is_r800(&g_t9769c);
-    int is_hd64180 = (s_machine >= BMSX_MACHINE_HC90_CBIOS && s_machine <= BMSX_MACHINE_HC95_CBIOS_FDD);
+    int is_r800 = (g_bmsx_cfg.has_r800 || (s_machine >= BMSX_MACHINE_MSXTR_CBIOS && s_machine <= BMSX_MACHINE_MSXTR_CBIOS_FDD)) && t9769c_is_r800(&g_t9769c);
+    int is_hd64180 = g_bmsx_cfg.has_hd64180 || (s_machine >= BMSX_MACHINE_HC90_CBIOS && s_machine <= BMSX_MACHINE_HC95_CBIOS_FDD);
     unsigned long before = s_cpu.cyc;
     uint32_t delta, bus_t;
     if (is_r800) r800_step(&s_cpu);

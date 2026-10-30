@@ -51,6 +51,8 @@ typedef enum {
     XCMD_INPUT_KBD_MODE,
     XCMD_INPUT_JOY_MODE,
     XCMD_INPUT_DUAL_MODE,
+    XCMD_BIOS_CBIOS,
+    XCMD_BIOS_TBIOS,
     XCMD_HELP_ABOUT
 } MSX_CMD;
 
@@ -82,6 +84,9 @@ typedef struct {
     uint64_t frames;
     int  emu_header;           /* エミュレータ(E), or -1 before the bar exists */
     int  machine_item;         /* status row that names the running machine */
+    int  bios_header;          /* BIOS(B), or -1 before the bar exists */
+    int  bios_cbios_item;      /* (*) C-BIOS + Nextor */
+    int  bios_tbios_item;      /* ( ) T-BIOS + T-DOS */
     int  input_header;         /* 入力(I), or -1 before the bar exists */
     int  input_kbd_item;
     int  input_joy_item;
@@ -496,6 +501,9 @@ static void msx_init_menu_bar(MsxViewer *st)
     app_menu_init(&st->menu_bar, APP_MENU_STYLE_CLASSIC_3D);
     st->emu_header = -1;
     st->machine_item = -1;
+    st->bios_header = -1;
+    st->bios_cbios_item = -1;
+    st->bios_tbios_item = -1;
     st->input_header = -1;
     st->input_kbd_item = -1;
     st->input_joy_item = -1;
@@ -521,6 +529,15 @@ static void msx_init_menu_bar(MsxViewer *st)
     st->machine_item = app_menu_add_item(&st->menu_bar, h1,
                                          msx_machine_label(msx_get_machine()),
                                          "", XCMD_NONE, FALSE);
+
+    int hb = app_menu_add_header(&st->menu_bar, "BIOS(B)", 76);
+    st->bios_header = hb;
+    st->bios_cbios_item = app_menu_add_item(&st->menu_bar, hb,
+                                            "(*) C-BIOS + Nextor",
+                                            "", XCMD_BIOS_CBIOS, TRUE);
+    st->bios_tbios_item = app_menu_add_item(&st->menu_bar, hb,
+                                            "( ) T-BIOS + T-DOS",
+                                            "", XCMD_BIOS_TBIOS, TRUE);
 
     int h2 = app_menu_add_header(&st->menu_bar, "表示(V)", 72);
     app_menu_add_item(&st->menu_bar, h2, "自動拡大 (Fit)", "", XCMD_VIEW_FIT, TRUE);
@@ -557,6 +574,23 @@ static void msx_sync_menu_state(MsxViewer *st)
             snprintf(hdr->items[st->machine_item].label,
                      sizeof(hdr->items[st->machine_item].label), "%s",
                      msx_machine_label(msx_get_machine()));
+        }
+    }
+
+    if (st->bios_header >= 0 && st->bios_header < st->menu_bar.header_count) {
+        APP_MENU_HEADER *hdr = &st->menu_bar.headers[st->bios_header];
+        int bmode = msx_get_bios_mode();
+        if (st->bios_cbios_item >= 0 && st->bios_cbios_item < hdr->item_count) {
+            snprintf(hdr->items[st->bios_cbios_item].label,
+                     sizeof(hdr->items[st->bios_cbios_item].label),
+                     "%s C-BIOS + Nextor",
+                     bmode == BMSX_BIOS_CBIOS ? "(*)" : "( )");
+        }
+        if (st->bios_tbios_item >= 0 && st->bios_tbios_item < hdr->item_count) {
+            snprintf(hdr->items[st->bios_tbios_item].label,
+                     sizeof(hdr->items[st->bios_tbios_item].label),
+                     "%s T-BIOS + T-DOS",
+                     bmode == BMSX_BIOS_TBIOS ? "(*)" : "( )");
         }
     }
 
@@ -825,6 +859,20 @@ static void msx_apply_cmd(WND *wnd, MsxViewer *st, int cmd, int sub_idx)
             break;
         case XCMD_INPUT_DUAL_MODE:
             st->input_mode = MSX_INPUT_DUAL;
+            break;
+        case XCMD_BIOS_CBIOS:
+            if (msx_get_bios_mode() != BMSX_BIOS_CBIOS) {
+                msx_set_bios_mode(BMSX_BIOS_CBIOS);
+                msx_init(NULL);
+                if (st->path[0]) msx_load(st, st->path);
+            }
+            break;
+        case XCMD_BIOS_TBIOS:
+            if (msx_get_bios_mode() != BMSX_BIOS_TBIOS) {
+                msx_set_bios_mode(BMSX_BIOS_TBIOS);
+                msx_init(NULL);
+                if (st->path[0]) msx_load(st, st->path);
+            }
             break;
         case XCMD_HELP_ABOUT:
             app_menu_create_about_dialog("B-MSX", "エムエスエックス",

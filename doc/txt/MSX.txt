@@ -64,11 +64,25 @@ B-MSX identifies machines using 16-bit identifiers defined in `msx_body.h`:
   21u  BMSX_MACHINE_HC95_CBIOS          Hitachi HC-95 (HD64180 @ 6.144 MHz, V9938, Kanji Level 1/2)
   22u  BMSX_MACHINE_HC95_CBIOS_FDD      Hitachi HC-95 with Dual 720KB FDDs (HD64180 @ 6.144 MHz)
 
-1.1 Firmware Resolution & Fallback Law:
+1.2 Dual-BIOS Architecture (C-BIOS + Nextor vs T-BIOS + T-DOS):
+  B-MSX provides two fully decoupled, clean-room BIOS architectures selectable at runtime:
+  - C-BIOS Mode (Standard / Default):
+    * Loads `cbios_main_*.rom`, `cbios_sub.rom`, `cbios_music.rom`, and `cbios_disk.rom` / `nextor-tc8566af.rom`.
+    * Default at application boot. 100% backward compatible with existing configurations.
+  - T-BIOS + T-DOS Mode (Clean-Room Native System):
+    * Loads `tbios_main_*.rom`, `tbios_sub.rom`, `tbios_music.rom`, and `tdos_disk.rom`.
+    * Dedicated top-level `BIOS(B)` menu in the B-MSX Workbench interface:
+        (*) C-BIOS + Nextor (標準 / Default)
+        ( ) T-BIOS + T-DOS (Clean-Room)
+    * T-DOS kernel embeds full Grauw Page-0 RAM environment, MSX-DOS 1 FCB calls ($00–$30),
+      MSX-DOS 2 file handles and environment variables ($40–$6F), and EXTBIO $0402 Memory Mapper.
+
+1.3 Firmware Resolution & Fallback Law:
   - C-BIOS images are resolved from explicit configuration, `/SYS/cbios`, or vendor fallback trees.
-  - HC-90 / HC-95 models map `cbios_main_msx2_jp.rom` with fallback to `cbios_main_msx2.rom`.
+  - T-BIOS images are resolved from `.build/tbios/` or `/SYS/tbios`.
+  - HC-90 / HC-95 models map `cbios_main_msx2_jp.rom` or `tbios_main_msx2_jp.rom`.
   - `machine_has_kanji` is asserted for Japanese MSX2, MSX2+, turbo R, and Hitachi HC-90/HC-95.
-  - `machine_has_fdd` is asserted for HC-95 FDD, loading `cbios_disk.rom` / `nextor-tc8566af.rom`.
+  - `machine_has_fdd` is asserted for disk machines, loading `cbios_disk.rom` or `tdos_disk.rom`.
 
 
 2. Multi-CPU Architecture
@@ -123,6 +137,26 @@ The CPU subsystem operates via three coordinated cores sharing the unified `z80`
     * Registers: Timer 0 Counter `0x0C–0x0D`, Reload `0x0E–0x0F`; Timer 1 Counter `0x14–0x15`, Reload `0x16–0x17`.
     * Control Register (`TCR` at `0x10`): Bit 0/1 (`TIE0/1`) enables timer interrupt; Bit 4/5 (`TIF0/1`)
       flags timer underflow and reload.
+  - On-Chip Memory Management Unit (MMU):
+    * 20-bit physical address space (up to 1 MiB addressable memory).
+    * Registers: CBR (`0x38`, Common Base Register), BBR (`0x39`, Bank Base Register), CBAR (`0x3A`, Common/Bank Area Register).
+    * Three-area dynamic address translation: Common Area 0 (0..BA-1), Bank Area (BA..CA-1), Common Area 1 (CA..15).
+  - On-Chip Direct Memory Access Controller (DMAC Channels 0 and 1):
+    * Channel 0: Memory-to-Memory, Memory-to-I/O, I/O-to-Memory transfers.
+      - SAR0 (`0x20–0x22`, 20-bit Source Address), DAR0 (`0x23–0x25`, 20-bit Destination Address),
+        BCR0 (`0x26–0x27`, 16-bit Byte Count).
+    * Channel 1: Memory-to-I/O transfers.
+      - MAR1 (`0x28–0x2A`, 20-bit Memory Address), IAR1 (`0x2B–0x2C`, 16-bit I/O Address),
+        BCR1 (`0x2E–0x2F`, 16-bit Byte Count).
+    * Control & Status: DSTAT (`0x30`, DE0/DE1 enable, DWE0/DWE1 write-enable, DIE0/DIE1 interrupt enable, DME master enable),
+      DMODE (`0x31`, source/destination auto-increment/decrement/fixed modes), DCNTL (`0x32`, wait insertion).
+  - On-Chip Asynchronous Serial Communication Interface (ASCI Channels 0 and 1):
+    * Full-duplex independent serial channels with 16-byte FIFO buffers.
+    * Registers: CNTLA0/1 (`0x00/0x01`), CNTLB0/1 (`0x02/0x03`), STAT0/1 (`0x04/0x05`, TDRE, RDRF, overrun flags),
+      TDR0/1 (`0x06/0x07`, transmit data), RDR0/1 (`0x08/0x09`, receive data).
+  - On-Chip Clock Synchronous Serial I/O (CSIO):
+    * Half-duplex synchronous communication interface.
+    * Registers: CNTR (`0x0A`, EF end flag, EIE end interrupt enable, RE/TE enable), TRDR (`0x0B`, transmit/receive data).
 
 
 3. Video Display Processor (VDP) Subsystem
@@ -162,19 +196,30 @@ MSX defines a four-slot architecture addressed in 16 KiB pages:
 4.1 Slot Registers:
   - Primary Slot Select (`PPI Port 0xA8`): Bits 0-1 (Page 0), 2-3 (Page 1), 4-5 (Page 2), 6-7 (Page 3).
   - Secondary Slot Select (`Memory 0xFFFF`): Four subslots per primary slot.
-  - Memory Mapper: 512 KiB standard mapper via I/O ports `0xFC–0xFF`.
-  - MegaROM Mappers: Plain 32K, ASCII 8K, ASCII 16K, Konami, Konami SCC, and linear images up to 4 MiB.
+  - Memory Mapper: Standard 512 KiB expandable up to 4 MiB RAM via I/O ports `0xFC–0xFF`.
+  - MegaROM Mappers: Full 20-mapper suite covering ASCII8/16 with battery-backed SRAM,
+    Konami SCC & SCC+ (SCC-I independent 5th channel), Game Master 2 (SRAM), Irem R-Type,
+    Zemina 80-in-1 / 90-in-1, Cross Blaim, Super Lode Runner, Harry Fox, Halnote, Majutsushi,
+    NEO8/16, Manbow2, and linear cartridges up to 4 MiB.
 
 
-5. Sound Chip Layer
--------------------
+5. Sound Chip & MIDI Layer
+--------------------------
 
 Multi-chip concurrent synthesis mixed to 44.1 kHz 16-bit signed stereo PCM:
   - AY-3-8910 / YM2149 PSG: 3 square-wave channels + 1 white noise generator at ports `0xA0–0xA3`.
-  - Konami SCC / SCC-I: 5 wavetable channels (32-byte cyclic wave memory per channel).
-  - Yamaha YM2413 (OPLL / MSX-MUSIC): 9 FM channels or 6 FM melody + 5 rhythm instruments at `0x7C–0x7D`.
-  - Yamaha Y8950 (MSX-AUDIO): 9 FM channels with rhythm synthesis at `0xC0–0xC1`.
-  - MSX turbo R PCM: 8-bit DAC/ADC clocked through `t9769c_advance` at port `0xA4–0xA5`.
+  - Konami SCC / SCC+ (SCC-I): 5 wavetable channels (32-byte cyclic wave memory per channel)
+    with RAM write mode and independent 5th channel synthesis at `$B800–$B8AF`.
+  - Yamaha YM2413 (OPLL / MSX-MUSIC): 9 FM channels or 6 FM melody + 5 rhythm instruments at `0x7C–0x7D`
+    with `"APRLOPLL"` header at `$4018`.
+  - Yamaha Y8950 (MSX-AUDIO): 9 FM channels with rhythm and ADPCM synthesis at `0xC0–0xC1`.
+  - MSX turbo R PCM: 8-bit DAC/ADC clocked through `t9769c_advance` at port `0xA4–0xA5`
+    with `PCMPLY ($0186)` and `PCMREC ($0189)` BIOS integration.
+  - MSX-MIDI & turbo R MIDI Interface:
+    * Standard MIDI hardware mapped at I/O ports `0xE8–0xEF`.
+    * Intel 8251 UART (`0xE8` Data, `0xE9` Status/Control) with TxRDY/RxRDY/TxEMPTY flags and FIFO.
+    * Intel 8253 Timer (`0xEC–0xEE` Counter 0..2, `0xEF` Control Word).
+    * Timer Counter #2 Interrupt Release / Clear at write to `0xEA`/`0xEB`.
   - Hitachi HC-90 / HC-95 Audio: Standard unipolar PSG mixed cleanly at 60 Hz frame intervals.
 
 
@@ -183,11 +228,20 @@ Multi-chip concurrent synthesis mixed to 44.1 kHz 16-bit signed stereo PCM:
 
 B-MSX includes dedicated automated regression test suites:
   1. `make test-hd64180`: Validates HD64180 instruction execution (`MLT`, `IN0`, `OUT0`, `TST`, `TSTIO`, `SLP`,
-     block I/O, PRT reload countdown, and Z80 backward compatibility pass-through).
-  2. `make test-msx-boot`: Headless boot test verifying C-BIOS frame execution and VDP ink output.
-  3. `make test-msx-audio`: Headless synthesis test validating sample generation and saturation.
-  4. `make test-msx-dsk`: Validates floppy disk sector reading and FAT12 media parsing.
-  5. `make test-zexall`: Runs the standard ZEXALL instruction exerciser against the Z80 core.
+     block I/O, PRT reload countdown, MMU 20-bit translation, DMAC block transfers, ASCI FIFO, CSIO, and Z80 backward compatibility).
+  2. `make test-tbios`: Comprehensive suite of all 7 T-BIOS clean-room test harnesses:
+     - `test_tbios_diff`: Dual-BIOS differential verification and menu switching.
+     - `test_tbios_core`: Main ROM reset, CHKRAM, slot dispatch, PPI keyboard, interrupt handling.
+     - `test_tbios_video`: V9938/V9958/V9968 display modes, palette engine, Sub-ROM jump table.
+     - `test_tbios_audio`: PSG, OPLL ("APRLOPLL"), Y8950, SCC/SCC+, and MSX-MIDI / turbo R MIDI.
+     - `test_tbios_cpu`: R800 turbo R CPU mode switching, PCM playback, HD64180 MMU address translation.
+     - `test_tbios_megarom`: 20 MegaROM mappers, SRAM persistence, 4 MiB mapper, 100% corpus ROM boot.
+     - `test_tbios_disk`: T-DOS Disk ROM, Page-0 RAM environment, FAT12/16 engine, MSX-DOS 1/2 calls, 100% corpus DSK boot.
+  3. `make test-msx-boot`: Headless boot test verifying frame execution and VDP ink output.
+  4. `make test-msx-audio`: Headless synthesis test validating sample generation and saturation.
+  5. `make test-msx-dsk`: Validates floppy disk sector reading and FAT12 media parsing.
+  6. `make test-zexall`: Runs the standard ZEXALL instruction exerciser against the Z80 core.
+  7. `make test`: Executes all 42+ B-System unit and integration test targets across the entire operating system.
 
 ================================================================================================================================
 End of MSX.txt Specification

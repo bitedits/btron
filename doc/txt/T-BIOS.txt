@@ -1,0 +1,241 @@
+# T-BIOS & T-DOS — Definitive Clean-Room Implementation Plan
+
+Goal: a BSD-attributed, independently written MSX / MSX2 / MSX2+ / MSX turbo R / Hitachi HC-90/95 system ROM set (**T-BIOS**) paired with a clean-room disk operating system (**T-DOS**) for B-MSX, built in-tree with the **SDCC + pasmo** stack:
+
+- **Default is C-BIOS + Nextor.** Existing C-BIOS machines (including C-BIOS FDD with Nextor) remain the default and keep 100 % of their current behaviour.
+- **T-BIOS + T-DOS is selectable from its own `BIOS(B)` menu** in the B-MSX application menu bar (§4.5).
+- **100 % `./assets/msx` corpus compatibility:** every `.rom` and `.dsk` image in `./assets/msx` (plus the Aurel Vault ROMs) runs 100 % on T-BIOS + T-DOS (§2).
+- **≥ 80 % well-known MSX-DOS game & application compatibility:** T-DOS implements the DOS 1 FCB and DOS 2 file-handle, environment, and memory-mapper calls used by ≥ 80 % of known MSX-DOS games without needing MSX-DOS or Nextor sources (§2.2, §4.4).
+- **Full hardware support:** Z80, R800 (turbo R), and HD64180 (HC-90/95) CPUs, full MegaROM mapper suite, and all video (V9938/V9958/V9968) and audio (PSG, YM2413 OPLL, Y8950 MSX-AUDIO, SCC/SCC+, turbo R PCM, MIDI) hardware (§4.2, §4.3).
+- **Self-contained in `./btron` (no submodules):** toolchain helpers (`ihx2rom.c`, `crt0_btron.s`, `tbios_hw.h`, `tbios_hw.c`) are imported directly into `src/emulators/msx/tbios/` (§4.1).
+
+---
+
+## 0. Findings from the research pass
+
+| Area | Fact | Consequence for T-BIOS & T-DOS |
+|---|---|---|
+| Size of the job | `main.asm` has 191 documented entries, `sub.asm` 121, `hooks.asm` 113 hook names, `systemvars.asm` 311 variables | These four lists are the compatibility contract (§3) |
+| C-BIOS stubs | About 17 main-ROM entries and 9 sub-ROM entries are marked "still a stub" (touch pad, light pen, some video and printer routines). `gtpad_stub` exists only because the joystick jump table is full | "100 % C-BIOS compat" means equal-or-better. A stub may become a real routine, never the reverse |
+| C-BIOS disk ROM | `dskio`, `dskchg`, `getdpb`, `choice`, `dskfmt` and `mtoff` are all stubbed in upstream C-BIOS; `bdos_table` only prints debug traces for most calls | T-DOS provides a real clean-room Disk BIOS + BDOS + FAT12/16 + command shell for the T-BIOS path |
+| BIOS / DOS pairing | C-BIOS FDD machines use `nextor-tc8566af.rom` ([bios.c:228](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/bios.c#L228)) and the `dsk.c` hooks | **C-BIOS stays paired with Nextor.** **T-BIOS is paired with T-DOS.** Selecting `BIOS(B)` switches both main/sub/music/logo ROMs and the disk/DOS ROM |
+| Machine matrix | 18 C-BIOS machines plus HC-90/95. turbo R `chkram_tr` treats a jump to `$0000` as a possible CPU switch, not a reset | T-BIOS builds all model/locale variants and preserves S1990 R800 and HD64180 behaviour |
+| Imported SDCC + pasmo stack | Imported from `../msx.btron.pro` directly into [src/emulators/msx/tbios/](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/tbios/sdcc/ihx2rom.c): `ihx2rom.c` (extended with optional base address `0x0000` for system ROMs alongside `0x4000` for MegaROMs), `crt0_btron.s`, `tbios_hw.h`, `tbios_hw.c` | Zero git submodules. `pasmo` is built in-tree from `third_party/pasmo` via `make tools` |
+| SDCC 4.6.0 targets | `sdcc` and `sdasz80` support `-mz80`, `-mz180` (HD64180), and `-mr800` (R800) | Phase 0 verifies `MLT` and `MULUB/MULUW` emission and provides pasmo intrinsics where needed |
+| Mapper support today | [slots.c](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/slots.c) has `PLAIN`, `ASCII16`, `ASCII8`, `KONAMI`, `KONAMI_SCC` | Phase 6 expands MegaROM mappers (SCC+, R-Type, Zemina, Game Master 2 SRAM, NEO8/16, Manbow2) ahead of peripheral edge-cases |
+
+---
+
+## 1. Clean-room protocol
+
+**Allowed inputs**
+
+1. **C-BIOS source (BSD licence):** structure, entry offsets, system variable addresses, and algorithms in `third_party/cbios-nextor_FDD-and-turboR/cbios/src/*.asm` may be consulted and followed, keeping the BSD copyright notice.
+2. **Public web specifications and datasheets:**
+   - Grauw's MSX Assembly Page:
+     - MSX-DOS 2 Environment: https://map.grauw.nl/resources/dos2_environment.php
+     - MSX-DOS 2 Function Calls: https://map.grauw.nl/resources/dos2_functioncalls.php
+     - MSX BIOS / Sub-ROM / System Variables / VDP / Sound resources on `map.grauw.nl` and MSX Resource Center (`msx.org/wiki`)
+   - MSX Red Book, MSX2 Technical Handbook, MSX-Datapack, MSX turbo R Technical Handbooks
+   - FAT12/FAT16 on-disk format specifications and standard MSX 360K/720K floppy geometry tables
+   - Hardware datasheets: TC8566AF, WD2793, V9938, V9958, V9968, AY-3-8910/YM2149, YM2413 (OPLL), Y8950 (MSX-AUDIO), Konami SCC/SCC+, S1985, S1990, T9769B/C, R800, Hitachi HD64180
+3. **Black-box observation** of the ROMs and DSKs in `./assets/msx` and our own emulator traces.
+
+**Forbidden inputs for T-BIOS / T-DOS**
+
+- Nextor source (`nextor/source/**`, `driver/*.mac`), because Nextor is a fork of MSX-DOS carrying a no-derivatives restriction. (Nextor binaries remain untouched in the repo solely for the C-BIOS FDD default mode.)
+- Disassemblies of proprietary Microsoft / ASCII / Panasonic ROMs or `MSXDOS.SYS` / `MSXDOS2.SYS`.
+
+**Audit trail**
+
+- Every routine in T-BIOS and T-DOS cites its specification tag in `doc/txt/TBIOS.txt` (`[CB:file:label]`, `[GRAUW:dos2_functioncalls#fn]`, `[SPEC:name §n]`) and is recorded in `src/emulators/msx/tbios/PROVENANCE.md`.
+
+---
+
+## 2. Targets, defined so they can be measured
+
+### 2.1 100 % C-BIOS & `./assets/msx` Corpus Compatibility
+
+- **C1 — Entry contract:** all 191 Main-ROM entries, 121 Sub-ROM entries, 113 hooks (`$FD9A…`), and 311 system variables (`$F380–$FFFF`) match exact addresses and register contracts.
+- **C2 — 100 % `./assets/msx` corpus:** every single `.rom` and `.dsk` in `./assets/msx` (all 18 titles + `AUREL_VAULT.rom`) boots, renders, plays audio, and responds to input under T-BIOS + T-DOS with zero regressions:
+  - Cartridges: `AUREL_VAULT.rom`, `BULLRUSH.ROM`, `Bad Apple (MDPC)[ASCII16].rom`, `Dynamite Go! Go! - Demo (2021) (Rutubo Gameworks).ROM`, `NEON_REVENANT-HC-Geo3D-256-v0.2.0.rom`, `NIGHT_RAVEN_FLIGHT_DEMO.ROM`, `NIGHT_RAVEN_GEO3D.ROM`, `YAZZIER.ROM`, `btron8.rom`, `c0man.rom`, `xracing_v1.0.4.rom`
+  - Disks: `512 Bytes MSX1 Demo.dsk`, `An Uncle in Brazil (IOD).dsk`, `Audio Wave 3 (IOD).dsk`, `Bad Apple Pyhesty (2021).dsk`, `IOD GIF Demo (1991).dsk`, `Puzzle Egg (2022)(Fony).dsk`, `Xmas Demo (IOD).dsk`
+- **C3 — Regression suites:** `test_msx_boot`, `test_msx_dsk`, `test_msx_audio`, `test_aurel_vault`, `test_hd64180`, and `test_zexall` pass 100 %.
+- **C4 — Full machine & hardware matrix:** all 18 MSX1/MSX2/MSX2+/turbo R profiles + HC-90/95, and every row in §4.2 and §4.3 verified by automated tests.
+
+### 2.2 ≥ 80 % MSX-DOS Compatibility (T-DOS)
+
+- **D1 — 100 % of `./assets/msx/*.dsk`:** every disk image in `./assets/msx` (boot-sector demos, `.COM` executables, `.BAT` autoexecs, and `BSAVE` `$FE` binaries) runs to completion under T-BIOS + T-DOS.
+- **D2 — ≥ 80 % of well-known MSX-DOS games & utilities:** T-DOS implements the core BDOS API surface that covers ≥ 80 % of real-world MSX-DOS games and loaders:
+  - Full MSX-DOS 1 FCB & console/disk calls (`$00–$30`)
+  - High-frequency MSX-DOS 2 calls from `map.grauw.nl/resources/dos2_functioncalls.php` and `dos2_environment.php`: file handles (`_OPEN $43`, `_CREATE $44`, `_CLOSE $45`, `_ENSURE $46`, `_DUP $47`, `_READ $48`, `_WRITE $49`, `_SEEK $4A`, `_IOCTL $4B`), file/dir management (`_FFIRST $40`, `_FNEXT $41`, `_FNEW $42`, `_DELETE $4D`, `_RENAME $4E`, `_ATTR $50`, `_FTIME $51`, `_GETCD $59`, `_CHDIR $5A`, `_PARSE $5B`, `_PFILE $5C`), process & error (`_TERM $62`, `_DEFAB $63`, `_DEFER $64`, `_ERROR $65`, `_EXPLAIN $66`), environment strings (`_GENV $6B`, `_SENV $6C`, `_FENV $6D`), `_DSKCHK $6E`, `_DOSVER $6F`, and the DOS 2 Memory Mapper jump table (`ALL_SEG`, `FRE_SEG`, `RD_SEG`, `WR_SEG`, `CAL_SEG`, `PUT_PH`, `GET_PH`).
+
+---
+
+## 3. Corner-Case Catalogue
+
+### 3.1 BIOS and System-Variable Corner Cases
+
+| # | Corner Case | Source |
+|---|---|---|
+| B1 | `CHKRAM` on page 0 / expanded slot 0. turbo R `chkram_tr` distinguishes an S1990 CPU switch from a cold reset | `main.asm` |
+| B2 | VDP port bytes at `$0006` (`VDP.DR`) and `$0007` (`VDP.WR`) read by games (including V9968 88H/98H port discovery) | `main.asm` |
+| B3 | Slot routines `RDSLT/WRSLT/CALSLT/ENASLT/CALLF/RSLREG/WSLREG`: interrupt state, preserved `AF'`, stack in page 3, `$FFFF` secondary slot inversion | `slot.asm` |
+| B4 | Slot-table build at boot: `EXPTBL`, `SLTTBL`, `SLTATR`, cartridge scan order, `"AB"` header (`INIT`, `STATEMENT`, `DEVICE`, `TEXT`) | `slot.asm`, `main.asm` |
+| B5 | Interrupt chain order: `H.KEYI` → VDP status check → `H.TIMI`, `JIFFY`, `INTCNT`, auto-repeat timing, `CAPS` and `KANA` state | `main.asm`, `hooks.asm` |
+| B6 | Five keyboard scancode layouts (`de`, `fr`, `jp`, `uk`, `us`) scanned through PPI `$A8–$AA` | `scancodes_*.asm` |
+| B7 | Joystick calls `GTSTCK/GTTRIG/GTPAD/GTMOUS/NEWPAD`: keyboard-vs-joypad decoupling (Aurel Vault input harmonization) and mouse/pad reads | `main.asm`, `sub.asm` |
+| B8 | `SCREEN` mode switches update all VDP register shadows (`RG0SAV…RG23SAV`, `RG25SAV…RG27SAV` on V9958/V9968) and 50/60 Hz state | `video.asm` |
+| B9 | Sub-ROM call convention `EXTROM/SUBROM` (`$015F`) preserving `IX`/`IY` and slot state | `sub.asm` |
+| B10 | MSX-MUSIC detection: `"APRLOPLL"` signature at `$4018` in `tbios_music.rom` required by MGSDRV and game drivers | `music.asm`, `msx_app.c` |
+| B11 | turbo R BIOS calls `CHGCPU ($0180)`, `GETCPU ($0183)`, `PCMPLY ($0186)`, `PCMREC ($0189)` and S1990 ports `$E4/$E5` | `main_msxtr.asm`, Grauw |
+| B12 | Memory Mapper ports `$FC–$FF` initialization and per-page RAM detection | `disk.asm`, Grauw |
+| B13 | Hook table `$FD9A–$FFCA` pre-filled with `C9` (`RET`) so game hook chaining never jumps into unmapped memory | `hooks.asm` |
+| B14 | `HIMEM ($FC4A)`, `MEMSIZ ($F672)`, `STKTOP ($F674)` after Disk ROM workspace allocation | `systemvars.asm` |
+| B15 | Stubs at `$7D17, $7D31…` expected by external disk ROMs | `main.asm:3518` |
+| B16 | Page-0 / Page-1 / Page-2 cartridge execution and 1 MiB+ ASCII16 MegaROM banking | `slots.c`, boot tests |
+
+### 3.2 Disk & T-DOS Corner Cases
+
+| # | Corner Case | Source |
+|---|---|---|
+| K1 | Disk ROM entries `$4010 DSKIO`, `$4013 DSKCHG`, `$4016 GETDPB`, `$4019 CHOICE`, `$401C DSKFMT`, `$401F MTOFF`, and work-area `DRVTBL ($FB21)` | `disk.asm`, MSX-Datapack |
+| K2 | `DSKIO` register contract: `CF` = read/write, `A` = drive, `B` = sector count, `C` = media ID, `DE` = start sector, `HL` = buffer; error codes `0..12` in `A` | `disk.asm`, Grauw |
+| K3 | Multi-sector transfers crossing 16 KiB slot page boundaries (`$3FFF->$4000`, `$7FFF->$8000`, `$BFFF->$C000`) | `disk.asm:288` |
+| K4 | Media IDs `$F8` (360K 1DD), `$F9` (720K 2DD), `$FA–$FF` and dynamic DPB calculation from BPB | FAT12 spec, Grauw |
+| K5 | Boot-sector execution protocol: sector 0 loaded to `$C000`, signature check, entry with `CF` set/clear, return with `CF=1` falls through to T-DOS shell/menu | `disk.asm`, `dsk.c` |
+| K6 | FAT12 chains: `$FF7` bad cluster, `$FF8–$FFF` EOF, `$E5` deleted entry, `$05` Kanji lead-byte escape, 8.3 wildcard matching (`*`, `?`) | FAT12 spec |
+| K7 | Dual format launching: Disk BASIC `BSAVE` (`$FE` 7-byte header: start, end, exec with BIOS in Page 0) vs MSX-DOS `.COM` loaded at `$0100` with RAM in Page 0 | `dsk.c` |
+| D1 | Page-0 MSX-DOS environment (`https://map.grauw.nl/resources/dos2_environment.php`): `$0000` warm-boot `JP`, `$0005` BDOS `JP` (`$0006` TPA top), `$0038` IRQ trampoline, `$005C` FCB1, `$006C` FCB2, `$0080` 128-byte DTA / command tail, RAM slot switching trampolines at `$000C/$0014/$001C/$0024/$0030` | Grauw `dos2_environment.php` |
+| D2 | DOS 2 Extended Memory Mapper table via `EXTBIO ($FFCA)` (`DE=$0402`): returns segment count, primary mapper slot, and 16-entry jump table (`ALL_SEG…SET_PH`) | Grauw `dos2_environment.php` |
+| D3 | Environment strings (`_GENV/$6B`, `_SENV/$6C`, `_FENV/$6D`): `PATH`, `PROMPT`, `SHELL`, `PROGRAM`, upper-cased names, max 255 chars | Grauw `dos2_functioncalls.php` |
+| D4 | Disk error handling vectors `_DEFAB ($63)` and `_DEFER ($64)` plus `H.ERRO ($FFB1)` | Grauw `dos2_functioncalls.php` |
+| D5 | `_DOSVER ($6F)`: returns `BC = $0220` (MSX-DOS 2.20 compatible kernel version) and `DE = $0220` when DOS 2 mode is active so DOS 2 games unlock handle/mapper paths | Grauw `dos2_functioncalls.php` |
+
+---
+
+## 4. Architecture
+
+### 4.1 Toolchain: Self-Contained SDCC + pasmo in `./btron`
+
+All toolchain code from `../msx.btron.pro` has been imported directly into `./btron` (no git submodules):
+
+```
+src/emulators/msx/tbios/
+  sdcc/
+    ihx2rom.c          (imported & extended with base_addr support for 0x0000 and 0x4000)
+    crt0_btron.s       (imported reference MegaROM crt0)
+    crt0_tbios.s       (system-ROM crt0 for Page 0 / Page 1 ROMs)
+  inc/
+    tbios_hw.h         (imported I/O port & CPU primitives from msxgl_config.h / core.h / megarom.h)
+    systemvars.inc     (generated from C1 manifest)
+    hooks.inc          (generated from C1 manifest)
+    tbios.h            (C declarations for BIOS & T-DOS modules)
+  asm/
+    entry_main.asm     (pasmo: fixed jump tables $0000-$0189, RSTs, IRQ $0038, slot trampolines)
+    entry_sub.asm      (pasmo: fixed sub-ROM jump table $0000-$01FF)
+    entry_disk.asm     (pasmo: fixed disk-ROM header $4000-$402F & BDOS/page-0 stubs)
+    entry_music.asm    (pasmo: APRLOPLL header & OPLL jump table)
+  c/
+    tbios_hw.c         (imported SDCC __naked port I/O & banking primitives)
+    init.c slot.c kbd.c joy.c video.c vdp_cmd.c psg.c opll_bios.c rtc.c
+    turbor.c hd64180_bios.c
+    tdos/
+      disk_bios.c fdc_tc8566af.c fat12.c bdos_fcb.c bdos_handle.c
+      dos2_env.c dos2_mapper.c tcommand.c
+  PROVENANCE.md
+doc/txt/TBIOS.txt
+verify/tbios/
+```
+
+- **Build tools:** `sdcc` and `sdasz80` (`/opt/homebrew/bin/sdcc`), `pasmo` built in-tree from `third_party/pasmo` into `.build/pasmo`, and `.build/ihx2rom` compiled from `src/emulators/msx/tbios/sdcc/ihx2rom.c`.
+- **ABI glue:** Fixed entry points in `asm/*.asm` save caller registers, invoke SDCC C routines compiled with `--opt-code-size` / `--opt-code-speed`, and restore MSX BIOS output registers (`AF`, `BC`, `DE`, `HL`, `IX`, `IY`). Time-critical inner loops (`RDSLT`, `WRSLT`, `LDIRVM`, `H.KEYI`) stay in pure Z80 assembly.
+
+### 4.2 CPU and MegaROM Support Matrix
+
+| Subsystem | Current State in B-MSX | T-BIOS + Emulator Target | Phase |
+|---|---|---|---|
+| **Z80** | ZEXALL 100 % pass (0 cycle diff) | Preserved 100 % | All |
+| **ASCII R800 (turbo R)** | `MULUB`, `MULUW`, S1990 switch (`t9769c.c`) | Complete R800 instruction/flag audit, ROM vs DRAM wait-state timing, `CHGCPU ($0180)`, `GETCPU ($0183)`, `PCMPLY ($0186)`, `PCMREC ($0189)`, `chkram_tr` warm switch | 5 |
+| **Hitachi HD64180 (HC-90/95)** | `MLT`, `IN0/OUT0`, `TST`, `SLP`, block I/O, PRT timers, MMU reg storage | Active 20-bit MMU address translation (`CBR`, `BBR`, `CBAR`), T-BIOS HC-90/95 init profile (Phase 5); on-chip DMAC, ASCI, CSIO (Phase 8) | 5 & 8 |
+| **Standard Cartridges** | 16K/32K/48K/64K | Full Page 0 / Page 1 / Page 2 `"AB"` scan (`INIT`, `STATEMENT`, `DEVICE`, `TEXT`) | 2 & 6 |
+| **ASCII8 / ASCII16** | Present (up to 4 MiB) | Add ASCII8/16 with battery-backed SRAM (8K/32K SRAM windows) + 1 MiB Aurel Vault verification | 6 |
+| **Konami / Konami SCC / SCC+** | Konami & Konami SCC present | Add Konami SCC+ (SCC-I `$B800–$B8AF` 5-channel independent wave RAM + RAM write mode) | 6 |
+| **Additional MegaROM Mappers** | Not present | Add Game Master 2 (SRAM), R-Type, Zemina 80/90, Cross Blaim, Super Lode Runner, Harry Fox, Halnote, Majutsushi, NEO8/NEO16, Manbow2 | 6 |
+| **Mapper Detection** | Code-scan heuristic | SHA-1 / CRC32 signature table for known ROMs + header analysis + heuristic fallback | 6 |
+| **Memory Mapper RAM** | 512 KiB (`$FC–$FF`) | Expandable up to 4 MiB + DOS 2 `EXTBIO $0402` mapper segment manager in T-DOS | 6 & 7 |
+
+### 4.3 Video, Audio & Peripherals Matrix
+
+| Device | Current State in B-MSX | T-BIOS + Emulator Target | Phase |
+|---|---|---|---|
+| **V9938 (MSX2)** | Modes 0–8, sprites, commands | Full BIOS `INITXT/INIGRP/INIMLT/INI32`, `SETPLT/GETPLT`, Sub-ROM `BLTVV/BLTVM/BLTMV`, command engine edge cases (`LINE`, `SRCH`, `POINT`, `LMCM`, `LMMC`) | 3 |
+| **V9958 (MSX2+ / turbo R)** | `SCREEN 10–12` (YJK/YAE), scroll `R#25–27` | T-BIOS Sub-ROM support for `SCREEN 10–12`, hardware scroll helpers, V9958 ID detection in `R#1/S#1` | 3 |
+| **V9968** | `LRMM` & extended palette (`EPAL`) | Complete V9968 command & 256-colour palette verification, `$0006/$0007` port reporting (`98H`/`88H`) | 3 |
+| **PSG (AY-3-8910 / YM2149)** | Present (`psg.c`) | T-BIOS `GICINI`, `WRTPSG`, `RDPSG`, `STRTMS` background music queue, key-click | 4 |
+| **MSX-MUSIC (YM2413 OPLL)** | Present (`opll.c` with die-read ROM & 2-tap FB) | `tbios_music.rom` with `"APRLOPLL"` signature at `$4018` and OPLL BIOS entry points (`INIOPL`, `MSTART`, `MSTOP`) | 4 |
+| **MSX-AUDIO (Y8950)** | Present (`y8950.c`) | ADPCM RAM/ROM BIOS helpers and status/timer verification | 4 |
+| **SCC / SCC+** | SCC present (`scc.c`) | SCC+ (`$B8xx`) 5th channel independent wave RAM and mode register `$BFFE` | 4 & 6 |
+| **turbo R 8-bit PCM** | Present (`pcm.c`) | T-BIOS `PCMPLY ($0186)` and `PCMREC ($0189)` using 15.75 kHz counter `$E6/$E7` and DAC `$A4/$A5` | 4 & 5 |
+| **Mouse, Light Pen, Touch Pad, RTC, Kanji** | Mouse, RTC, Kanji present | Real `GTPAD` / `NEWPAD` for mouse, light pen, and touch pad (replacing C-BIOS stubs); `REDCLK/WRTCLK` for RP5C01 RTC; JIS Level 1 & 2 Kanji ROM `$D8–$DB` | 3 & 4 |
+| **MSX-MIDI & HD64180 ASCI/CSIO/DMAC** | Not present | Scheduled after MegaROM & T-DOS (Phase 8): MSX-MIDI (`$E8–$EF`) / turbo R MIDI and HD64180 on-chip DMAC/ASCI/CSIO | 8 |
+
+### 4.4 T-DOS Architecture (Paired with T-BIOS)
+
+- **Clean Separation:**
+  - **C-BIOS mode (Default):** loads `cbios_main_*.rom`, `cbios_sub.rom`, `cbios_music.rom`, and `cbios_disk.rom` / `nextor-tc8566af.rom` exactly as today.
+  - **T-BIOS mode:** loads `tbios_main_*.rom`, `tbios_sub.rom`, `tbios_music.rom`, and `tdos_disk.rom` (containing the T-BIOS Disk ROM + T-DOS kernel + `TCOMMAND` shell).
+- **T-DOS Components in `tdos_disk.rom`:**
+  1. **Disk BIOS (`$4010–$401F`):** `DSKIO`, `DSKCHG`, `GETDPB`, `CHOICE`, `DSKFMT`, `MTOFF` supporting both the emulator's direct sector window and TC8566AF/WD2793 FDC registers, with full multi-sector page-boundary splitting (corner case K3).
+  2. **Page-0 Environment (`dos2_environment.php`):** maps Mapper RAM into Page 0, installs `$0000` warm boot, `$0005` BDOS entry, `$0006` TPA top address, inter-slot call trampolines (`RDSLT`, `WRSLT`, `CALSLT`, `ENASLT`, `CALLF`), `$0038` IRQ forwarder, default FCBs at `$005C`/`$006C`, and `$0080` DTA.
+  3. **FAT12 / FAT16 File System Engine:** cluster chain traversal and allocation, subdirectory traversal, 8.3 and wildcard matching, BPB-to-DPB computation for 360K / 720K / 1.44M images.
+  4. **BDOS Kernel:**
+     - DOS 1 FCB & console calls `$00–$30`.
+     - DOS 2 file-handle, directory, path-parsing, environment-string (`_GENV`, `_SENV`, `_FENV`), error (`_DEFAB`, `_DEFER`, `_ERROR`, `_EXPLAIN`), and version (`_DOSVER $6F`) calls (`dos2_functioncalls.php`).
+     - DOS 2 Extended BIOS (`EXTBIO $FFCA`, `DE=$0402`) Memory Mapper segment table (`ALL_SEG`, `FRE_SEG`, `RD_SEG`, `WR_SEG`, `CAL_SEG`, `PUT_PH`, `GET_PH`).
+  5. **Boot & Launcher (`TCOMMAND`):** executes standard MSX boot sectors, runs `AUTOEXEC.BAT` or boots directly into `.COM` / `BSAVE` (`$FE`) programs on disk images, and provides an interactive `A>` command prompt (`DIR`, `TYPE`, `CLS`, `VER`, `MEM`, `CD`, `COPY`, `DEL`, `REN`, `BASIC`).
+
+### 4.5 B-MSX App Menu: Dedicated Top-Level `BIOS(B)` Menu
+
+In [src/emulators/msx/msx_app.c](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/msx_app.c) (`msx_init_menu_bar()`):
+
+- Menu bar order:
+  1. `ファイル(F)` (File)
+  2. `エミュレータ(E)` (Emulator)
+  3. **`BIOS(B)`** (Own top-level menu header)
+     - `(*) C-BIOS + Nextor (標準 / Default)` (`XCMD_BIOS_CBIOS`)
+     - `( ) T-BIOS + T-DOS (Clean-Room)` (`XCMD_BIOS_TBIOS`)
+  4. `表示(V)` (View)
+  5. `入力(I)` (Input)
+  6. `ヘルプ(H)` (Help)
+- **Behaviour:**
+  - Default at startup is `BMSX_BIOS_CBIOS` (`C-BIOS + Nextor`).
+  - Clicking `T-BIOS + T-DOS` sets `st->bios_mode = BMSX_BIOS_TBIOS`, reloads the BIOS ROM buffers via `bios_set_mode(BMSX_BIOS_TBIOS)`, and resets the running cartridge or disk image cleanly under T-BIOS + T-DOS.
+  - Status bar displays `C-BIOS` or `T-BIOS` alongside the active machine profile and input mode.
+
+---
+
+## 5. Execution Phases & Exit Criteria
+
+| Phase | Scope | Exit Criterion |
+|---|---|---|
+| **0 — Toolchain & Spec** | Build `pasmo` from `third_party/pasmo` and `ihx2rom` from `src/emulators/msx/tbios/sdcc/ihx2rom.c`. Verify SDCC `-mz80`/`-mz180`/`-mr800` + `crt0_tbios.s` linkage. Generate C1 manifest (`systemvars.inc`, `hooks.inc`) and write `doc/txt/TBIOS.txt` | `make tools` builds `.build/pasmo` and `.build/ihx2rom`; minimal T-BIOS ROM links and boots to `$0000` in test harness |
+| **1 — Differential Harness & `BIOS(B)` Menu** | Add top-level `BIOS(B)` menu to [msx_app.c](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/msx_app.c) and `bios_mode` selector in [bios.c](file:///Users/tonpa/depot/bitedits/btron/src/emulators/msx/bios.c). Build `verify/tests/test_tbios_diff.c` comparing C-BIOS vs T-BIOS state | Menu UI test passes; C-BIOS default verified; differential harness runs |
+| **2 — T-BIOS Core Main ROM** | Reset, `CHKRAM`, slot manager (`RDSLT/WRSLT/CALSLT/ENASLT/CALLF`), `"AB"` cartridge scanner, interrupt chain (`H.KEYI`/`H.TIMI`), PPI keyboard (5 locales) & joystick/mouse (`GTSTCK/GTTRIG/GTPAD`), `$0006/$0007` VDP ports | All MSX1 ROMs in `./assets/msx` boot under T-BIOS |
+| **3 — Video (V9938/V9958/V9968) & Sub-ROM** | `SCREEN 0–8` and `SCREEN 10–12`, VDP shadow registers, font & text output (`CHPUT`), graphics primitives, `tbios_sub.rom` (`EXTROM`), V9968 `LRMM`/`EPAL`, RTC (`RP5C01`), Kanji ROM (`$D8–$DB`), `tbios_logo_*.rom` | All MSX2 and MSX2+ graphical ROMs in `./assets/msx` boot and render identically to C-BIOS |
+| **4 — Audio Subsystem & Music ROM** | PSG BIOS (`GICINI/WRTPSG/RDPSG/STRTMS`), `tbios_music.rom` (`"APRLOPLL"` at `$4018` + OPLL routines), Y8950 MSX-AUDIO support, SCC/SCC+ wavetable verification | `Bad Apple (MDPC)[ASCII16].rom` and `AUREL_VAULT.rom` boot with full FM + PSG audio under T-BIOS |
+| **5 — R800 turbo R & HD64180 CPU Support** | turbo R `chkram_tr`, `CHGCPU/GETCPU`, `PCMPLY/PCMREC`, R800 wait-state & opcode audit; HD64180 active 20-bit MMU translation (`CBR/BBR/CBAR`) and HC-90/95 T-BIOS profile | All turbo R titles (`AUREL_VAULT.rom`, `btron8.rom`, `BULLRUSH.ROM`, `NEON_REVENANT`, `NIGHT_RAVEN`) and `test_hd64180` pass 100 % under T-BIOS |
+| **6 — Full MegaROM Suite** | Add SCC+, ASCII8/16 SRAM, Game Master 2 SRAM, R-Type, Zemina, Cross Blaim, NEO8/16, Manbow2 mappers + hash/header detection + up to 4 MiB Mapper RAM | Dedicated MegaROM unit test suite passes for every mapper type; 100 % of `./assets/msx/*.rom` pass |
+| **7 — T-DOS & Disk BIOS** | Build `tdos_disk.rom`: `DSKIO/DSKCHG/GETDPB`, TC8566AF/WD2793 FDC & virtual sector driver, Page-0 RAM environment, FAT12/16, DOS 1 FCB (`$00–$30`), DOS 2 handles/env/mapper (`$40–$6F`, `EXTBIO $0402`), `BSAVE`/`COM`/`BAT` loader, `TCOMMAND` shell | **100 % of `./assets/msx/*.dsk`** boot and run under T-BIOS + T-DOS; DOS 1/2 conformance suite passes ≥ 80 % of game API weighted calls |
+| **8 — Peripheral Extensions & Final Docs** | HD64180 on-chip DMAC/ASCI/CSIO, MSX-MIDI (`$E8–$EF` / turbo R MIDI), update `doc/txt/MSX.txt`, `b-system/apps/MSX.html`, `b-media/msx.html`, and `PROVENANCE.md` | `make test` 100 % green across all B-System suites; `btron-posix` linked and verified |
+
+---
+
+## 6. Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| 32 KiB Main ROM / 16 KiB Sub-ROM / 16 KiB Disk ROM size limits with SDCC code | Compile bulk C modules with `--opt-code-size`, keep jump tables and inner loops in compact `pasmo` assembly, and place T-DOS extended modules in banked 16 KiB Disk ROM pages |
+| Page-0 RAM vs BIOS slot mapping during MSX-DOS execution | Follow Grauw's `dos2_environment.php` layout strictly: Page-0 RAM holds inter-slot trampolines at `$000C/$0014/$001C/$0024/$0030` and `$0038` that switch Main BIOS in and out safely |
+| Disk images in `./assets/msx` mix boot-sector demos, `.COM` files, and Disk BASIC `BSAVE` (`$FE`) files | T-DOS boot sequence checks for custom boot sector code first, then scans for `AUTOEXEC.BAT` / `.COM` / `BSAVE` `$FE` binaries so all three disk types launch seamlessly |
+| Keeping C-BIOS + Nextor 100 % untouched while adding T-BIOS + T-DOS | `bios_mode` defaults to `BMSX_BIOS_CBIOS`; C-BIOS ROMs and Nextor remain intact and isolated from T-BIOS/T-DOS |

@@ -12,10 +12,8 @@
  * I/O is #7C (address) then #7D (data), write-only. One object serves MSX1
  * FM-PAC carts and the internal MSX-MUSIC latch on MSX2+ and turboR.
  *
- * The fifteen built-in patches are the YM2413 instrument ROM values as
- * read from the decapped die (the same values the Nuke.YKT die-shot work
- * published), packed into the register byte layout. Only the 15 x 8
- * parameter bytes are carried, no code or tables of any emulator.
+ * The fifteen built-in patches are clean-room parameter sketches in the
+ * published instrument order. They are not a Yamaha instrument ROM image.
  * Rhythm instrument bytes and the hi-hat / snare / top-cymbal phase mix are
  * the published hardware measurements (register bytes and phase-bit
  * formulas), reimplemented here. Phase and log amplitude come from fm_int.h.
@@ -46,7 +44,7 @@ static uint32_t s_clk_rem;
 static const uint8_t s_rom[15][8] = {
     { 0x71, 0x61, 0x1e, 0x17, 0xd0, 0x78, 0x00, 0x17 }, /* Violin */
     { 0x13, 0x41, 0x1a, 0x0d, 0xd8, 0xf7, 0x23, 0x13 }, /* Guitar */
-    { 0x13, 0x01, 0x99, 0x00, 0xf2, 0xc4, 0x11, 0x23 }, /* Piano */
+    { 0x13, 0x01, 0x89, 0x00, 0xf2, 0xc4, 0x11, 0x23 }, /* Piano */
     { 0x31, 0x61, 0x0e, 0x07, 0xa8, 0x64, 0x70, 0x27 }, /* Flute */
     { 0x32, 0x21, 0x1e, 0x06, 0xe0, 0x76, 0x00, 0x28 }, /* Clarinet */
     { 0x31, 0x22, 0x16, 0x05, 0xe0, 0x71, 0x00, 0x18 }, /* Oboe */

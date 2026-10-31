@@ -209,6 +209,10 @@ static uint16_t msx_machine_for(const char *name, size_t size)
         return BMSX_MACHINE_MSX2P_CBIOS;
     if (name && strstr(name, "Dynamite"))
         return BMSX_MACHINE_MSX2_CBIOS_JP;
+    /* A boot-logo ROM checks the version ID at (002Dh) and returns on MSX1,
+     * then CHGMODs into SCREEN 5: it needs an MSX2 or later. */
+    if (name && (strstr(name, "MSX_LOGO") || strstr(name, "msx_logo")))
+        return BMSX_MACHINE_MSX2_CBIOS;
     if (size > 65536u ||
         (name && (strstr(name, "BULLRUSH") || strstr(name, "NEON") ||
                   strstr(name, "NIGHT") || strstr(name, "btron") ||

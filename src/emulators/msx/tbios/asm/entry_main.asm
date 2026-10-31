@@ -1438,6 +1438,13 @@ chgmod:
                 jp      z, init32
                 cp      2
                 jp      z, inigrp
+                cp      9
+                ret     nc              ; no such screen mode
+                ; SCREEN 3..8: forward to Sub-ROM CHGMOD ($00D1) as on real MSX2+
+                push    ix
+                ld      ix, $00D1
+                call    extrom
+                pop     ix
                 ret
 
 ; ------------------------------------------------------------------------------

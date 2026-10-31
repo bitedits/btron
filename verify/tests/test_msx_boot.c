@@ -98,6 +98,7 @@ int main(int argc, char **argv)
             cfg.machine = BMSX_MACHINE_MSXTR_CBIOS;
     }
     cfg.frame_hz = 60;
+    if (getenv("TBIOS")) msx_set_bios_mode(BMSX_BIOS_TBIOS);
     rc = msx_init(&cfg);
     if (rc != MSX_OK) { fprintf(stderr, "msx_init failed: %d\n", rc); free(rom); return 1; }
 

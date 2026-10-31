@@ -27,6 +27,7 @@
 #include <btron/settings_dlg.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp (POSIX; not in <string.h> on glibc) */
 
 #define DRIVESETUP_DEF_W  740
 #define DRIVESETUP_DEF_H  512

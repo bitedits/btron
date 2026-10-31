@@ -33,6 +33,9 @@
  */
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
+/* strdup() is POSIX, hidden by -std=c99 on glibc */
+#define _DEFAULT_SOURCE
+
 #include "var.h"
 
 struct vardata *vardata_new(const char *name) {

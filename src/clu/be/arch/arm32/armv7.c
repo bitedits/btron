@@ -15,6 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* strdup() is POSIX, hidden by -std=c99 on glibc */
+#define _DEFAULT_SOURCE
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>

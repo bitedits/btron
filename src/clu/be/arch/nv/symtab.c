@@ -22,6 +22,9 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/* strdup() is POSIX, hidden by -std=c99 on glibc */
+#define _DEFAULT_SOURCE
+
 #include "symtab.h"
 #include "util.h"
 #include <stdlib.h>

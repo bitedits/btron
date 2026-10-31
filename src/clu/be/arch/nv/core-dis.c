@@ -34,6 +34,9 @@
 #pragma GCC diagnostic ignored "-Wsign-compare"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+/* strdup() is POSIX, hidden by -std=c99 on glibc */
+#define _DEFAULT_SOURCE
+
 #include "dis-intern.h"
 #include "easm.h"
 #include <stdlib.h>
